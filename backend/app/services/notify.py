@@ -37,6 +37,7 @@ EVENTS: dict[str, str] = {
     "daily_digest": "Daily summary",
     "job_failed": "Background task failed",
     "ai_issue": "AI model needs attention (credits, key or removed model)",
+    "analytics_report": "Marketing report ready",
 }
 DEFAULT_EXTERNAL = ["post_review", "post_failed", "account_issue", "manual_publish", "job_failed", "ai_issue"]
 URGENT = {"post_failed", "account_issue", "job_failed"}
@@ -119,7 +120,10 @@ def _abs_link(link: str | None) -> str | None:
     return link if link.startswith("http") else get_settings().web_base_url + link
 
 
-async def send_email(cfg: ProviderConfig, to: str, subject: str, body: str, link: str | None = None) -> None:
+async def send_email(cfg: ProviderConfig, to: str, subject: str, body: str, link: str | None = None, *,
+                     attachments: list[tuple[str, bytes, str]] | None = None, html: str | None = None) -> None:
+    """Send one email. attachments: [(filename, data, mime type)]; html: optional HTML for the message body
+    (already escaped by the caller), shown inside the branded frame instead of the plain body text."""
     sec = decrypt_json(cfg.secrets_enc)
     msg = EmailMessage()
     msg["From"] = sec.get("from_email") or sec.get("username")
@@ -133,11 +137,14 @@ async def send_email(cfg: ProviderConfig, to: str, subject: str, body: str, link
 HRP AI Digital Marketing Studio</div>
 <div style="border:1px solid #e2e8f0;border-top:0;padding:18px;border-radius:0 0 10px 10px">
 <h2 style="margin:0 0 8px;font-size:18px">{escape(subject)}</h2>
-<p style="white-space:pre-line;color:#334155">{escape(body)}</p>
+{html if html is not None else f'<p style="white-space:pre-line;color:#334155">{escape(body)}</p>'}
 {f'<p><a href="{escape(url)}" style="background:linear-gradient(90deg,#1d4ed8,#0891b2);color:#fff;padding:9px 16px;border-radius:8px;text-decoration:none">Open in the app</a></p>' if url else ''}
 </div></div>""",
         subtype="html",
     )
+    for name, data, mime in attachments or []:
+        maintype, _, subtype = (mime or "application/octet-stream").partition("/")
+        msg.add_attachment(data, maintype=maintype, subtype=subtype or "octet-stream", filename=name)
     port = int(sec.get("port") or 587)
     use_tls = str(sec.get("use_tls", "true")).lower() != "false"
     await aiosmtplib.send(

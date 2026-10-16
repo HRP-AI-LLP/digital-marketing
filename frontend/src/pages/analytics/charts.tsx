@@ -9,12 +9,12 @@ const AXIS_TEXT = "#64748b";
 const INK = "#0f172a";
 
 export const fmtNum = (v: number) =>
-  Math.abs(v) >= 10000 ? new Intl.NumberFormat("en-IN", { notation: "compact", maximumFractionDigits: 1 }).format(v)
+  Math.abs(v) >= 10000 ? new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(v)
     : new Intl.NumberFormat("en-IN", { maximumFractionDigits: v % 1 ? 1 : 0 }).format(v);
 export const fmtPct = (v: number, digits = 1) => `${(v * 100).toFixed(digits)}%`;
 export const fmtDuration = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.round(s)}s`);
 
-function useWidth<T extends HTMLElement>(fallback = 640) {
+export function useWidth<T extends HTMLElement>(fallback = 640) {
   const ref = useRef<T>(null);
   const [w, setW] = useState(fallback);
   useLayoutEffect(() => { if (ref.current) setW(ref.current.clientWidth || fallback); }, [fallback]);

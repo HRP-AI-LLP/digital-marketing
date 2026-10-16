@@ -9,7 +9,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy import text
 
 from app.api import (
-    analytics, auth, content, dashboard, integrations, intelligence, jobs, media, notifications, organization, platform, roles,
+    analytics, analytics_growth, auth, content, dashboard, integrations, intelligence, jobs, media, notifications, organization, platform, roles,
     seo, social, users,
 )
 from app.core.config import get_settings
@@ -70,7 +70,7 @@ async def tunnel_guard(request: Request, call_next):
 
 for r in (auth.router, users.router, roles.router, organization.router, platform.router, integrations.router,
           notifications.router, jobs.router, intelligence.router, content.router, social.router, media.router,
-          seo.router, analytics.router, dashboard.router):
+          seo.router, analytics.router, analytics_growth.router, dashboard.router):
     app.include_router(r, prefix=API_PREFIX)
 
 
