@@ -1,7 +1,7 @@
-import { useMemo, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CheckCircle2, Sparkles, XCircle } from "lucide-react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, CheckCircle2, Lightbulb, Sparkles, XCircle } from "lucide-react";
 import { api } from "../../api/client";
 import { useJob } from "../../api/hooks";
 import { useAuth } from "../../auth/AuthContext";
@@ -12,6 +12,7 @@ import {
 } from "./shared";
 
 type Made = { post_id: string; job_id: string; account_id: string };
+type BriefPrefill = { brief_id: string; title: string; brief: string; link_url: string | null; post_type: string; pillar_id: string | null };
 
 function Progress({ item, account }: { item: Made; account?: AccountBrief }) {
   const job = useJob(item.job_id);
@@ -41,6 +42,13 @@ export default function Composer() {
   const [f, setF] = useState({ brief: "", post_type: "", pillar_id: "", when: "", then: "draft", link_url: "" });
   const [m, setM] = useState({ text: "", title: "", tags: "", link_url: "", first_comment: "", post_type: "text", when: "", status: "draft" });
   const [made, setMade] = useState<Made[] | null>(null);
+  // Opened from a research idea brief (/posts/new?brief=<id>): prefill it and write a grounded post from it.
+  const [params] = useSearchParams();
+  const briefId = params.get("brief");
+  const prefill = useQuery({
+    queryKey: ["research", "prefill", briefId], enabled: !!briefId,
+    queryFn: () => api<BriefPrefill>(`/research/briefs/${briefId}/composer`),
+  });
 
   const list = accounts.data ?? [];
   const chosen = list.filter((a) => picked.includes(a.id));
@@ -51,19 +59,28 @@ export default function Composer() {
     return chosen.map(typesFor).reduce((acc, t) => acc.filter((x) => t.includes(x)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picked.join(","), platforms.length]);
+  useEffect(() => {
+    const want = prefill.data?.post_type;
+    if (want && !f.post_type && commonTypes.includes(want)) setF((cur) => ({ ...cur, post_type: want }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill.data, commonTypes.join(",")]);
+  useEffect(() => {
+    const p = prefill.data;
+    if (p) setF((cur) => ({ ...cur, brief: p.brief, link_url: p.link_url ?? "", pillar_id: p.pillar_id ?? "" }));
+  }, [prefill.data]);
   const strictest = chosen.length ? Math.min(...chosen.map((a) => platforms.find((p) => p.id === a.platform)?.max_chars ?? 3000)) : 3000;
   const needsTitle = chosen.some((a) => (platforms.find((p) => p.id === a.platform)?.title_chars ?? 0) > 0);
   const manualTypes = commonTypes.filter((t) => t === "text" || t === "link");
 
   const compose = useMutation({
-    mutationFn: () => api<{ posts: Made[] }>("/content/posts/compose", {
+    mutationFn: () => api<{ posts: Made[] }>(briefId ? `/research/briefs/${briefId}/compose` : "/content/posts/compose", {
       method: "POST",
       json: {
         account_ids: picked, brief: f.brief, post_type: f.post_type || null, pillar_id: f.pillar_id || null,
         scheduled_at: fromLocalInput(f.when), then: f.then, link_url: f.link_url || null,
       },
     }),
-    onSuccess: (r) => { setMade(r.posts); qc.invalidateQueries({ queryKey: ["posts"] }); },
+    onSuccess: (r) => { setMade(r.posts); qc.invalidateQueries({ queryKey: ["posts"] }); if (briefId) qc.invalidateQueries({ queryKey: ["research"] }); },
   });
   const create = useMutation({
     mutationFn: async () => {
@@ -129,8 +146,15 @@ export default function Composer() {
           {tab === "ai" ? (
             <form className="space-y-4" onSubmit={(e: FormEvent) => { e.preventDefault(); compose.mutate(); }}>
               {compose.error && <Alert>{(compose.error as Error).message}</Alert>}
+              {prefill.error && <Alert>{(prefill.error as Error).message}</Alert>}
+              {prefill.data && (
+                <div className="flex gap-2.5 rounded-lg border border-secondary-200 bg-accent-tint px-3 py-2.5 text-sm">
+                  <Lightbulb size={16} className="mt-0.5 shrink-0 text-secondary-700" />
+                  <p>Writing from the idea <span className="font-medium">“{prefill.data.title}”</span>. Its facts and sources are below, so the post stays grounded. <Link to="/research" className="text-brand underline">Back to ideas</Link></p>
+                </div>
+              )}
               <Field label="What should the post be about?" hint="A topic, an announcement, or a few bullet points. The AI adds facts from your company knowledge.">
-                <Textarea required minLength={3} rows={5} value={f.brief} onChange={(e) => setF({ ...f, brief: e.target.value })}
+                <Textarea required minLength={3} rows={prefill.data ? 12 : 5} value={f.brief} onChange={(e) => setF({ ...f, brief: e.target.value })}
                   placeholder="We launched leave management in HRP HRMS: employees apply from their phone, managers approve in one tap." />
               </Field>
               <div className="grid gap-4 sm:grid-cols-2">

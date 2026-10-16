@@ -49,3 +49,7 @@ __all__ = [
     "User",
     "TENANT_TABLES",
 ]
+
+from app.models.research import IdeaBrief, ResearchRun, ResearchSettings, ResearchSource  # noqa: E402
+
+TENANT_TABLES_RESEARCH = ["research_settings", "research_runs", "research_sources", "idea_briefs"]

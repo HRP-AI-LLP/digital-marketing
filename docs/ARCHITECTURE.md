@@ -59,7 +59,7 @@ The UI polls `/api/v1/jobs/{id}` (frontend hook `useJob`).
 
 Job kinds in use: `intel.crawl`, `intel.extract`, `intel.competitors`, `intel.competitor_crawl`, `intel.audit`, `intel.ideas`,
 `intel.run_all`, `intel.analytics`, `post.generate`, `post.publish`, `post.metrics`, `media.generate`, `seo.write`, `seo.export`,
-`seo.keywords`, `account.refresh`.
+`seo.keywords`, `account.refresh`, `research.run`, `brand.suggest`.
 
 ### Secrets
 

@@ -14,6 +14,7 @@ MODULES = [
     "app.modules.analytics_growth",
     "app.modules.ai_models",
     "app.modules.inbox",
+    "app.modules.research",
 ]
 
 

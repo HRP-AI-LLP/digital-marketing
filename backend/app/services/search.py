@@ -24,6 +24,10 @@ class SearchError(Exception):
     pass
 
 
+# Recency filter accepted by every provider (value = days, used by Tavily).
+FRESHNESS = {"day": 1, "week": 7, "month": 31, "year": 365}
+
+
 def _clean(items: list[dict], n: int) -> list[dict]:
     out: list[dict] = []
     seen: set[str] = set()
@@ -39,21 +43,22 @@ def _clean(items: list[dict], n: int) -> list[dict]:
     return out
 
 
-async def _ddgs(query: str, n: int, base_url: str, secrets: dict) -> list[dict]:
+async def _ddgs(query: str, n: int, base_url: str, secrets: dict, freshness: str | None = None) -> list[dict]:
     def run() -> list[dict]:
         from ddgs import DDGS
 
-        return list(DDGS(timeout=15).text(query, max_results=n) or [])
+        limit = {"day": "d", "week": "w", "month": "m", "year": "y"}.get(freshness or "")
+        return list(DDGS(timeout=15).text(query, max_results=n, timelimit=limit) or [])
 
     rows = await asyncio.to_thread(run)
     return [{"title": r.get("title"), "url": r.get("href") or r.get("url"), "snippet": r.get("body")} for r in rows]
 
 
-async def _searxng(query: str, n: int, base_url: str, secrets: dict) -> list[dict]:
+async def _searxng(query: str, n: int, base_url: str, secrets: dict, freshness: str | None = None) -> list[dict]:
     if not base_url:
         raise SearchError("SearXNG needs its address, for example http://localhost:8888.")
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
-        r = await c.get(f"{base_url.rstrip('/')}/search", params={"q": query, "format": "json"},
+        r = await c.get(f"{base_url.rstrip('/')}/search", params={"q": query, "format": "json", **({"time_range": freshness} if freshness in FRESHNESS else {})},
                         headers={"Accept": "application/json"})
         if r.status_code == 403:
             raise SearchError("SearXNG refused JSON output. Enable 'json' under search.formats in its settings.yml.")
@@ -62,37 +67,40 @@ async def _searxng(query: str, n: int, base_url: str, secrets: dict) -> list[dic
     return [{"title": x.get("title"), "url": x.get("url"), "snippet": x.get("content")} for x in rows]
 
 
-async def _brave(query: str, n: int, base_url: str, secrets: dict) -> list[dict]:
+async def _brave(query: str, n: int, base_url: str, secrets: dict, freshness: str | None = None) -> list[dict]:
     key = secrets.get("api_key")
     if not key:
         raise SearchError("Brave Search needs an API key.")
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
-        r = await c.get(f"{base_url.rstrip('/')}/web/search", params={"q": query, "count": min(n, 20)},
+        r = await c.get(f"{base_url.rstrip('/')}/web/search", params={"q": query, "count": min(n, 20),
+                                **({"freshness": "p" + freshness[0]} if freshness in FRESHNESS else {})},
                         headers={"X-Subscription-Token": key, "Accept": "application/json"})
         r.raise_for_status()
         rows = (r.json().get("web") or {}).get("results") or []
     return [{"title": x.get("title"), "url": x.get("url"), "snippet": x.get("description")} for x in rows]
 
 
-async def _tavily(query: str, n: int, base_url: str, secrets: dict) -> list[dict]:
+async def _tavily(query: str, n: int, base_url: str, secrets: dict, freshness: str | None = None) -> list[dict]:
     key = secrets.get("api_key")
     if not key:
         raise SearchError("Tavily needs an API key.")
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.post(f"{base_url.rstrip('/')}/search", headers={"Authorization": f"Bearer {key}"},
-                         json={"api_key": key, "query": query, "max_results": min(n, 20)})
+                         json={"api_key": key, "query": query, "max_results": min(n, 20),
+                               **({"topic": "news", "days": FRESHNESS[freshness]} if freshness in ("day", "week") else
+                                  {"days": FRESHNESS[freshness]} if freshness in FRESHNESS else {})})
         r.raise_for_status()
         rows = r.json().get("results") or []
     return [{"title": x.get("title"), "url": x.get("url"), "snippet": x.get("content")} for x in rows]
 
 
-async def _serper(query: str, n: int, base_url: str, secrets: dict) -> list[dict]:
+async def _serper(query: str, n: int, base_url: str, secrets: dict, freshness: str | None = None) -> list[dict]:
     key = secrets.get("api_key")
     if not key:
         raise SearchError("Serper needs an API key.")
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.post(f"{base_url.rstrip('/')}/search", headers={"X-API-KEY": key},
-                         json={"q": query, "num": min(n, 20)})
+                         json={"q": query, "num": min(n, 20), **({"tbs": f"qdr:{freshness[0]}"} if freshness in FRESHNESS else {})})
         r.raise_for_status()
         rows = r.json().get("organic") or []
     return [{"title": x.get("title"), "url": x.get("link"), "snippet": x.get("snippet")} for x in rows]
@@ -101,13 +109,16 @@ async def _serper(query: str, n: int, base_url: str, secrets: dict) -> list[dict
 STYLES = {"ddgs": _ddgs, "searxng": _searxng, "brave": _brave, "tavily": _tavily, "serper": _serper}
 
 
-async def _run(cfg_provider: str, base_url: str | None, secrets: dict, query: str, n: int) -> list[dict]:
+async def _run(cfg_provider: str, base_url: str | None, secrets: dict, query: str, n: int,
+               freshness: str | None = None) -> list[dict]:
     spec = BY_ID.get(cfg_provider)
     style = spec.style if spec else cfg_provider
     fn = STYLES.get(style)
     if fn is None:
         raise SearchError(f"Unsupported search provider: {cfg_provider}")
     base = base_url or (spec.base_url if spec else "")
+    if freshness in FRESHNESS:
+        return _clean(await fn(query, n, base, secrets, freshness=freshness), n)
     return _clean(await fn(query, n, base, secrets), n)
 
 
@@ -132,6 +143,44 @@ async def web_search(session: AsyncSession, query: str, n: int = 10) -> list[dic
             log.info("search via %s failed: %s", name, e)
             errors.append(f"{name}: {e}")
     raise SearchError("Web search failed. " + " | ".join(errors)[:800])
+
+
+async def _providers(session: AsyncSession) -> list[tuple[str, str, str | None, dict]]:
+    cfgs = (await session.scalars(
+        select(ProviderConfig).where(ProviderConfig.kind == "search", ProviderConfig.enabled.is_(True))
+        .order_by(ProviderConfig.created_at)
+    )).all()
+    return [(c.name, c.provider, c.base_url, decrypt_json(c.secrets_enc)) for c in cfgs] or [("DuckDuckGo", "ddgs", None, {})]
+
+
+async def search_all(session: AsyncSession, query: str, n: int = 10, *, freshness: str | None = None,
+                     max_providers: int = 3) -> tuple[list[dict], list[str]]:
+    """Query up to `max_providers` configured providers and merge their results (URLs de-duplicated, first
+    provider wins). Each row gets a "provider" name. Returns (results, errors); raises SearchError only
+    when every provider failed."""
+    query = (query or "").strip()
+    if not query:
+        return [], []
+    n = max(1, min(n, 20))
+    merged: list[dict] = []
+    seen: set[str] = set()
+    errors: list[str] = []
+    ok = 0
+    for name, provider, base, secrets in (await _providers(session))[:max(1, max_providers)]:
+        try:
+            rows = await _run(provider, base, secrets, query, n, freshness)
+        except Exception as e:  # noqa: BLE001 - try the other providers
+            log.info("search via %s failed: %s", name, e)
+            errors.append(f"{name}: {e}"[:300])
+            continue
+        ok += 1
+        for r in rows:
+            if r["url"] not in seen:
+                seen.add(r["url"])
+                merged.append({**r, "provider": name})
+    if not ok:
+        raise SearchError("Web search failed. " + " | ".join(errors)[:800])
+    return merged, errors
 
 
 @tester("ddgs", "searxng", "brave", "tavily", "serper")

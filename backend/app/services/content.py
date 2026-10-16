@@ -334,6 +334,12 @@ async def plan_post(session: AsyncSession, post: Post, schedule: Schedule | None
             post.topic = opp.title
             if getattr(opp, "angle", None):
                 set_meta(post, angle=opp.angle)
+            # Researched topics carry a grounded brief (facts + sources) and, for occasions, the occasion
+            # (used by festive media templates).
+            odata = getattr(opp, "data", None) or {}
+            for k in ("brief", "occasion", "research_brief_id"):
+                if odata.get(k) and not (post.meta or {}).get(k):
+                    set_meta(post, **{k: odata[k]})
             return
 
     avoid = await recent_topics(session)
