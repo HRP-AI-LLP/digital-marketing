@@ -54,6 +54,17 @@ async def generate_job(ctx: JobContext) -> dict:
             await s.flush()
             return {"asset_ids": [str(a.id)], "kind": kind}
 
+        if kind == "3d":
+            await ctx.progress("Rendering the 3D scene…")
+            w, h = (int(x) for x in (p.get("size") or "1080x1080").split("x"))
+            brand = await media_svc.load_brand(s)
+            style = await media_svc.brand_style(s, brand, ctx.org_id)
+            a = await media_svc.generate_3d(s, ctx.org_id, style, p.get("scene") or "neural", p.get("output") or "image",
+                                            p.get("fields") or {}, (w, h), model_asset_id=p.get("model_asset_id"),
+                                            seconds=p.get("seconds"))
+            await s.flush()
+            return {"asset_ids": [str(a.id)], "kind": kind}
+
         post = None
         if p.get("post_id"):
             post = await s.get(Post, uuid.UUID(str(p["post_id"])))
@@ -70,6 +81,12 @@ async def generate_job(ctx: JobContext) -> dict:
         await ctx.progress({"video": "Building the video (voice-over, scenes, captions)…",
                             "gif": "Animating…", "animation": "Animating…"}.get(kind, "Rendering…"))
         brand = await media_svc.load_brand(s)
+        if p.get("variants"):
+            await ctx.progress("Rendering 3 options…")
+            assets = await media_svc.generate_variants(s, target, brand, int(p.get("variants") or 3))
+            await s.flush()
+            # options stay in the library; the user picks one to attach
+            return {"asset_ids": [str(a.id) for a in assets], "kind": kind, "post_id": str(post.id) if post else None, "variants": True}
         assets = await media_svc.generate_for_post(s, target, brand)
         ids = [str(a.id) for a in assets]
         if post is not None and ids:

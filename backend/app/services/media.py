@@ -79,6 +79,8 @@ UPLOAD_TYPES = {  # ext -> (kind, mime, max bytes)
     "mp4": ("video", "video/mp4", 300 * 1024 * 1024),
     "mov": ("video", "video/quicktime", 300 * 1024 * 1024),
     "pdf": ("document", "application/pdf", 50 * 1024 * 1024),
+    "glb": ("model3d", "model/gltf-binary", 50 * 1024 * 1024),
+    "gltf": ("model3d", "model/gltf+json", 20 * 1024 * 1024),
 }
 MIME_BY_EXT = {ext: v[1] for ext, v in UPLOAD_TYPES.items()} | {"mp3": "audio/mpeg", "m4a": "audio/mp4", "wav": "audio/wav"}
 
@@ -101,7 +103,58 @@ def sniff(data: bytes) -> str | None:
         return "mov" if brand == b"qt  " else "mp4"
     if data[:3] == b"ID3" or data[:2] in (b"\xff\xfb", b"\xff\xf3"):
         return "mp3"
+    if data[:4] == b"glTF":
+        return "glb"
+    head = data[:4096].lstrip()
+    if head[:1] == b"{" and b'"asset"' in data[:200_000]:
+        return "gltf"
     return None
+
+
+def validate_gltf(data: bytes, ext: str) -> dict:
+    """Checks a 3D model before it's stored: glTF 2.0, well-formed, self-contained (no external or remote
+    URIs - every buffer/image is inside the .glb or a data: URI), sane size. Returns summary info."""
+    import json as _json
+    import struct
+
+    def fail(msg: str):
+        raise MediaUnavailable(msg)
+
+    if ext == "glb":
+        if len(data) < 20:
+            fail("That .glb file is too short to be a 3D model.")
+        magic, version, length = struct.unpack_from("<III", data, 0)
+        if version != 2:
+            fail("Only glTF 2.0 models are supported. Export the model again as glTF 2.0 (.glb).")
+        if length != len(data):
+            fail("That .glb file is incomplete or damaged (its length doesn't match). Export it again.")
+        clen, ctype = struct.unpack_from("<II", data, 12)
+        if ctype != 0x4E4F534A or 20 + clen > len(data):
+            fail("That .glb file has no readable glTF header.")
+        raw = data[20:20 + clen]
+    else:
+        raw = data
+    try:
+        doc = _json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        fail("The model's glTF data isn't valid JSON.")
+    if not isinstance(doc, dict) or not str((doc.get("asset") or {}).get("version", "")).startswith("2"):
+        fail("Only glTF 2.0 models are supported.")
+    for key in ("buffers", "images"):
+        for i, item in enumerate(doc.get(key) or []):
+            uri = (item or {}).get("uri")
+            if uri and not str(uri).startswith("data:"):
+                fail("The model refers to external files. Upload a single self-contained .glb (or a .gltf with embedded data).")
+    ext_req = set(doc.get("extensionsRequired") or [])
+    unsupported = ext_req - {"EXT_meshopt_compression", "KHR_materials_emissive_strength", "KHR_texture_transform",
+                             "KHR_mesh_quantization", "KHR_materials_unlit"}
+    if unsupported:
+        fail(f"The model needs {', '.join(sorted(unsupported))}, which the renderer doesn't support. Export it without "
+             "Draco/KTX2 compression.")
+    meshes = len(doc.get("meshes") or [])
+    if not meshes:
+        fail("The model has no meshes to show.")
+    return {"meshes": meshes, "materials": len(doc.get("materials") or []), "animations": len(doc.get("animations") or [])}
 
 
 def _image_info(data: bytes) -> tuple[int | None, int | None]:
@@ -247,7 +300,7 @@ async def save_upload(session: AsyncSession, org_id, data: bytes, filename: str)
     ext = {"jpeg": "jpg", "m4v": "mp4"}.get(ext, ext)
     real = sniff(data)
     if real is None or real not in UPLOAD_TYPES:
-        raise MediaUnavailable("Upload PNG, JPG, WebP, GIF, MP4, MOV or PDF files.")
+        raise MediaUnavailable("Upload PNG, JPG, WebP, GIF, MP4, MOV, PDF or 3D model (.glb, .gltf) files.")
     if ext in UPLOAD_TYPES and {ext, real} not in ({"mp4", "mov"},) and ext != real:
         raise MediaUnavailable(f"“{filename}” looks like a {real.upper()} file, not {ext.upper()}. Rename it or export it again.")
     kind, mime, limit = UPLOAD_TYPES[real]
@@ -264,6 +317,8 @@ async def save_upload(session: AsyncSession, org_id, data: bytes, filename: str)
             raise MediaUnavailable("That image is too large (over 60 megapixels).")
     elif kind == "document":
         meta["pages"] = _pdf_pages(data)
+    elif kind == "model3d":
+        meta.update(validate_gltf(data, real))
     asset = await store_bytes(session, org_id, data, real, source="upload", kind=kind, mime=mime, meta=meta,
                               area="uploads", width=width, height=height, duration=duration)
     if kind == "video":
@@ -278,6 +333,15 @@ async def save_upload(session: AsyncSession, org_id, data: bytes, filename: str)
                 render.rm_tree(tmp)
         except Exception as e:  # noqa: BLE001
             log.info("poster frame failed: %s", e)
+        await session.flush()
+    if kind == "model3d":  # preview still for the library (best effort; WebGL may be unavailable)
+        try:
+            style = await brand_style(session, await load_brand(session), org_id)
+            png = await render_3d_png("scene3d_model", {"bare": True}, 800, 800, style, session=session, model_asset_id=asset.id)
+            asset.meta = {**asset.meta, "poster_path": await _side_file(org_id, png, "png", "uploads")}
+        except Exception as e:  # noqa: BLE001
+            log.info("model preview failed: %s", e)
+            asset.meta = {**asset.meta, "preview_note": "Preview unavailable (3D rendering isn't available here)."}
         await session.flush()
     return asset
 
@@ -658,11 +722,17 @@ async def _three_d_inputs(session, fields: dict, style: BrandStyle, scene: str, 
             except ValueError:
                 a = None
         p = _abs(a.path) if a is not None and a.kind == "model3d" else None
-        if p is None:
+        if p is None and f.get("demo_model"):
+            from app.services.media_templates.three_d import demo_glb
+
+            url = f"{ASSET_HOST}/model.glb"
+            assets = {url: (demo_glb(), "model/gltf-binary")}
+        elif p is None:
             raise MediaUnavailable("Choose a 3D model (.glb or .gltf) from the library first.")
-        ext = "glb" if a.mime == "model/gltf-binary" else "gltf"
-        url = f"{ASSET_HOST}/model.{ext}"
-        assets = {url: (await asyncio.to_thread(p.read_bytes), a.mime)}
+        else:
+            ext = "glb" if a.mime == "model/gltf-binary" else "gltf"
+            url = f"{ASSET_HOST}/model.{ext}"
+            assets = {url: (await asyncio.to_thread(p.read_bytes), a.mime)}
         f["model_url"] = url
     if scene == "cards" and not f.get("screens"):
         f["screens"] = ([screenshot] if screenshot else []) + await _ui_screens(style)
@@ -693,6 +763,54 @@ async def render_3d_clip(name: str, fields: dict, width: int, height: int, style
 
 def _fallback_2d(name: str) -> str:
     return {"scene3d_logo": "animated_text", "scene3d_cards": "feature_spotlight", "scene3d_model": "hook_bold"}.get(name, "hook_bold")
+
+
+# ---------------------------------------------------------------------------- gallery previews
+PREVIEW_SIZES = ("1080x1080", "1080x1350", "1080x1920", "1920x1080", "1000x1500")
+
+
+def _brand_key(style: BrandStyle) -> str:
+    return hashlib.sha1(repr((style.name, style.website, style.colors, style.heading_font, style.body_font,
+                              hashlib.sha1((style.logo_uri or "").encode()).hexdigest())).encode()).hexdigest()[:16]
+
+
+async def template_preview(org_id, style: BrandStyle, name: str, size: str = "1080x1350", theme: str | None = None) -> Path:
+    """JPEG thumbnail (480 px wide) of a template with its sample content in this brand; cached on disk."""
+    from PIL import Image
+
+    spec = TEMPLATES[name]
+    if size not in PREVIEW_SIZES:
+        size = "1080x1350"
+    theme = theme if theme in ("dark", "light", "brand") else None
+    key = hashlib.sha1(f"v3|{name}|{size}|{theme}|{_brand_key(style)}".encode()).hexdigest()[:24]
+    folder = storage.root() / "cache" / "previews" / str(org_id)
+    path = folder / f"{key}.jpg"
+    if path.exists():
+        return path
+    w, h = (int(x) for x in size.split("x"))
+    fields = dict(spec.sample or {})
+    if spec.three_d:
+        fields["demo_model"] = True
+        try:
+            png = await render_3d_png(name, fields, w, h, style)
+        except (render.RenderError, MediaUnavailable):
+            png = await render_template(_fallback_2d(name), {**fields, "lines": [fields.get("headline") or spec.label]}, w, h, style)
+    else:
+        png = await render_template(name, fields, w, h, style, theme=theme)
+
+    def shrink() -> bytes:
+        im = Image.open(io.BytesIO(png)).convert("RGB")
+        im.thumbnail((480, 480 * h // w), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=84, optimize=True)
+        return buf.getvalue()
+
+    data = await asyncio.to_thread(shrink)
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+    return path
 
 
 # ---------------------------------------------------------------------------- image
@@ -1241,4 +1359,5 @@ async def capabilities(session: AsyncSession) -> dict:
         "media_host": bool(hosts) or bool((get_settings().public_base_url or "").strip()),
         "renderer": render.chromium_path() or "playwright",
         "music": [p.name for p in music_files()],
+        "webgl": _GL.get("ok"),  # None until the first 3D render or preview has probed it
     }

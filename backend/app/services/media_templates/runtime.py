@@ -99,6 +99,7 @@ RUNTIME_JS = r"""
   var twinkles=[]; document.querySelectorAll('[data-tw]').forEach(function(el){var a=(el.dataset.tw||'').split(',').map(parseFloat); twinkles.push({el:el,k:a[0]||2,ph:a[1]||0,lo:isNaN(a[2])?.35:a[2]}); state(el);});
   var spins=[]; document.querySelectorAll('[data-spin]').forEach(function(el){spins.push({el:el,turns:parseFloat(el.dataset.spin)||1}); state(el);});
   document.querySelectorAll('[data-kb]').forEach(function(el){kbs.push({el:el,dir:el.dataset.kb}); state(el);});
+  if(mode==='loop' && ends>dur*.62){ var kf=(dur*.62)/ends; tweens.forEach(function(tw){tw.start*=kf; tw.d*=kf;}); ends*=kf; }
   var still=Math.min(dur, ends+.05);
   // outro: content exits, the logo sting (data-outro) comes in
   var outroEls=[].slice.call(document.querySelectorAll('[data-outro]'));
@@ -114,7 +115,7 @@ RUNTIME_JS = r"""
       targets.forEach(function(t){ tween(t,exitAt,{o:[1,0],y:[0,-18*(t.__words?0:1)]},.45,'inCubic'); }); });
   }
   var phase=mode==='loop'?still:0, loopDur=mode==='loop'?dur+still:dur;
-  function local(t){ if(mode!=='loop') return t; var u=t+phase; return u>=dur?u-dur:u; }
+  function local(t){ if(mode!=='loop') return t; var u=(t+phase)%dur; return u<0?u+dur:u; }
   var dashLen=new Map();
   document.querySelectorAll('[data-len]').forEach(function(p){var L=p.getTotalLength?p.getTotalLength():num(p.dataset.len,1000); dashLen.set(p,L); p.style.strokeDasharray=L+' '+L;});
   function fmt(el,v){
@@ -157,7 +158,7 @@ RUNTIME_JS = r"""
     // tweens that start later must not override values set by an earlier finished tween: handled by order
     if(driftOn) drifts.forEach(function(d){var a=2*Math.PI*(t/dur*d.k+d.ph); d.el.__st.x+=d.ax*Math.sin(a)/S; d.el.__st.y+=d.ay*Math.cos(a)/S;});
     if(driftOn){ twinkles.forEach(function(w){ var v=.5+.5*Math.sin(2*Math.PI*(t/dur*w.k+w.ph)); w.el.__st.o*= w.lo+(1-w.lo)*v; });
-      spins.forEach(function(sp){ sp.el.__st.r=360*sp.turns*t/dur; }); }
+      spins.forEach(function(sp){ sp.el.__st.r=mode==='loop'?360*sp.turns*Math.sin(2*Math.PI*t/dur)/Math.PI:360*sp.turns*t/dur; }); }
     kbs.forEach(function(k){var p=mode==='loop'?(1-Math.cos(2*Math.PI*t/dur))/2:Math.min(1,t/dur), z;
       if(k.dir==='drift'){var a=2*Math.PI*t/dur; k.el.__st.s=1.06+.025*Math.sin(a); k.el.__st.x=14*Math.sin(a); k.el.__st.y=10*Math.cos(a)-10; return;}
       if(k.dir==='out'){z=1.14-.12*p;} else {z=1.02+.12*p;} k.el.__st.s=z;

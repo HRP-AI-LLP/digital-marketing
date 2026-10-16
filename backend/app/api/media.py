@@ -4,8 +4,10 @@ plus the signed file endpoints browsers and social platforms load media from."""
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from email.parser import BytesParser
+from urllib.parse import urlencode
 from email.policy import HTTP
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -209,10 +211,31 @@ async def delete_media(asset_id: uuid.UUID, ctx: Context = Depends(require("medi
 
 
 # ============================================================================ templates & rendering
+def _preview_url(org_id, name: str, size: str, theme: str | None) -> str:
+    from app.core.signing import _sig
+
+    exp = int(time.time()) + 6 * 3600
+    exp -= exp % 600
+    pid = f"tpl:{name}:{size}:{theme or ''}"
+    q = urlencode({"size": size, "theme": theme or "", "o": str(org_id), "e": exp, "s": _sig(pid, str(org_id), exp)})
+    return f"/api/v1/media/templates/{name}/preview.jpg?{q}"
+
+
 @router.get("/templates")
-async def templates(ctx: Context = Depends(require("content.view"))):
+async def templates(size: str = "1080x1350", ctx: Context = Depends(require("content.view"))):
+    from app.services.media_templates import three_d
+    from app.services.media_templates.occasions import OCCASIONS
+
+    size = size if size in media_svc.PREVIEW_SIZES else "1080x1350"
+    items = registry()
+    for t in items:
+        t["preview_url"] = _preview_url(ctx.org_id, t["name"], size, None)
+        t["preview_urls"] = {th: _preview_url(ctx.org_id, t["name"], size, th) for th in t["themes"]}
     return {
-        "templates": registry(),
+        "templates": items,
+        "scenes3d": [{"id": k, "label": v[0], "description": v[1]} for k, v in three_d.SCENES.items()],
+        "occasions": [{"id": k, "label": v["label"]} for k, v in OCCASIONS.items()],
+        "preview_sizes": list(media_svc.PREVIEW_SIZES),
         "kinds": {k: POST_TYPES[k] for k in GEN_KINDS},
         "platforms": [
             {"id": p.id, "label": p.label, "image_size": list(p.image_size), "video_size": list(p.video_size),
@@ -223,9 +246,26 @@ async def templates(ctx: Context = Depends(require("content.view"))):
             {"id": "1080x1080", "label": "Square 1:1"}, {"id": "1080x1350", "label": "Portrait 4:5"},
             {"id": "1080x1920", "label": "Story / Reel 9:16"}, {"id": "1200x627", "label": "Link 1.91:1"},
             {"id": "1000x1500", "label": "Pinterest 2:3"}, {"id": "1200x900", "label": "Google Business 4:3"},
-            {"id": "1200x675", "label": "Landscape 16:9"},
+            {"id": "1200x675", "label": "Landscape 16:9"}, {"id": "1920x1080", "label": "Full HD 16:9"},
         ],
     }
+
+
+@router.get("/templates/{name}/preview.jpg")
+async def template_preview(name: str, o: str, e: int, s: str, size: str = "1080x1350", theme: str = ""):
+    """Gallery thumbnail (signed link, so <img> tags work without an auth header). Rendered once, then cached."""
+    oid = _uuid(o)
+    if name not in TEMPLATES or oid is None or not verify(f"tpl:{name}:{size}:{theme}", str(oid), e, s):
+        raise _bad("This link has expired. Reload the page to get a fresh one.", status.HTTP_403_FORBIDDEN)
+    async with SessionLocal() as session:
+        set_tenant(session, oid)
+        brand = await session.scalar(select(BrandProfile))
+        style = await media_svc.brand_style(session, brand, oid)
+    try:
+        path = await media_svc.template_preview(oid, style, name, size, theme or None)
+    except media_svc.render.RenderError as err:
+        raise _bad(str(err), status.HTTP_503_SERVICE_UNAVAILABLE)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 def _dims(size: str | None, platform: str | None, kind: str = "image") -> tuple[int, int]:
@@ -261,7 +301,7 @@ async def render_now(body: RenderIn, ctx: Context = Depends(require("media.manag
     spec = TEMPLATES.get(body.template)
     if spec is None:
         raise _bad(f"Unknown template: {body.template}")
-    w, h = _dims(body.size, body.platform, "video" if "video" in spec.kinds else "image")
+    w, h = _dims(body.size, body.platform, "video" if spec.kinds == ("video",) else "image")
     brand = await media_svc.load_brand(ctx.session)
     style = await media_svc.brand_style(ctx.session, brand, ctx.org_id)
 
@@ -272,7 +312,11 @@ async def render_now(body: RenderIn, ctx: Context = Depends(require("media.manag
             photo, bg, _ = await media_svc.background(ctx.session, ctx.org_id, str(brief), w, h, body.background,
                                                       str(body.background_asset_id) if body.background_asset_id else None)
         fields = {k: v for k, v in body.fields.items() if isinstance(v, (str, int, float, list))}
-        png = await media_svc.render_template(body.template, fields, w, h, style, photo=photo, theme=body.theme)
+        if spec.three_d:
+            png = await media_svc.render_3d_png(body.template, fields, w, h, style, session=ctx.session,
+                                                model_asset_id=fields.get("model_asset_id"))
+        else:
+            png = await media_svc.render_template(body.template, fields, w, h, style, photo=photo, theme=body.theme)
         return png, bg
 
     try:
@@ -282,6 +326,8 @@ async def render_now(body: RenderIn, ctx: Context = Depends(require("media.manag
                    status.HTTP_504_GATEWAY_TIMEOUT)
     except media_svc.render.RenderError as e:
         raise _bad(str(e), status.HTTP_503_SERVICE_UNAVAILABLE)
+    except media_svc.MediaUnavailable as e:
+        raise _bad(e.message)
     alt = str(body.fields.get("alt_text") or body.fields.get("headline") or body.fields.get("quote")
               or body.fields.get("heading") or body.fields.get("caption") or "")[:500]
     meta = {"template": body.template, "fields": {k: v for k, v in body.fields.items() if isinstance(v, (str, int, float, list))},
@@ -300,6 +346,7 @@ class GenerateIn(BaseModel):
     platform: str = "manual"
     size: str | None = None
     post_id: uuid.UUID | None = None
+    variants: int = Field(0, ge=0, le=4)  # >1: render that many layout options instead of one
 
 
 @router.post("/generate", status_code=202)
@@ -319,8 +366,10 @@ async def generate(body: GenerateIn, ctx: Context = Depends(require("media.manag
                        "edit the post first (it goes back to review), then add media.", status.HTTP_409_CONFLICT)
     if body.kind == "video" and not (body.fields.get("video_script") or body.fields.get("body") or body.post_id):
         raise _bad("Add at least one scene with a caption or voice-over text.")
+    if body.variants > 1 and body.kind not in ("image", "gif", "animation"):
+        raise _bad("Variants are available for images, GIFs and animations.")
     payload = {"kind": body.kind, "fields": body.fields, "platform": body.platform, "size": body.size,
-               "post_id": str(body.post_id) if body.post_id else None}
+               "post_id": str(body.post_id) if body.post_id else None, "variants": body.variants if body.variants > 1 else 0}
     job = await enqueue(ctx.session, "media.generate", ctx.org_id, payload, created_by=ctx.user.id, max_attempts=1)
     await ctx.session.commit()
     return {"job_id": job.id}
@@ -345,6 +394,73 @@ async def ai_image(body: AiImageIn, ctx: Context = Depends(require("media.manage
                         created_by=ctx.user.id, max_attempts=1)
     await ctx.session.commit()
     return {"job_id": job.id}
+
+
+class ThreeDIn(BaseModel):
+    scene: str
+    output: str = "image"  # image | video | gif
+    fields: dict = {}
+    platform: str | None = None
+    size: str | None = None
+    model_asset_id: uuid.UUID | None = None
+    seconds: float | None = Field(None, ge=2, le=10)
+
+
+@router.post("/3d", status_code=202)
+async def three_d(body: ThreeDIn, ctx: Context = Depends(require("media.manage"))):
+    """Render a 3D scene (PNG still, MP4 clip or GIF loop) in the background."""
+    from app.services.media_templates.three_d import SCENES
+
+    if body.scene.removeprefix("scene3d_") not in SCENES:
+        raise _bad(f"Scene must be one of: {', '.join(SCENES)}.")
+    if body.output not in ("image", "video", "gif"):
+        raise _bad("Output must be image, video or gif.")
+    if body.scene.removeprefix("scene3d_") == "model":
+        if not body.model_asset_id:
+            raise _bad("Upload or choose a .glb/.gltf model for the turntable.")
+        m = await _asset(ctx, body.model_asset_id)
+        if m.kind != "model3d":
+            raise _bad("That file isn't a 3D model. Choose a .glb or .gltf file.")
+    w, h = _dims(body.size, body.platform, "video" if body.output == "video" else "image")
+    if body.output == "gif" and w > media_svc.MOTION["gif"]["max_width"]:
+        h, w = int(h * media_svc.MOTION["gif"]["max_width"] / w), media_svc.MOTION["gif"]["max_width"]
+    fields = {k: v for k, v in body.fields.items() if isinstance(v, (str, int, float, list))}
+    job = await enqueue(ctx.session, "media.generate", ctx.org_id,
+                        {"kind": "3d", "scene": body.scene.removeprefix("scene3d_"), "output": body.output, "fields": fields,
+                         "size": f"{w}x{h}", "model_asset_id": str(body.model_asset_id) if body.model_asset_id else None,
+                         "seconds": body.seconds},
+                        created_by=ctx.user.id, max_attempts=1)
+    await ctx.session.commit()
+    return {"job_id": job.id}
+
+
+class AttachIn(BaseModel):
+    post_id: uuid.UUID
+    asset_ids: list[uuid.UUID] = Field(min_length=1, max_length=10)
+    replace: bool = True
+
+
+@router.post("/attach")
+async def attach(body: AttachIn, ctx: Context = Depends(require("media.manage"))):
+    """'Use in a post': put library media on a draft post (replacing its media by default)."""
+    post = await ctx.session.scalar(select(Post).where(Post.id == body.post_id))
+    if post is None:
+        raise _bad("Post not found.", status.HTTP_404_NOT_FOUND)
+    if post.status in ("scheduled", "approved", "publishing", "published"):
+        raise _bad("This post is already approved or published. Edit the post first (it goes back to review), then change its media.",
+                   status.HTTP_409_CONFLICT)
+    ids = []
+    for aid in body.asset_ids:
+        a = await _asset(ctx, aid)
+        if a.kind in ("audio", "model3d"):
+            raise _bad("Audio files and 3D models can't be posted directly. Render the model as an image or video first.")
+        ids.append(str(a.id))
+    post.media_ids = ids if body.replace else [*(post.media_ids or []), *[i for i in ids if i not in (post.media_ids or [])]]
+    post.meta = {**(post.meta or {}), "keep_media": True}
+    audit.record(ctx.session, action="media.attached", organization_id=ctx.org_id, actor=ctx.user, entity_type="post",
+                 entity_id=post.id, summary=f"Attached {len(ids)} media file(s)", ip=ctx.ip)
+    await ctx.session.commit()
+    return {"post_id": str(post.id), "media_ids": post.media_ids}
 
 
 # ============================================================================ stock & voices

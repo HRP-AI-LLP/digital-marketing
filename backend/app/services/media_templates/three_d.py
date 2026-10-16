@@ -320,3 +320,62 @@ def screen_html(brand, width: int, height: int, variant: int = 0) -> str:
             [("Payroll run", "₹1.2 Cr"), ("Payslips sent", "1,284"), ("Exceptions", "3")],
             [("Engagement", "86%"), ("Check-ins", "412"), ("New joiners", "18")]][variant % 3]
     return k.document(f"<div class='canvas'>{k.ui_mock(titles[variant % 3], kpis, compact=height > width)}</div>", "", "screen")
+
+
+@lru_cache(maxsize=1)
+def demo_glb() -> bytes:
+    """A small procedural model (torus knot, brand blue) for previews and tests - generated, not downloaded."""
+    import math
+    import struct
+
+    p_, q_, seg, rs, r = 2, 3, 160, 24, .32
+    pos: list[float] = []
+    nor: list[float] = []
+    idx: list[int] = []
+
+    def curve(t: float) -> tuple[float, float, float]:
+        return ((1 + .4 * math.cos(q_ * t)) * math.cos(p_ * t), (1 + .4 * math.cos(q_ * t)) * math.sin(p_ * t), .4 * math.sin(q_ * t))
+
+    for i in range(seg + 1):
+        t = 2 * math.pi * i / seg
+        a, b = curve(t), curve(t + .01)
+        tv = [b[k] - a[k] for k in range(3)]
+        ln = math.sqrt(sum(v * v for v in tv))
+        tv = [v / ln for v in tv]
+        nv = [a[k] + b[k] for k in range(3)]
+        bv = [tv[1] * nv[2] - tv[2] * nv[1], tv[2] * nv[0] - tv[0] * nv[2], tv[0] * nv[1] - tv[1] * nv[0]]
+        ln = math.sqrt(sum(v * v for v in bv))
+        bv = [v / ln for v in bv]
+        nv = [bv[1] * tv[2] - bv[2] * tv[1], bv[2] * tv[0] - bv[0] * tv[2], bv[0] * tv[1] - bv[1] * tv[0]]
+        for j in range(rs + 1):
+            v = 2 * math.pi * j / rs
+            cx, cy = -r * math.cos(v), r * math.sin(v)
+            n = [cx * nv[k] + cy * bv[k] for k in range(3)]
+            ln = math.sqrt(sum(x * x for x in n))
+            pos += [a[k] + n[k] for k in range(3)]
+            nor += [x / ln for x in n]
+    for i in range(seg):
+        for j in range(rs):
+            a0, b0 = i * (rs + 1) + j, (i + 1) * (rs + 1) + j
+            idx += [a0, b0, a0 + 1, b0, b0 + 1, a0 + 1]
+    pb = struct.pack(f"<{len(pos)}f", *pos)
+    nb = struct.pack(f"<{len(nor)}f", *nor)
+    ib = struct.pack(f"<{len(idx)}I", *idx)
+    binb = pb + nb + ib
+    n = len(pos) // 3
+    doc = {"asset": {"version": "2.0", "generator": "hrp-dm"}, "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+           "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 0}]}],
+           "materials": [{"pbrMetallicRoughness": {"baseColorFactor": [0.06, 0.55, 0.87, 1], "metallicFactor": 0.6, "roughnessFactor": 0.25}}],
+           "buffers": [{"byteLength": len(binb)}],
+           "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(pb), "target": 34962},
+                           {"buffer": 0, "byteOffset": len(pb), "byteLength": len(nb), "target": 34962},
+                           {"buffer": 0, "byteOffset": len(pb) + len(nb), "byteLength": len(ib), "target": 34963}],
+           "accessors": [{"bufferView": 0, "componentType": 5126, "count": n, "type": "VEC3",
+                          "min": [min(pos[i::3]) for i in range(3)], "max": [max(pos[i::3]) for i in range(3)]},
+                         {"bufferView": 1, "componentType": 5126, "count": n, "type": "VEC3"},
+                         {"bufferView": 2, "componentType": 5125, "count": len(idx), "type": "SCALAR"}]}
+    js = json.dumps(doc).encode()
+    js += b" " * ((4 - len(js) % 4) % 4)
+    binb += b"\0" * ((4 - len(binb) % 4) % 4)
+    return (struct.pack("<III", 0x46546C67, 2, 12 + 8 + len(js) + 8 + len(binb)) + struct.pack("<II", len(js), 0x4E4F534A) + js
+            + struct.pack("<II", len(binb), 0x004E4942) + binb)

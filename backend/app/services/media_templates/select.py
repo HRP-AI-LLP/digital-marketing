@@ -83,11 +83,20 @@ def choose(meta: dict, *, text: str = "", title: str = "", kind: str = "image", 
     """Pick a layout. An explicit meta['template'] (or visual.layout from the writer) always wins."""
     from app.services.media_templates import TEMPLATES
 
-    for cand in (meta.get("template"), (meta.get("visual") or {}).get("layout") if isinstance(meta.get("visual"), dict) else None):
-        if cand in TEMPLATES and kind in TEMPLATES[cand].kinds and cand not in exclude:
-            return cand
-    occ = match_occasion(meta.get("occasion"), None if meta.get("occasion") else f"{title}\n{text}")
-    if occ and f"greeting_{occ}" in TEMPLATES and f"greeting_{occ}" not in exclude:
+    def ok(c) -> bool:
+        return c in TEMPLATES and kind in TEMPLATES[c].kinds and c not in exclude
+
+    if ok(meta.get("template")):
+        return meta["template"]
+    if meta.get("occasion"):  # set by the occasions calendar: a greeting wins over the writer's layout hint
+        occ = match_occasion(meta.get("occasion"), None)
+        if occ and ok(f"greeting_{occ}"):
+            return f"greeting_{occ}"
+    v = meta.get("visual") if isinstance(meta.get("visual"), dict) else {}
+    if ok(v.get("layout")):
+        return v["layout"]
+    occ = match_occasion(None, f"{title}\n{text}")
+    if occ and ok(f"greeting_{occ}"):
         return f"greeting_{occ}"
     sig = signals(meta, text, title)
     sc = score(sig, photo_ok)
