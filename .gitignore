@@ -1,0 +1,18 @@
+# secrets
+.env
+# python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# node
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+# runtime data
+storage/*
+!storage/.gitkeep
+# tools downloaded by start.ps1 (cloudflared)
+tools/
+frontend/dist/
+backend/.pytest_cache/

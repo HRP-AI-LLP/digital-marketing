@@ -1,0 +1,26 @@
+# Reference definition of the local services. start.ps1 creates the same containers with
+# plain `podman run`, so podman-compose / docker-compose are NOT required.
+# If you prefer compose:  podman compose -f infra/compose.yaml --env-file .env up -d
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:0.8.0-pg16
+    container_name: hrp-dm-postgres
+    environment:
+      POSTGRES_USER: dm_owner
+      POSTGRES_PASSWORD: ${DB_OWNER_PASSWORD}
+      POSTGRES_DB: digital_marketing
+    ports: ["${DB_PORT:-5433}:5432"]
+    volumes: [hrp-dm-pgdata:/var/lib/postgresql/data]
+    restart: unless-stopped
+  redis:
+    image: docker.io/library/redis:7.4-alpine
+    container_name: hrp-dm-redis
+    ports: ["${REDIS_PORT:-6380}:6379"]
+    volumes: [hrp-dm-redisdata:/data]
+    restart: unless-stopped
+  # Phase 2: self-hosted meta-search used to discover competitors automatically
+  # searxng:
+  #   image: docker.io/searxng/searxng
+volumes:
+  hrp-dm-pgdata:
+  hrp-dm-redisdata:
