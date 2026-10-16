@@ -11,6 +11,8 @@ from app.services.llm.catalog import BY_ID
 # Local GPU models run one request at a time (8 GB VRAM).
 LOCAL_GPU_LOCK = asyncio.Semaphore(1)
 TIMEOUT = httpx.Timeout(180.0, connect=10.0)
+# Local models on a laptop GPU can need several minutes for long prompts (company analysis, articles).
+LOCAL_TIMEOUT = httpx.Timeout(600.0, connect=10.0)
 
 
 class ProviderError(Exception):
@@ -81,7 +83,7 @@ async def chat(
 
 async def _chat(c, model, messages, system, json_mode, temperature, max_tokens) -> ChatResult:
     t0 = time.perf_counter()
-    async with httpx.AsyncClient(timeout=TIMEOUT) as http:
+    async with httpx.AsyncClient(timeout=LOCAL_TIMEOUT if c.local else TIMEOUT) as http:
         if c.style == "anthropic":
             body = {"model": model, "max_tokens": max_tokens, "temperature": temperature, "messages": messages}
             sys = system or ""
@@ -128,7 +130,7 @@ async def embed(c: Conn, model: str, texts: list[str]) -> tuple[list[list[float]
         raise ProviderError("Anthropic has no embeddings API; route 'embed' to another provider.", retryable=False)
 
     async def go():
-        async with httpx.AsyncClient(timeout=TIMEOUT) as http:
+        async with httpx.AsyncClient(timeout=LOCAL_TIMEOUT if c.local else TIMEOUT) as http:
             r = await http.post(f"{c.base_url.rstrip('/')}/embeddings", json={"model": model, "input": texts}, headers=_headers(c))
             if r.status_code >= 400:
                 raise _err(r)

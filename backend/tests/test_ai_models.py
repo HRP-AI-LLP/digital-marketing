@@ -211,7 +211,7 @@ async def test_discover_before_saving(client, a, monkeypatch):
 async def test_suggested_lists_for_media_providers(client, a):
     r = await client.post("/integrations/providers", headers=auth(a), json={"provider": "stability", "secrets": {"api_key": "k"}})
     m = (await client.get(f"/integrations/providers/{r.json()['id']}/models", headers=auth(a))).json()
-    assert m["source"] == "suggested" and m["types"]["core"] == "image"
+    assert "core" in m["models"] and m["types"]["core"] == "image"
     await client.delete(f"/integrations/providers/{r.json()['id']}", headers=auth(a))
 
 
@@ -258,3 +258,39 @@ async def test_voice_falls_back_to_edge(client, a, monkeypatch, tmp_path):
     assert rows[("openai_tts", "tts")]["failures"] >= 1
     assert rows[("edge_tts", "tts")]["units"] >= 2
     await client.delete(f"/integrations/providers/{vo}", headers=auth(a))
+
+
+async def test_more_providers_list_their_models(client, a, monkeypatch):
+    calls = []
+
+    async def fake_get(url, headers=None, params=None):
+        calls.append(url)
+        if "huggingface.co/api/models" in url:
+            assert params["pipeline_tag"] == "text-to-image"
+            return [{"id": "black-forest-labs/FLUX.1-schnell"}, {"id": "stabilityai/stable-diffusion-xl-base-1.0"}]
+        if url.endswith("/collections/text-to-video"):
+            return {"models": [{"owner": "minimax", "name": "video-01"}, {"owner": "kwaivgi", "name": "kling-v2.1"}]}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(discovery, "_get_json", fake_get)
+    ids = {}
+    for prov in ("hf_images", "replicate_video", "stability"):
+        r = await client.post("/integrations/providers", headers=auth(a), json={"provider": prov, "secrets": {"api_key": "k"}})
+        ids[prov] = r.json()["id"]
+    hf = (await client.get(f"/integrations/providers/{ids['hf_images']}/models", headers=auth(a))).json()
+    assert hf["source"] == "live" and "black-forest-labs/FLUX.1-schnell" in hf["models"]
+    rep = (await client.get(f"/integrations/providers/{ids['replicate_video']}/models", headers=auth(a))).json()
+    assert rep["models"] == ["kwaivgi/kling-v2.1", "minimax/video-01"] and rep["types"]["minimax/video-01"] == "video"
+    st = (await client.get(f"/integrations/providers/{ids['stability']}/models", headers=auth(a))).json()
+    assert "sd3.5-large" in st["models"]
+    for pid in ids.values():
+        await client.delete(f"/integrations/providers/{pid}", headers=auth(a))
+
+
+async def test_timeouts_get_a_readable_reason():
+    import httpx
+
+    e = httpx.ReadTimeout("")
+    assert "took too long" in health.describe(e)
+    v = health.classify(e, local=True)
+    assert v.state == "cooldown" and v.reason.startswith("Took too long")

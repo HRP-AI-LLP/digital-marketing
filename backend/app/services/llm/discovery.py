@@ -182,6 +182,52 @@ async def _gemini_images(cfg: ProviderConfig) -> list[tuple[str, dict]]:
     return [(i, raw) for i, raw in await _gemini_native(cfg) if _IMAGE.search(i)]
 
 
+STABILITY_MODELS = ["core", "ultra", "sd3.5-large", "sd3.5-large-turbo", "sd3.5-medium", "sd3.5-flash"]
+
+
+async def _hf_text_to_image(cfg: ProviderConfig) -> list[tuple[str, dict]]:
+    """Text-to-image models that Hugging Face's own inference serves (official Hub API), most liked first."""
+    key = _secrets(cfg).get("api_key")
+    data = await _get_json("https://huggingface.co/api/models", _bearer(key), {
+        "pipeline_tag": "text-to-image", "inference_provider": "hf-inference", "sort": "likes", "direction": "-1",
+        "limit": "80"})
+    return [(m.get("id") or m.get("modelId"), {"type": "image"}) for m in _items(data) if isinstance(m, dict)]
+
+
+async def _replicate_video(cfg: ProviderConfig) -> list[tuple[str, dict]]:
+    """Replicate's curated text-to-video collection (official API)."""
+    key = _secrets(cfg).get("api_key")
+    data = await _get_json(f"{_base(cfg)}/collections/text-to-video", _bearer(key))
+    out = []
+    for m in data.get("models", []) if isinstance(data, dict) else []:
+        if isinstance(m, dict) and m.get("owner") and m.get("name"):
+            out.append((f"{m['owner']}/{m['name']}", {"type": "video"}))
+    return out
+
+
+async def _comfyui(cfg: ProviderConfig) -> list[tuple[str, dict]]:
+    data = await _get_json(f"{_base(cfg)}/object_info/CheckpointLoaderSimple")
+    try:
+        names = data["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]
+    except (KeyError, IndexError, TypeError):
+        names = []
+    return [(n, {"type": "image"}) for n in names if isinstance(n, str)]
+
+
+async def _edge_all_voices(cfg: ProviderConfig) -> list[tuple[str, dict]]:
+    """Every Microsoft Edge voice (all languages), Indian and English voices first."""
+    try:
+        import edge_tts
+
+        voices = await edge_tts.list_voices()
+    except Exception:  # noqa: BLE001 - offline: the app's built-in short list
+        return await _edge_voices(cfg)
+    first = ("en-IN", "hi-IN", "en-US", "en-GB")
+    voices = sorted(voices, key=lambda v: (first.index(v.get("Locale")) if v.get("Locale") in first else 9,
+                                           v.get("Locale", ""), v.get("ShortName", "")))
+    return [(v["ShortName"], {"type": "voice"}) for v in voices if v.get("ShortName")]
+
+
 async def _discover_raw(cfg: ProviderConfig) -> list[tuple[str, dict]] | None:
     """None means the provider has no listing API (use the catalog's suggestions)."""
     spec = BY_ID.get(cfg.provider)
@@ -203,13 +249,21 @@ async def _discover_raw(cfg: ProviderConfig) -> list[tuple[str, dict]] | None:
             return await _gemini_images(cfg)
         if style == "a1111":
             return await _a1111(cfg)
+        if style == "hf_image":
+            return await _hf_text_to_image(cfg)
+        if style == "comfyui":
+            return await _comfyui(cfg)
+        if style == "stability":
+            return [(m, {"type": "image"}) for m in STABILITY_MODELS]
         return None
     if cfg.kind == "tts":
         if style == "edge_tts":
-            return await _edge_voices(cfg)
+            return await _edge_all_voices(cfg)
         if style == "openai_tts":
             return await _openai_tts(cfg)
         return None
+    if cfg.kind == "video" and style == "replicate":
+        return await _replicate_video(cfg)
     return None
 
 

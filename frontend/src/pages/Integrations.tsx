@@ -132,6 +132,16 @@ function ProviderForm({ spec, existing, onClose }: { spec: Spec; existing?: Prov
   });
   // Local and key-less providers can list models straight away.
   useEffect(() => { if (!existing && isAI && !spec.key) live.mutate(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Once a (new) key or address is typed, load the models it can use without waiting for a button press.
+  const typedKey = (secrets.api_key ?? "").trim();
+  useEffect(() => {
+    if (!isAI) return;
+    const keyChanged = typedKey.length >= 8 && !typedKey.startsWith("••");
+    const baseChanged = !!existing && baseUrl !== existing.base_url && /^https?:\/\/.+/.test(baseUrl);
+    if (!keyChanged && !baseChanged) return;
+    const t = setTimeout(() => live.mutate(), 700);
+    return () => clearTimeout(t);
+  }, [typedKey, baseUrl]); // eslint-disable-line react-hooks/exhaustive-deps
   const list: ModelList | undefined = live.data ?? stored.data ?? (spec.examples.length ? { models: spec.examples, types: {}, source: "suggested" } : undefined);
 
   const save = useMutation({

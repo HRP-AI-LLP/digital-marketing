@@ -119,7 +119,7 @@ async def complete(
             r = await llm.chat(conn_from(cfg), model, msgs, system=system, json_mode=json_mode,
                                temperature=temperature, max_tokens=max_tokens)
         except Exception as e:  # noqa: BLE001 - try the next model in the chain
-            _log(session, cfg, model, task, "chat", ok=False, error=str(e)[:1000])
+            _log(session, cfg, model, task, "chat", ok=False, error=health.describe(e)[:1000])
             v = await health.record_failure(cfg, model, e)
             errors.append(f"{cfg.name} ({model}): {_short(e, v)}")
             continue
@@ -132,7 +132,7 @@ async def complete(
 
 
 def _short(e: Exception, v: "health.Verdict") -> str:
-    text = str(e)
+    text = health.describe(e)
     if v.state != "none":
         return f"{v.reason}. {text[:200]}"
     return text[:300]
@@ -184,7 +184,7 @@ async def embed_texts(session: AsyncSession, texts: list[str]) -> tuple[list[lis
                 vecs.extend(batch)
                 _log(session, cfg, model, "embed", "embed", tin=tokens or sum(len(t) // 4 for t in texts[i:i + 32]))
         except Exception as e:  # noqa: BLE001
-            _log(session, cfg, model, "embed", "embed", ok=False, error=str(e)[:1000])
+            _log(session, cfg, model, "embed", "embed", ok=False, error=health.describe(e)[:1000])
             await health.record_failure(cfg, model, e)
             continue
         await health.record_success(cfg, model)

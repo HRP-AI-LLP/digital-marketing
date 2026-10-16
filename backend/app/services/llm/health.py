@@ -81,9 +81,21 @@ def _until_daily_reset(now: datetime) -> int:
     return max(1800, int((reset - now).total_seconds()) + 1)
 
 
+def describe(exc: BaseException) -> str:
+    """A readable message even for exceptions whose str() is empty (httpx timeouts are)."""
+    text = str(exc).strip()
+    name = type(exc).__name__
+    if not text:
+        return {"ReadTimeout": "ReadTimeout: the model took too long to answer",
+                "ConnectTimeout": "ConnectTimeout: couldn't connect in time",
+                "WriteTimeout": "WriteTimeout: sending the request took too long",
+                "PoolTimeout": "PoolTimeout: too many requests at once"}.get(name, name)
+    return text
+
+
 def classify(exc: BaseException, *, local: bool = False, now: datetime | None = None) -> Verdict:
     now = now or datetime.now(UTC)
-    msg = str(exc)
+    msg = describe(exc)
     low = msg.lower()
     status = getattr(exc, "status", None)
     if status is None:
@@ -105,8 +117,10 @@ def classify(exc: BaseException, *, local: bool = False, now: datetime | None = 
         if re.search(r"per ?month|monthly", low):
             return Verdict("cooldown", 24 * 3600, "Monthly limit reached")
         return Verdict("cooldown", min(max(hint or 90, 30), 6 * 3600), "Rate limit reached")
+    if re.search(r"readtimeout|writetimeout|pooltimeout|timed out waiting|took too long", low):
+        return Verdict("cooldown", 60, "Took too long to answer" + (" (try a smaller model)" if local else ""))
     if re.search(r"connection attempts failed|connect call failed|connection refused|connecterror|name or service not known"
-                 r"|getaddrinfo|timed out|timeout|readtimeout|connecttimeout", low):
+                 r"|getaddrinfo|timed out|timeout|connecttimeout", low):
         return Verdict("cooldown", 120 if local else 60, "Not reachable" + (" (is it running?)" if local else ""))
     if status is not None and status >= 500:
         return Verdict("cooldown", 60, "Provider error")
@@ -200,7 +214,7 @@ async def record_failure(cfg: ProviderConfig, model: str, exc: BaseException) ->
                 row = ModelStatus(organization_id=cfg.organization_id, provider_id=cfg.id, model=model[:200], fail_count=0)
                 s.add(row)
             row.fail_count = (row.fail_count or 0) + 1
-            row.last_fail_at, row.last_error = now, str(exc)[:1000]
+            row.last_fail_at, row.last_error = now, describe(exc)[:1000]
             if v.state != "none":
                 row.state, row.reason = v.state, v.reason
                 row.cooldown_until = now + timedelta(seconds=v.seconds)
@@ -212,7 +226,7 @@ async def record_failure(cfg: ProviderConfig, model: str, exc: BaseException) ->
         log.exception("model health failure write failed")
         return v
     if v.state in ATTENTION and prev != v.state:
-        await _notify(cfg, model, v, str(exc))
+        await _notify(cfg, model, v, describe(exc))
     return v
 
 
