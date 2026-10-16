@@ -29,6 +29,10 @@ TENANT_TABLES_V2 = [
 ]
 TENANT_TABLES_V3 = ["model_status"]
 
+from app.models.inbox import InboxItem, InboxSettings  # noqa: E402
+
+TENANT_TABLES_INBOX = ["inbox_items", "inbox_settings"]
+
 __all__ = [
     "Base",
     "AuditLog",

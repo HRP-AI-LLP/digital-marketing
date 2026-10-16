@@ -3,12 +3,13 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   CalendarDays, CheckCheck, ChevronsUpDown, FileText, Gauge, History, Image, KeyRound,
   LineChart, LogOut, Menu, Plug, Radar, Settings, ShieldCheck, Bell, Users as UsersIcon, X, Globe2, ListChecks,
-  Palette, Clock, Share2,
+  Palette, Clock, Share2, Inbox as InboxIcon,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import NotificationBell from "./NotificationBell";
+import InboxBadge from "./InboxBadge";
 
-type Item = { to: string; label: string; icon: typeof Gauge; perm?: string; soon?: boolean };
+type Item = { to: string; label: string; icon: typeof Gauge; perm?: string; soon?: boolean; badge?: "inbox" };
 type Group = { label: string; items: Item[]; platformOnly?: boolean };
 
 export const NAV: Group[] = [
@@ -22,6 +23,10 @@ export const NAV: Group[] = [
       { to: "/media", label: "Media studio", icon: Image, perm: "media.manage" },
       { to: "/seo", label: "SEO articles", icon: FileText, perm: "seo.view" },
     ],
+  },
+  {
+    label: "Engage",
+    items: [{ to: "/inbox", label: "Inbox", icon: InboxIcon, perm: "inbox.view", badge: "inbox" }],
   },
   {
     label: "Understand",
@@ -141,6 +146,7 @@ export default function Layout() {
                 <i.icon size={16} strokeWidth={1.8} />
                 <span className="flex-1">{i.label}</span>
                 {i.soon && <span className="text-[11px] text-white/40">soon</span>}
+                {i.badge === "inbox" && <InboxBadge />}
               </NavLink>
             ))}
           </div>

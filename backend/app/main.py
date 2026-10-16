@@ -12,6 +12,7 @@ from app.api import (
     analytics, auth, content, dashboard, integrations, intelligence, jobs, media, notifications, organization, platform, roles,
     seo, social, users,
 )
+from app.api import inbox as inbox_api
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.modules import load_all
@@ -70,7 +71,7 @@ async def tunnel_guard(request: Request, call_next):
 
 for r in (auth.router, users.router, roles.router, organization.router, platform.router, integrations.router,
           notifications.router, jobs.router, intelligence.router, content.router, social.router, media.router,
-          seo.router, analytics.router, dashboard.router):
+          seo.router, analytics.router, dashboard.router, inbox_api.router):
     app.include_router(r, prefix=API_PREFIX)
 
 
