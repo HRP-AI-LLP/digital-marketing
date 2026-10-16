@@ -28,6 +28,8 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("seo.manage", "SEO & analytics", "Generate and edit SEO articles"),
     ("analytics.view", "SEO & analytics", "View performance analytics"),
     ("notification.manage", "Notifications", "Configure notification channels"),
+    ("research.view", "Research & ideas", "View daily research, idea briefs and upcoming occasions"),
+    ("research.manage", "Research & ideas", "Run research, triage idea briefs and change research settings"),
 ]
 
 ALL_CODES = [p[0] for p in PERMISSIONS]
@@ -41,6 +43,7 @@ DEFAULT_ROLES: dict[str, tuple[str, list[str]]] = {
             "org.settings.view", "user.view", "intel.view", "content.view", "content.create",
             "content.approve", "content.publish", "schedule.view", "schedule.manage",
             "media.manage", "integration.view", "seo.view", "seo.manage", "analytics.view",
+            "research.view", "research.manage",
         ],
     ),
     "Reviewer": (

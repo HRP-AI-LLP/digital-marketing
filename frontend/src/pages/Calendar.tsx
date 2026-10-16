@@ -77,6 +77,23 @@ export default function Calendar() {
   if (status) params.set("status", status);
   const items = useQuery({ queryKey: ["calendar", params.toString()], queryFn: () => api<CalItem[]>(`/content/calendar?${params}`), refetchInterval: 60_000 });
 
+  // Festivals and special days the organization observes (from Research & ideas settings).
+  const occ = useQuery({
+    queryKey: ["research", "occasions", "calendar", start, end],
+    queryFn: () => api<{ items: { id: string; name: string; date: string; category: string; category_label: string }[] }>(
+      `/research/occasions?from=${start}&to=${addDays(end, -1)}`),
+    staleTime: 5 * 60_000, retry: false,
+  });
+  const occByDay = useMemo(() => {
+    const m = new Map<string, { id: string; name: string; category_label: string }[]>();
+    for (const o of occ.data?.items ?? []) {
+      if (o.category === "season") continue;
+      if (!m.has(o.date)) m.set(o.date, []);
+      m.get(o.date)!.push(o);
+    }
+    return m;
+  }, [occ.data]);
+
   const byDay = useMemo(() => {
     const m = new Map<string, CalItem[]>();
     for (const it of items.data ?? []) {
@@ -151,6 +168,12 @@ export default function Calendar() {
                   </span>
                   {list.length > 0 && <span>{list.length}</span>}
                 </div>
+                {(occByDay.get(d) ?? []).slice(0, 2).map((o) => (
+                  <div key={o.id} title={`${o.name} · ${o.category_label}`} className="mb-1 flex items-center gap-1 truncate rounded bg-violet-50 px-1.5 py-0.5 text-[11px] font-medium text-violet-800">
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500" aria-hidden />
+                    <span className="truncate">{o.name}</span>
+                  </div>
+                ))}
                 <div className="space-y-1">
                   {list.slice(0, limit).map((it) => <Chip key={it.id} item={it} tz={tz} onOpen={() => nav(`/posts/${it.id}`)} />)}
                   {list.length > limit && (
@@ -169,6 +192,7 @@ export default function Calendar() {
           <span key={s} className="inline-flex items-center gap-1.5"><span className={`h-2 w-2 rounded-full ${STATUS_DOT[s]}`} />{STATUS_LABELS[s]}</span>
         ))}
         <span>· The coloured edge shows the topic pillar.</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-violet-500" />Festival or special day</span>
       </div>
     </div>
   );

@@ -12,6 +12,7 @@ MODULES = [
     "app.modules.seo",
     "app.modules.analytics",
     "app.modules.ai_models",
+    "app.modules.research",
 ]
 
 

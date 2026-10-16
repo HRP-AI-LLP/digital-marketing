@@ -1,0 +1,618 @@
+{
+ "dates": {
+  "bhai_dooj": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-11-11",
+    "source_name": "Bhai Duj"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-10-31",
+    "source_name": "Bhai Duj"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-10-19",
+    "source_name": "Bhai Duj"
+   }
+  },
+  "bohag_bihu": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-04-15",
+    "source_name": "Bahag Bihu"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-04-15",
+    "source_name": "Bahag Bihu"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-04-14",
+    "source_name": "Bahag Bihu"
+   }
+  },
+  "buddha_purnima": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-05-01",
+    "source_name": "Buddha Purnima"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-05-20",
+    "source_name": "Buddha Purnima"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-05-08",
+    "source_name": "Buddha Purnima"
+   }
+  },
+  "chhath_puja": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-11-15",
+    "source_name": "Pratihar Shashthi or Surya Shashthi (Chhath Puja)"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-11-04",
+    "source_name": "Pratihar Shashthi or Surya Shashthi (Chhath Puja)"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-10-23",
+    "source_name": "Pratihar Shashthi or Surya Shashthi (Chhath Puja)"
+   }
+  },
+  "diwali": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-11-08",
+    "source_name": "Diwali (Deepavali)"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-10-29",
+    "source_name": "Diwali (Deepavali)"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-10-17",
+    "source_name": "Diwali (Deepavali)"
+   }
+  },
+  "durga_puja": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-10-18",
+    "source_name": "Dussehra (Saptami)"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-10-06",
+    "source_name": "Dussehra (Saptami)"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-09-25",
+    "source_name": "Dussehra (Saptami)"
+   }
+  },
+  "dussehra": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-10-20",
+    "source_name": "Dussehra"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-10-09",
+    "source_name": "Dussehra"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-09-27",
+    "source_name": "Dussehra"
+   }
+  },
+  "easter": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-04-05",
+    "source_name": "Easter Sunday"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-03-28",
+    "source_name": "Easter Sunday"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-04-16",
+    "source_name": "Easter Sunday"
+   }
+  },
+  "eid_al_adha": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-05-27",
+    "source_name": "Id-ul-Zuha (Bakrid)"
+   },
+   "2027": {
+    "confidence": "estimated",
+    "date": "2027-05-17",
+    "source_name": "Id-ul-Zuha (Bakrid) (estimated)"
+   },
+   "2028": {
+    "confidence": "estimated",
+    "date": "2028-05-06",
+    "source_name": "Id-ul-Zuha (Bakrid) (estimated)"
+   }
+  },
+  "eid_al_fitr": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-03-21",
+    "source_name": "Id-ul-Fitr"
+   },
+   "2027": {
+    "confidence": "estimated",
+    "date": "2027-03-10",
+    "source_name": "Id-ul-Fitr (estimated)"
+   },
+   "2028": {
+    "confidence": "estimated",
+    "date": "2028-02-27",
+    "source_name": "Id-ul-Fitr (estimated)"
+   }
+  },
+  "ganesh_chaturthi": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-09-14",
+    "source_name": "Ganesh Chaturthi / Vinayak Chaturthi"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-09-04",
+    "source_name": "Ganesh Chaturthi / Vinayak Chaturthi"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-08-23",
+    "source_name": "Ganesh Chaturthi / Vinayak Chaturthi"
+   }
+  },
+  "good_friday": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-04-03",
+    "source_name": "Good Friday"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-03-26",
+    "source_name": "Good Friday"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-04-14",
+    "source_name": "Good Friday"
+   }
+  },
+  "govardhan_puja": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-11-10",
+    "source_name": "Govardhan Puja"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-10-30",
+    "source_name": "Govardhan Puja"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-10-18",
+    "source_name": "Govardhan Puja"
+   }
+  },
+  "guru_gobind_singh_jayanti": {
+   "2027": {
+    "confidence": "official",
+    "date": "2027-01-15",
+    "source_name": "Guru Gobind Singh's Jayanti"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-01-04",
+    "source_name": "Guru Gobind Singh's Jayanti"
+   }
+  },
+  "guru_nanak_jayanti": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-11-24",
+    "source_name": "Guru Nanak's Jayanti"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-11-14",
+    "source_name": "Guru Nanak's Jayanti"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-11-02",
+    "source_name": "Guru Nanak's Jayanti"
+   }
+  },
+  "holi": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-03-04",
+    "source_name": "Holi"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-03-22",
+    "source_name": "Holi"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-03-11",
+    "source_name": "Holi"
+   }
+  },
+  "janmashtami": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-09-04",
+    "source_name": "Janmashtami (Vaishnava)"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-08-25",
+    "source_name": "Janmashtami (Vaishnava)"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-08-13",
+    "source_name": "Janmashtami (Vaishnava)"
+   }
+  },
+  "karwa_chauth": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-10-29",
+    "source_name": "Karaka Chaturthi (Karwa Chouth)"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-10-18",
+    "source_name": "Karaka Chaturthi (Karwa Chouth)"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-10-07",
+    "source_name": "Karaka Chaturthi (Karwa Chouth)"
+   }
+  },
+  "magh_bihu": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-01-14",
+    "source_name": "Magh Bihu"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-01-15",
+    "source_name": "Magh Bihu"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-01-15",
+    "source_name": "Magh Bihu"
+   }
+  },
+  "maha_shivaratri": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-02-15",
+    "source_name": "Maha Shivaratri"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-03-06",
+    "source_name": "Maha Shivaratri"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-02-23",
+    "source_name": "Maha Shivaratri"
+   }
+  },
+  "mahavir_jayanti": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-03-31",
+    "source_name": "Mahavir Jayanti"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-04-18",
+    "source_name": "Mahavir Jayanti"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-04-07",
+    "source_name": "Mahavir Jayanti"
+   }
+  },
+  "makar_sankranti": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-01-14",
+    "source_name": "Makar Sankranti"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-01-15",
+    "source_name": "Makar Sankranti"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-01-15",
+    "source_name": "Makar Sankranti"
+   }
+  },
+  "milad_un_nabi": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-08-26",
+    "source_name": "Milad-un-Nabi"
+   },
+   "2027": {
+    "confidence": "estimated",
+    "date": "2027-08-15",
+    "source_name": "Milad-un-Nabi (estimated)"
+   },
+   "2028": {
+    "confidence": "estimated",
+    "date": "2028-08-04",
+    "source_name": "Milad-un-Nabi (estimated)"
+   }
+  },
+  "muharram": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-06-26",
+    "source_name": "Muharram"
+   },
+   "2027": {
+    "confidence": "estimated",
+    "date": "2027-06-16",
+    "source_name": "Muharram (estimated)"
+   },
+   "2028": {
+    "confidence": "estimated",
+    "date": "2028-06-04",
+    "source_name": "Muharram (estimated)"
+   }
+  },
+  "navratri": {
+   "2026": {
+    "confidence": "derived",
+    "date": "2026-10-11",
+    "source_name": "Dussehra minus 9 days"
+   },
+   "2027": {
+    "confidence": "derived",
+    "date": "2027-09-30",
+    "source_name": "Dussehra minus 9 days"
+   },
+   "2028": {
+    "confidence": "derived",
+    "date": "2028-09-18",
+    "source_name": "Dussehra minus 9 days"
+   }
+  },
+  "onam": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-08-26",
+    "source_name": "Onam"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-09-12",
+    "source_name": "Onam"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-09-01",
+    "source_name": "Onam"
+   }
+  },
+  "parsi_new_year": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-08-15",
+    "source_name": "Parsi New Year"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-08-15",
+    "source_name": "Parsi New Year"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-08-14",
+    "source_name": "Parsi New Year"
+   }
+  },
+  "pongal": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-01-14",
+    "source_name": "Pongal"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-01-15",
+    "source_name": "Pongal"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-01-15",
+    "source_name": "Pongal"
+   }
+  },
+  "raksha_bandhan": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-08-28",
+    "source_name": "Raksha Bandhan"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-08-17",
+    "source_name": "Raksha Bandhan"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-08-05",
+    "source_name": "Raksha Bandhan"
+   }
+  },
+  "ram_navami": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-03-26",
+    "source_name": "Ram Navami"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-04-15",
+    "source_name": "Ram Navami"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-04-03",
+    "source_name": "Ram Navami"
+   }
+  },
+  "rath_yatra": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-07-16",
+    "source_name": "Rath Yatra"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-07-05",
+    "source_name": "Rath Yatra"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-06-24",
+    "source_name": "Rath Yatra"
+   }
+  },
+  "tamil_new_year": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-04-14",
+    "source_name": "Meshadi (Tamil New Year's Day)"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-04-14",
+    "source_name": "Meshadi (Tamil New Year's Day)"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-04-14",
+    "source_name": "Meshadi (Tamil New Year's Day)"
+   }
+  },
+  "ugadi_gudi_padwa": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-03-19",
+    "source_name": "Gudi Padwa"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-04-07",
+    "source_name": "Gudi Padwa"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-03-27",
+    "source_name": "Gudi Padwa"
+   }
+  },
+  "vaisakhi": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-04-14",
+    "source_name": "Vaisakhi"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-04-14",
+    "source_name": "Vaisakhi"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-04-13",
+    "source_name": "Vaisakhi"
+   }
+  },
+  "vasant_panchami": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-01-23",
+    "source_name": "Basant Panchami / Shri Panchami"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-02-11",
+    "source_name": "Basant Panchami / Shri Panchami"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-01-31",
+    "source_name": "Basant Panchami / Shri Panchami"
+   }
+  },
+  "vishu": {
+   "2026": {
+    "confidence": "official",
+    "date": "2026-04-15",
+    "source_name": "Vishu"
+   },
+   "2027": {
+    "confidence": "official",
+    "date": "2027-04-15",
+    "source_name": "Vishu"
+   },
+   "2028": {
+    "confidence": "official",
+    "date": "2028-04-14",
+    "source_name": "Vishu"
+   }
+  }
+ },
+ "generated_on": "2026-10-16",
+ "source": "python-holidays 0.106 (India, public + optional categories; Government of India holiday lists). Islamic dates marked 'estimated' depend on moon sighting.",
+ "years": [
+  2026,
+  2027,
+  2028
+ ]
+}

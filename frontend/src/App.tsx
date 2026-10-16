@@ -22,6 +22,7 @@ import Analytics from "./pages/Analytics";
 import Brand from "./pages/Brand";
 import Schedules from "./pages/Schedules";
 import SocialAccounts from "./pages/SocialAccounts";
+import Research from "./pages/Research";
 
 function Guard({ perm, platform, children }: { perm?: string; platform?: boolean; children: JSX.Element }) {
   const { can, session } = useAuth();
@@ -56,6 +57,7 @@ export default function App() {
         <Route path="media" element={<Guard perm="media.manage"><MediaStudio /></Guard>} />
         <Route path="seo/*" element={<Guard perm="seo.view"><Seo /></Guard>} />
         <Route path="intelligence" element={<Guard perm="intel.view"><Intelligence /></Guard>} />
+        <Route path="research" element={<Guard perm="research.view"><Research /></Guard>} />
         <Route path="analytics" element={<Guard perm="analytics.view"><Analytics /></Guard>} />
         <Route path="account/password" element={<ChangePassword />} />
         <Route path="*" element={<ComingSoon />} />

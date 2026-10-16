@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   CalendarDays, CheckCheck, ChevronsUpDown, FileText, Gauge, History, Image, KeyRound,
   LineChart, LogOut, Menu, Plug, Radar, Settings, ShieldCheck, Bell, Users as UsersIcon, X, Globe2, ListChecks,
-  Palette, Clock, Share2,
+  Palette, Clock, Share2, Lightbulb,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import NotificationBell from "./NotificationBell";
@@ -27,6 +27,7 @@ export const NAV: Group[] = [
     label: "Understand",
     items: [
       { to: "/intelligence", label: "Company intelligence", icon: Radar, perm: "intel.view" },
+      { to: "/research", label: "Research & ideas", icon: Lightbulb, perm: "research.view" },
       { to: "/analytics", label: "Analytics", icon: LineChart, perm: "analytics.view" },
     ],
   },

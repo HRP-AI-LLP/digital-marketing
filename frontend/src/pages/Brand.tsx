@@ -8,6 +8,7 @@ import {
 } from "../components/ui";
 import { usePillars, type Campaign, type Pillar } from "./content/shared";
 import BrandLook from "./content/BrandLook";
+import { PillarSuggest, VoiceSuggest, type VoiceValues } from "./content/BrandSuggest";
 
 type Brand = {
   voice: string | null; audience: string | null; do_list: string[]; dont_list: string[]; hashtags: string[];
@@ -31,6 +32,7 @@ function VoiceForm({ canEdit }: { canEdit: boolean }) {
   const [blackout, setBlackout] = useState<string[]>([]);
   const [newDate, setNewDate] = useState("");
   const [saved, setSaved] = useState(false);
+  const [applied, setApplied] = useState(false);
 
   useEffect(() => {
     const b = brand.data;
@@ -52,15 +54,40 @@ function VoiceForm({ canEdit }: { canEdit: boolean }) {
         disclaimer: f.disclaimer, language: f.language || "en", emoji_policy: f.emoji_policy, blackout_dates: blackout,
       },
     }),
-    onSuccess: (b) => { qc.setQueryData(["brand"], b); setSaved(true); setTimeout(() => setSaved(false), 2500); },
+    onSuccess: (b) => { qc.setQueryData(["brand"], b); setSaved(true); setApplied(false); setTimeout(() => setSaved(false), 2500); },
   });
 
   if (brand.isLoading) return <Spinner label="Loading brand kit…" />;
   if (brand.error) return <Alert>{(brand.error as Error).message}</Alert>;
   const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const formValues: VoiceValues = {
+    voice: f.voice || null, audience: f.audience || null, do_list: lines(f.do_list ?? ""), dont_list: lines(f.dont_list ?? ""),
+    banned_words: commas(f.banned_words ?? ""), hashtags: (f.hashtags ?? "").split(/[\s,]+/).map((h) => h.replace(/^#/, "")).filter(Boolean),
+    ctas: lines(f.ctas ?? ""), emoji_policy: f.emoji_policy || "light",
+  };
+  const applySuggestion = (v: Partial<VoiceValues>) => {
+    const next = { ...f };
+    if (v.voice !== undefined) next.voice = v.voice ?? "";
+    if (v.audience !== undefined) next.audience = v.audience ?? "";
+    if (v.do_list) next.do_list = v.do_list.join("\n");
+    if (v.dont_list) next.dont_list = v.dont_list.join("\n");
+    if (v.banned_words) next.banned_words = v.banned_words.join(", ");
+    if (v.hashtags) next.hashtags = v.hashtags.map((h) => `#${h}`).join(" ");
+    if (v.ctas) next.ctas = v.ctas.join("\n");
+    if (v.emoji_policy) next.emoji_policy = v.emoji_policy;
+    setF(next);
+    setApplied(true);
+  };
 
   return (
     <form className="space-y-6" onSubmit={(e: FormEvent) => { e.preventDefault(); save.mutate(); }}>
+      {canEdit && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-secondary-200 bg-gradient-to-r from-primary-50 to-secondary-50 px-4 py-3">
+          <p className="min-w-0 flex-1 text-sm">Let the AI draft your voice, audience, rules, hashtags and calls to action from your company profile, competitors and research. You review every change.</p>
+          <VoiceSuggest current={formValues} onApply={applySuggestion} />
+        </div>
+      )}
+      {applied && <Alert tone="info">Suggestions added to the form. Review them, then press Save brand kit.</Alert>}
       <fieldset disabled={!canEdit} className="space-y-6">
         <Card>
           <h2 className="mb-1 font-semibold">Voice and audience</h2>
@@ -215,7 +242,12 @@ function Pillars({ canEdit }: { canEdit: boolean }) {
       {seed.error && <Alert>{(seed.error as Error).message}</Alert>}
       {pillars.isLoading ? <Spinner label="Loading pillars…" /> : list.length === 0 ? (
         <EmptyState title="No topic pillars yet" body="Start with five common B2B pillars and adjust them, or add your own."
-          action={canEdit && <Button onClick={() => seed.mutate()} disabled={seed.isPending}><Sparkles size={15} /> Add suggested pillars</Button>} />
+          action={canEdit && (
+            <div className="flex flex-wrap justify-center gap-2">
+              <PillarSuggest current={list} />
+              <Button onClick={() => seed.mutate()} disabled={seed.isPending}><Sparkles size={15} /> Add standard pillars</Button>
+            </div>
+          )} />
       ) : (
         <Card className="py-1">
           <ul className="divide-y divide-line">
@@ -224,8 +256,9 @@ function Pillars({ canEdit }: { canEdit: boolean }) {
         </Card>
       )}
       {canEdit && list.length > 0 && (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" onClick={() => setAdding(true)}><Plus size={15} /> Add pillar</Button>
+          <PillarSuggest current={list} />
           <Button variant="ghost" onClick={() => seed.mutate()} disabled={seed.isPending}>Add any missing suggested pillars</Button>
         </div>
       )}
