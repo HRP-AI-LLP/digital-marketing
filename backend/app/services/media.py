@@ -931,7 +931,7 @@ def _motion_fields(post: Post, meta: dict) -> dict:
         extra = extra or as_list(meta.get("bullets"))
         if not extra and post.text:
             sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+", plain(post.text)) if 8 < len(x.strip()) < 90]
-            extra = sentences[1:3]
+            extra = [x for x in sentences if plain(x).rstrip(".!?").lower() != plain(head or "").rstrip(".!?").lower()][:2]
         lines += [x for x in extra[:2] if x and x != head]
     return {"lines": lines, "eyebrow": meta.get("eyebrow") or "", "cta": meta.get("cta") or ""}
 
@@ -1170,7 +1170,7 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
                 vis = await _mesh_png(style, w, h, f"{post.id}-{i}", tmp / f"mesh_{i:02d}.png", variant=i, icon_name=ic)
             sources.append(src)
             footage = src not in ("gradient",) and not src.startswith("3d:")
-            styles.append("caption" if footage else "kinetic")
+            styles.append("caption" if footage else "panel" if src.startswith("3d:") else "kinetic")
             scenes.append(video.Scene(duration=d, visual=vis, visual_kind=vkind, overlay=None,
                                       zoom=("in", "right", "out", "left")[i % 4], transition=TRANSITIONS[i % len(TRANSITIONS)]))
         # 4. overlay track: kinetic captions + subtitles synced to the voice + progress bar + logo

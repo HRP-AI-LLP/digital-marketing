@@ -337,7 +337,7 @@ def myth_fact(k: Kit, f: dict, photo: str | None) -> str:
     ll, rl = _s(f.get("left_label")) or "Myth", _s(f.get("right_label")) or "Fact"
     left, right = _s(f.get("left") or f.get("myth")), _s(f.get("right") or f.get("fact"))
     side = k.wide or k.fmt == "square"
-    fs = 34 if side else 46
+    fs = (40 if k.wide else 34) if side else 46
     css = (f".main{{justify-content:safe center}}.pair{{display:flex;flex-direction:{'row' if side else 'column'};gap:{k.px(24)};margin-top:{k.px(40)};min-height:0}}"
            f".side{{flex:1;padding:{k.px(40 if side else 48)};display:flex;flex-direction:column;gap:{k.px(20)};min-height:0;min-width:0}}"
            f".lab{{display:flex;align-items:center;gap:{k.px(14)};font-weight:750;font-size:{k.px(24)};letter-spacing:.08em;text-transform:uppercase}}"
@@ -435,9 +435,7 @@ def logo_wall(k: Kit, f: dict, photo: str | None) -> str:
     title = _s(f.get("headline")) or "Trusted by growing teams"
     names = as_list(f.get("names") or f.get("bullets"), 9)
     n = max(1, len(names))
-    cols = 3 if n > 4 or k.wide else 2
-    if k.wide and n > 6:
-        cols = 4
+    cols = (4 if n > 6 else 3) if k.wide else 2 if (k.tall or k.fmt == "portrait" or n <= 4) else 3
     css = (f".main{{justify-content:safe center}}.wall{{display:grid;grid-template-columns:repeat({cols},1fr);gap:{k.px(18)};margin-top:{k.px(48)}}}"
            f".tile{{display:flex;align-items:center;justify-content:safe center;gap:{k.px(12)};padding:{k.px(34)} {k.px(18)};text-align:center;min-width:0}}"
            f".tile b{{font-family:var(--font-head);font-weight:800;letter-spacing:-.025em;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}"
@@ -459,7 +457,7 @@ def hiring(k: Kit, f: dict, photo: str | None) -> str:
     css = (f".main{{justify-content:safe center}}.chips{{display:flex;flex-wrap:wrap;gap:{k.px(12)};margin-top:{k.px(30)}}}"
            f".chip{{display:inline-flex;align-items:center;gap:{k.px(10)};font-weight:600;font-size:{k.px(23)};color:var(--fg);padding:{k.px(12)} {k.px(20)};border-radius:999px;"
            f"background:var(--chip-bg);border:1px solid var(--chip-line)}}.chip .ic{{color:var(--accent)}}"
-           f".perks{{list-style:none;display:grid;grid-template-columns:{'1fr 1fr' if not k.tall else '1fr'};gap:{k.px(14)} {k.px(28)};margin-top:{k.px(40)}}}"
+           f".perks{{list-style:none;display:grid;grid-template-columns:{'1fr 1fr' if not k.tall else '1fr'};gap:{k.px(14)} {k.px(28)};margin-top:{k.px(40)};max-width:{k.px(900)}}}"
            f".perks li{{display:flex;gap:{k.px(14)};align-items:center;font-weight:520;font-size:{k.px(25)};color:var(--fg-soft);line-height:1.3}}"
            f".perks .ic{{color:var(--accent)}}"
            f".pulse{{width:{k.px(14)};height:{k.px(14)};border-radius:50%;background:#34d399;box-shadow:0 0 0 {k.px(7)} rgba(52,211,153,.2)}}")

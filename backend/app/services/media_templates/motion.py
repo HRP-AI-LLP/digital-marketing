@@ -51,7 +51,7 @@ def short_overlay(k: Kit, f: dict, photo: str | None = None) -> str:
     blocks = []
     for i, s in enumerate(scenes):
         cap = str(s.get("caption") or "")
-        big = s.get("style") == "kinetic" or s.get("kind") == "hook"
+        big = s.get("style") in ("kinetic", "panel") or s.get("kind") == "hook"
         size = fit_size(cap, (132 if s.get("kind") == "hook" else 118) if big else 72, soft=22 if big else 36, floor=64 if big else 48)
         cls = "kin" if big else "lowcap"
         blocks.append(f"<div class='blk {cls}' id='b{i}' data-fitbox><div class='{'display' if big else 'h2'} ctext' data-fit style='font-size:{k.px(size)}'>"
@@ -66,6 +66,7 @@ def short_overlay(k: Kit, f: dict, photo: str | None = None) -> str:
            f".ctext .hl{{background:none;-webkit-text-fill-color:var(--secondary-light);color:var(--secondary-light)}}"
            f".subs{{position:absolute;left:var(--pl);right:calc(var(--pr) + {k.px(70)});top:61%;height:{k.px(170)};display:flex;align-items:center;justify-content:center;text-align:center}}"
            f".sub{{font-family:var(--font-head);font-weight:800;font-size:{k.px(50)};line-height:1.18;letter-spacing:-.01em;color:#fff;"
+           f"background:rgba(var(--dark-rgb),.5);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);border-radius:{k.px(22)};padding:{k.px(14)} {k.px(18)};"
            f"text-shadow:0 {k.px(3)} {k.px(14)} rgba(0,0,0,.6),0 0 {k.px(3)} rgba(0,0,0,.7);text-wrap:balance}}"
            f".sub span{{display:inline-block;padding:0 {k.px(6)};border-radius:{k.px(10)};margin:0 {k.px(1)};transition:none}}"
            f".sub span.on{{color:var(--dark);background:var(--secondary-light);text-shadow:none;transform:scale(1.06)}}"

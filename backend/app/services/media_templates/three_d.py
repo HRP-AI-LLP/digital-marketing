@@ -272,6 +272,8 @@ def scene3d(k: Kit, f: dict, photo: str | None, scene: str) -> str:
     overlay = ""
     if not bare and head and not text_pos_top:
         cfg["lift"] = .14 if k.h >= k.w else .06
+    if bare and k.h > k.w * 1.3:
+        cfg["lift"] = -.2  # video background: subject sits low, captions get the upper half
     if not bare and (head or body or eyebrow):
         size = fit_size(head, 84 * k.boost, soft=28, floor=44)
         overlay = ((f"<span class='eyebrow' data-anim='rise' data-delay='.6'><span class='dot'></span>{esc(eyebrow)}</span><div class='sp3'></div>" if eyebrow else "")
