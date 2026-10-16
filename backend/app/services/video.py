@@ -54,6 +54,7 @@ class Scene:
     overlay: Path | None = None  # full-frame transparent PNG (captions, logo)
     zoom: str = "in"  # Ken Burns direction: in | out | left | right
     color: str = "#062f59"
+    transition: str = "fade"  # xfade into the NEXT scene: fade | smoothleft | slideup | zoomin | hblur | wipeleft | ...
 
 
 def _even(n: int) -> int:
@@ -72,8 +73,10 @@ async def make_segment(scene: Scene, out: Path, width: int, height: int, *, fps:
                 f"fps={fps},setsar=1,trim=duration={dur:.3f},setpts=PTS-STARTPTS[bg]")
     elif scene.visual is not None:
         args += ["-i", str(scene.visual)]
-        z = {"in": f"1+0.12*on/{frames}", "out": f"1.12-0.12*on/{frames}"}.get(scene.zoom, "1.10")
-        x = {"left": f"(iw-iw/zoom)*(1-on/{frames})", "right": f"(iw-iw/zoom)*on/{frames}"}.get(scene.zoom, "(iw-iw/zoom)/2")
+        # eased Ken Burns (smoothstep), so moves start and settle gently
+        e = f"(3*pow(on/{frames},2)-2*pow(on/{frames},3))"
+        z = {"in": f"1+0.12*{e}", "out": f"1.12-0.12*{e}"}.get(scene.zoom, "1.10")
+        x = {"left": f"(iw-iw/zoom)*(1-{e})", "right": f"(iw-iw/zoom)*{e}"}.get(scene.zoom, "(iw-iw/zoom)/2")
         sw, sh = _even(int(w * SUPERSAMPLE)), _even(int(h * SUPERSAMPLE))
         base = (f"[0:v]scale={sw}:{sh}:force_original_aspect_ratio=increase:flags=lanczos,crop={sw}:{sh},setsar=1,"
                 f"zoompan=z='{z}':x='{x}':y='(ih-ih/zoom)/2':d={frames}:s={w}x{h}:fps={fps},"
@@ -95,10 +98,17 @@ async def make_segment(scene: Scene, out: Path, width: int, height: int, *, fps:
     return out
 
 
+XFADES = {"fade", "smoothleft", "smoothright", "slideup", "slideleft", "zoomin", "hblur", "wipeleft", "wipeup", "circleopen", "fadeblack", "dissolve"}
+
+
 async def build_video(scenes: list[Scene], out: Path, width: int, height: int, *, work: Path,
                       voice_clips: list[tuple[Path, float]] | None = None, music: Path | None = None,
-                      fps: int = 30, xfade: float = XFADE, music_volume: float = 0.32) -> dict:
-    """Compose scenes + audio into a finished MP4. Returns {duration, width, height}."""
+                      fps: int = 30, xfade: float = XFADE, music_volume: float = 0.32, overlay_video: Path | None = None,
+                      overlay_until: float | None = None, progress_color: str | None = None) -> dict:
+    """Compose scenes + audio into a finished MP4. Returns {duration, width, height}.
+
+    overlay_video: a full-frame track with alpha (captions, subtitles, progress bar) laid over the scenes from t=0
+    until `overlay_until` seconds (the end card stays clean)."""
     if not scenes:
         raise VideoError("A video needs at least one scene.")
     w, h = _even(width), _even(height)
@@ -126,15 +136,36 @@ async def build_video(scenes: list[Scene], out: Path, width: int, height: int, *
         args += ["-i", str(seg)]
     parts: list[str] = []
     if len(segs) == 1:
-        parts.append("[0:v]null[vout]")
+        parts.append("[0:v]null[vbase]")
     else:
         prev, offset = "[0:v]", 0.0
         for i in range(1, len(segs)):
             offset += scenes[i - 1].duration
-            label = "[vout]" if i == len(segs) - 1 else f"[x{i}]"
-            parts.append(f"{prev}[{i}:v]xfade=transition=fade:duration={xf:.3f}:offset={offset:.3f}{label}")
+            label = "[vbase]" if i == len(segs) - 1 else f"[x{i}]"
+            tr = scenes[i - 1].transition if scenes[i - 1].transition in XFADES else "fade"
+            parts.append(f"{prev}[{i}:v]xfade=transition={tr}:duration={xf:.3f}:offset={offset:.3f}{label}")
             prev = label
     n = len(segs)
+    if overlay_video is not None and Path(overlay_video).exists():
+        if str(overlay_video).endswith(".ffconcat"):
+            args += ["-f", "concat", "-safe", "0", "-i", str(overlay_video)]
+        else:
+            args += ["-i", str(overlay_video)]
+        until = overlay_until if overlay_until is not None else total
+        parts.append(f"[{n}:v]fps={fps},format=yuva420p,setpts=PTS-STARTPTS[ovl]")
+        parts.append(f"[vbase][ovl]overlay=0:0:eof_action=pass:enable='lt(t,{until:.3f})':format=auto[vov]")
+        n += 1
+    else:
+        parts.append("[vbase]null[vov]")
+    if progress_color:  # progress bar along the top edge, drawn per frame by ffmpeg
+        bh = max(4, round(min(w, h) / 135))
+        until = overlay_until if overlay_until is not None else total
+        args += ["-f", "lavfi", "-i", f"color=c={progress_color}:s={w}x{bh}:r={fps}:d={total:.3f}"]
+        parts.append(f"[{n}:v]format=yuv420p[pbar]")
+        parts.append(f"[vov][pbar]overlay=x='-W+W*min(t/{until:.3f}\\,1)':y=0:enable='lt(t,{until:.3f})',format=yuv420p[vout]")
+        n += 1
+    else:
+        parts.append("[vov]format=yuv420p[vout]")
     voice_clips = [(p, st) for p, st in (voice_clips or []) if p and Path(p).exists() and st < total]
     for p, _ in voice_clips:
         args += ["-i", str(p)]
@@ -167,7 +198,8 @@ async def build_video(scenes: list[Scene], out: Path, width: int, height: int, *
         args += ["-f", "lavfi", "-t", f"{total:.3f}", "-i", "anullsrc=r=44100:cl=stereo"]
         parts.append(f"[{mi}:a]anull[aout]")
     args += ["-filter_complex", ";".join(parts), "-map", "[vout]", "-map", "[aout]",
-             "-c:v", "libx264", "-preset", FINAL_PRESET, "-crf", "21", "-profile:v", "high", "-pix_fmt", "yuv420p",
+             "-c:v", "libx264", "-preset", FINAL_PRESET, "-crf", "19", "-maxrate", "12M", "-bufsize", "24M",
+             "-profile:v", "high", "-level:v", "4.2", "-pix_fmt", "yuv420p",
              "-r", str(fps), "-g", str(fps * 2), "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2",
              "-t", f"{min(total, MAX_SECONDS):.3f}", "-movflags", "+faststart", str(out)]
     await run_ffmpeg(args, timeout_s=600)
