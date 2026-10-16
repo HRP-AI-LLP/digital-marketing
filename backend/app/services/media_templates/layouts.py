@@ -122,8 +122,8 @@ def hook_bold(k: Kit, f: dict, photo: str | None) -> str:
     text = _s(f.get("headline"))
     body = _s(f.get("body"))
     base = 128 if not k.wide else 104
-    css = (f".mark{{position:absolute;right:calc(var(--pr) - {k.px(10)});bottom:calc(var(--pb) + {k.px(70)});font-family:var(--font-head);font-weight:800;"
-           f"font-size:{k.px(420)};line-height:.8;letter-spacing:-.06em;color:transparent;-webkit-text-stroke:{k.px(2)} rgba(var(--line-rgb),.13);z-index:1}}"
+    css = (f".mark{{position:absolute;right:{k.px(-30)};bottom:{k.px(-70)};font-family:var(--font-head);font-weight:800;"
+           f"font-size:{k.px(400)};line-height:.8;letter-spacing:-.06em;color:transparent;-webkit-text-stroke:{k.px(2)} rgba(var(--line-rgb),.13);z-index:1}}"
            f".main{{justify-content:safe center}}.bar{{width:{k.px(10)};border-radius:999px;background:linear-gradient(180deg,var(--accent),var(--accent2));flex:none}}"
            f".row{{display:flex;gap:{k.px(40)};align-items:stretch}}" + (".main>*{max-width:78%}" if k.wide else ""))
     eyebrow = _s(f.get("eyebrow"))
@@ -172,6 +172,8 @@ def stat_card(k: Kit, f: dict, photo: str | None) -> str:
     chart = _s(f.get("chart")).lower() or {"pct": "donut", "multiple": "bars"}.get(st["kind"], "line" if st["kind"] == "number" else "none")
     n = len(stat)
     big = 230 if n <= 4 else max(120, 230 * (4 / n) ** .75)
+    if k.fmt == "portrait":
+        big *= .9
     if k.wide:
         big *= .85
     css = (f".main{{justify-content:safe center}}.stat{{font-family:var(--font-head);font-weight:800;letter-spacing:-.055em;line-height:.9;white-space:nowrap;"
@@ -186,7 +188,7 @@ def stat_card(k: Kit, f: dict, photo: str | None) -> str:
     ctx = ("<div class='sp3'></div>" + para(k, context, 30, order=5)) if context else ""
     chart_html = ""
     if chart == "donut" and st["kind"] == "pct":
-        size = 330 if not k.tall else 380
+        size = {"square": 330, "wide": 330, "landscape": 330, "portrait": 250, "pin": 300}.get(k.fmt, 360)
         donut = (f"<div class='donutwrap' data-anim='scale' data-order='1'>{k.donut(st['value'], size, 38)}"
                  f"<div class='ctr'>{k.badge(icon_for(label), 92, .48)}</div></div>")
         if k.fmt in ("square", "wide", "landscape"):
@@ -216,7 +218,7 @@ def data_chart(k: Kit, f: dict, photo: str | None) -> str:
         items = [("2022", 34, "34"), ("2023", 52, "52"), ("2024", 71, "71"), ("2025", 88, "88")]
     take = _s(f.get("body"))
     source = _s(f.get("source"))
-    h = {"square": 330, "portrait": 500, "story": 640, "pin": 600}.get(k.fmt, 330)
+    h = {"square": 330, "portrait": 400, "story": 600, "pin": 520}.get(k.fmt, 330)
     css = ".main{justify-content:safe center}"
     inner = (k.eyebrow(_s(f.get("eyebrow")) or "Data") + "<div class='sp3'></div>"
              + headline(k, title, 76 if not k.wide else 64, cls="h1", soft=40, floor=40)
@@ -229,49 +231,71 @@ def data_chart(k: Kit, f: dict, photo: str | None) -> str:
 
 # ============================================================================ 6. product / feature spotlight
 def feature_spotlight(k: Kit, f: dict, photo: str | None) -> str:
+    """Text and a device frame that never overlap: side by side on square/wide canvases; on tall canvases the
+    device is placed (after fonts load and text is fitted) just below the measured bottom of the text block and
+    bleeds off the bottom edge."""
     title = _s(f.get("headline"))
     feats = as_list(f.get("bullets"), 3)
     body = _s(f.get("body"))
-    device = _s(f.get("device")).lower() or ("phone" if k.tall else "browser")
+    cta = _s(f.get("cta"))
+    side = k.fmt in ("square", "wide", "landscape")
+    device = _s(f.get("device")).lower() or ("browser" if k.fmt in ("wide", "landscape") else "phone" if k.fmt == "square" else
+                                              "phone" if k.fmt == "story" else "browser")
+    if device not in ("phone", "browser"):
+        device = "browser"
     shot = (f"<div style=\"position:absolute;inset:0;background:url('{photo}') center/cover\"></div>" if photo
             else k.ui_mock(_s(f.get("screen_title")) or "Overview", compact=device == "phone"))
+    fs = 28 if not k.tall else 30
     fl = "".join(f"<li data-anim='slide-l' data-order='{4 + i}'><span class='ck'>{icon('check', k.px(22), '#fff', 3)}</span><span>{rich(x)}</span></li>"
                  for i, x in enumerate(feats))
-    css = (f".feats{{list-style:none;display:flex;flex-direction:column;gap:{k.px(18)};margin-top:{k.px(36)}}}"
-           f".feats li{{display:flex;align-items:center;gap:{k.px(18)};font-weight:550;font-size:{k.px(28)};line-height:1.3;color:var(--fg)}}"
-           f".ck{{width:{k.px(40)};height:{k.px(40)};border-radius:50%;display:grid;place-items:center;flex:none;background:linear-gradient(140deg,var(--accent),var(--primary-light))}}"
+    css = (f".feats{{list-style:none;display:flex;flex-direction:column;gap:{k.px(16)};margin-top:{k.px(32)}}}"
+           f".feats li{{display:flex;align-items:center;gap:{k.px(16)};font-weight:550;font-size:{k.px(fs)};line-height:1.3;color:var(--fg)}}"
+           f".ck{{width:{k.px(38)};height:{k.px(38)};border-radius:50%;display:grid;place-items:center;flex:none;background:linear-gradient(140deg,var(--accent),var(--primary-light))}}"
            f".dev{{position:absolute;z-index:2;filter:drop-shadow(0 {k.px(30)} {k.px(50)} rgba(2,12,27,.35))}}"
-           ".main{justify-content:flex-start}")
-    if k.wide:
-        dev = k.browser(shot, 900, .64) if device != "phone" else k.phone(shot, 380)
-        pos = (f"right:{k.px(-120)};top:50%;transform:translateY(-50%) perspective({k.px(2200)}) rotateY(-14deg) rotateX(4deg)")
-        css += ".main{justify-content:safe center}.main>*{max-width:46%}"
-    elif k.fmt == "square" or k.fmt == "landscape":
-        dev = k.browser(shot, 760, .64) if device != "phone" else k.phone(shot, 330)
-        pos = (f"right:{k.px(-150)};bottom:{k.px(-60)};transform:perspective({k.px(2200)}) rotateY(-16deg) rotateX(6deg)" if device != "phone"
-               else f"right:{k.px(70)};bottom:{k.px(-260)};transform:rotate(-6deg)")
-        css += ".main>*{max-width:" + ("100%" if device == "phone" else "100%") + "}" + (".main{justify-content:flex-start;padding-top:calc(var(--g)*2)}")
-        if device != "phone":
-            fl = ""  # no room for both the list and a browser on a square: the device carries the story
+           f".devglow{{position:absolute;z-index:1;border-radius:50%;background:radial-gradient(closest-side,rgba(var(--accent-rgb),.32),transparent)}}")
+    pt, pr, pb, pl = k.pads()
+    script = ""
+    if side:
+        col = .5 if k.fmt == "square" else .46
+        css += f".main{{justify-content:safe center}}.main>*{{max-width:{col * 100:.0f}%}}"
+        if device == "phone":
+            pw = min(380 * k.s, k.h * .36)
+            dev = k.phone(shot, pw / k.s)
+            ph = pw * 2.05
+            # phone in the right column, rising from the bottom edge (top ~16% of the canvas)
+            pos = f"right:{pr + 10 * k.s:.0f}px;top:{max(k.h * .16, k.h - ph * .86):.0f}px;transform:rotate(-4deg)"
+            glow = f"right:{pr - 80 * k.s:.0f}px;top:{k.h * .2:.0f}px;width:{pw + 260 * k.s:.0f}px;height:{pw + 260 * k.s:.0f}px"
         else:
-            css += ".main>*{max-width:56%}"
-    else:  # portrait / story / pin: text on top, device rising from the bottom
-        dev = k.browser(shot, 960, .7) if device != "phone" else k.phone(shot, 440 if k.fmt != "story" else 500)
-        pos = (f"left:50%;bottom:{k.px(-40 if device != 'phone' else -300)};transform:translateX(-50%) perspective({k.px(2400)}) rotateX(8deg)")
-        css += ".main{justify-content:flex-start}"
-        if device != "phone" and k.fmt == "portrait":
-            fl = "".join(f"<li data-anim='slide-l' data-order='{4 + i}'><span class='ck'>{icon('check', k.px(22), '#fff', 3)}</span><span>{rich(x)}</span></li>"
-                         for i, x in enumerate(feats[:3]))
+            bw = (k.w * (1 - col) - pr) / k.s * 1.25
+            dev = k.browser(shot, bw, .64)
+            pos = (f"right:{-bw * k.s * .2:.0f}px;top:50%;transform:translateY(-50%) perspective({k.px(2200)}) rotateY(-14deg) rotateX(4deg)")
+            glow = f"right:0;top:20%;width:{k.w * .5:.0f}px;height:{k.h * .6:.0f}px"
+    else:  # portrait / story / pin
+        css += ".main{justify-content:flex-start;flex:none}"
+        if device == "phone":
+            dw = min(470 * k.s, k.w * .46)
+            dev = k.phone(shot, dw / k.s)
+        else:
+            dw = min(k.w - pl - pr + 80 * k.s, 960 * k.s)
+            dev = k.browser(shot, dw / k.s, .7)
+        pos = f"left:50%;top:{k.h * .55:.0f}px;transform:translateX(-50%) perspective({k.px(2400)}) rotateX(6deg)"
+        glow = f"left:50%;margin-left:{-dw * .7:.0f}px;top:{k.h * .5:.0f}px;width:{dw * 1.4:.0f}px;height:{dw * 1.2:.0f}px"
+        # place the device right under the text (measured), never on top of it
+        script = (f"window.__before=function(){{var m=document.querySelector('.main'),d=document.querySelector('.dev'),g=document.querySelector('.devglow');"
+                  f"if(!m||!d) return; var b=m.getBoundingClientRect().bottom+{48 * k.s:.0f};"
+                  f"var minVisible={k.h * .3:.0f}; b=Math.min(b,{k.h:.0f}-minVisible); d.style.top=b+'px'; if(g) g.style.top=(b-{40 * k.s:.0f})+'px';}};")
     inner = (k.eyebrow(_s(f.get("eyebrow")) or "Product") + "<div class='sp3'></div>"
-             + headline(k, title, 84 if not k.wide else 72, cls="h1", soft=32, floor=44)
-             + ("<div class='sp2'></div>" + para(k, body, 30, order=3) if body and not fl else "")
+             + headline(k, title, (84 if not k.wide else 72) if not side or k.wide else 68, cls="h1", soft=30, floor=40)
+             + ("<div class='sp2'></div>" + para(k, body, 28, order=3) if body and not fl else "")
              + (f"<ul class='feats'>{fl}</ul>" if fl else "")
-             + ("<div class='sp4'></div>" + k.button(_s(f.get("cta"))) if f.get("cta") and (k.wide or device == "phone") else ""))
-    deco = (f"<div class='dev' style='{pos}'><div data-anim='rise' data-order='2' data-dur='1.3'>{dev}</div></div>")
-    foot = k.footer(left="" if not k.wide else None, right="" if not k.wide else None)
-    if k.fmt in ("portrait", "story", "pin", "square"):
-        foot = "<div class='foot'></div>"
-    return page(k, inner, css=css, photo=None, title=title, deco=deco, foot=foot)
+             + ("<div class='sp4'></div>" + k.button(cta) if cta else ""))
+    deco = (f"<div class='devglow' style='{glow}'></div>"
+            f"<div class='dev' style='{pos}'><div data-anim='rise' data-order='2' data-dur='1.3'>{dev}</div></div>")
+    foot = k.footer() if k.wide else "<div class='foot' style='min-height:0'></div>"
+    html = page(k, inner, css=css, photo=None, title=title, deco=deco, foot=foot)
+    if script:
+        html = html.replace("<script type='text/plain' id='__runtime'>", f"<script>{script}</script><script type='text/plain' id='__runtime'>", 1)
+    return html
 
 
 # ============================================================================ 7. tips / listicle

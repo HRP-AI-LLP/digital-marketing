@@ -782,7 +782,7 @@ async def template_preview(org_id, style: BrandStyle, name: str, size: str = "10
     if size not in PREVIEW_SIZES:
         size = "1080x1350"
     theme = theme if theme in ("dark", "light", "brand") else None
-    key = hashlib.sha1(f"v3|{name}|{size}|{theme}|{_brand_key(style)}".encode()).hexdigest()[:24]
+    key = hashlib.sha1(f"v4|{name}|{size}|{theme}|{_brand_key(style)}".encode()).hexdigest()[:24]
     folder = storage.root() / "cache" / "previews" / str(org_id)
     path = folder / f"{key}.jpg"
     if path.exists():

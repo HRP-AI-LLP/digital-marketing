@@ -567,22 +567,16 @@ def _fn(key: str):
     return fn
 
 
-SAMPLE_DATES = {"diwali": "1 November 2026", "holi": "4 March 2026", "eid": "20 March 2026", "christmas": "25 December",
-                "new_year": "1 January 2027", "independence_day": "15 August", "republic_day": "26 January",
-                "ganesh_chaturthi": "14 September 2026", "navratri": "11 October 2026", "onam": "26 August 2026",
-                "pongal": "14 January", "womens_day": "8 March", "teachers_day": "5 September", "tech_day": "15 September"}
-
-
 def specs(T) -> list:
     fields = (("headline", "Greeting", "textarea"), ("body", "Message", "textarea"), ("eyebrow", "Small label (date)", "text"))
     out = []
     for key, o in OCCASIONS.items():
-        sample = {"eyebrow": SAMPLE_DATES.get(key, "")}
+        # Gallery samples carry no dates or years: previews are cached, and real posts get the date from
+        # post.meta["occasion"] (the occasions calendar), shown as the small label.
+        sample: dict = {}
         if key == "awareness":
-            sample = {"headline": "World *Mental Health* Day", "eyebrow": "10 October",
+            sample = {"headline": "World *Mental Health* Day",
                       "body": "Check in on your team today. A five-minute conversation can change someone's week."}
-        if key == "new_year":
-            sample["year"] = "2027"
         out.append(T(f"greeting_{key}", o["label"], f"Greeting for {o['label']} with original artwork and your logo.",
                      ("image", "gif", "animation"), fields, _fn(key), theme=o["theme"] if not o.get("brand") else "dark",
                      photo=False, group="Occasions", themes=(o["theme"],), sample=sample))
