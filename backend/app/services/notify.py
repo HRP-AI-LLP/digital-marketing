@@ -38,8 +38,11 @@ EVENTS: dict[str, str] = {
     "job_failed": "Background task failed",
     "ai_issue": "AI model needs attention (credits, key or removed model)",
     "analytics_report": "Marketing report ready",
+    "inbox_new": "New comments and mentions (summary)",
+    "inbox_urgent": "Urgent or negative comments and mentions",
 }
-DEFAULT_EXTERNAL = ["post_review", "post_failed", "account_issue", "manual_publish", "job_failed", "ai_issue"]
+DEFAULT_EXTERNAL = ["post_review", "post_failed", "account_issue", "manual_publish", "job_failed", "ai_issue",
+                    "inbox_urgent"]
 URGENT = {"post_failed", "account_issue", "job_failed"}
 
 

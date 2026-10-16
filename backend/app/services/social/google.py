@@ -27,6 +27,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/webmasters.readonly",
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/youtube.force-ssl",  # inbox: read and reply to comments
 ]
 ACCOUNTS_API = "https://mybusinessaccountmanagement.googleapis.com/v1"
 BUSINESS_INFO_API = "https://mybusinessbusinessinformation.googleapis.com/v1"

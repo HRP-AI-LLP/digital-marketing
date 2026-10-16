@@ -25,8 +25,10 @@ DIALOG = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
 SCOPES = [
     "pages_show_list", "pages_read_engagement", "pages_manage_posts", "pages_read_user_content", "read_insights",
     "business_management",
+    "pages_manage_engagement",  # inbox: reply to and like comments (add it to the Page use case, then reconnect)
 ]
-IG_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_insights"]
+IG_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_insights",
+             "instagram_manage_comments"]  # inbox: read and reply to comments, @mentions
 PAGE_FIELDS = "id,name,access_token,link,username,picture{url}"
 IG_FIELD = ",instagram_business_account{id,username,name,profile_picture_url}"
 

@@ -32,6 +32,9 @@ TENANT_TABLES_V3 = ["model_status"]
 from app.models.analytics_ext import (  # noqa: E402
     TENANT_TABLES_ANALYTICS, AccountMetric, AnalyticsReport, CompetitorMetric, Recommendation, ReportSchedule,
 )
+from app.models.inbox import InboxItem, InboxSettings  # noqa: E402
+
+TENANT_TABLES_INBOX = ["inbox_items", "inbox_settings"]
 
 __all__ = [
     "Base",

@@ -302,3 +302,29 @@ valid login, so the web app, API and admin screens stay reachable only from this
 The tunnel runs only while the app runs. Scheduled posts publish from this laptop, so keep the app running at
 posting times as before.
 
+
+<!-- guide:inbox -->
+## Inbox: reading and answering comments
+
+The Inbox collects comments, replies and mentions every 10 minutes. It needs a few extra permissions; after
+adding them, **reconnect** the account on Social accounts so the new permission is granted to the token.
+
+| Platform | Add this permission | Where |
+|---|---|---|
+| Facebook Page | `pages_manage_engagement` (reply and like) | Meta app → Use cases → **Manage everything on your Page** → Customize → Add |
+| Instagram | `instagram_manage_comments` (read, reply, @mentions) | Meta app → Use cases → **Manage messaging and content on Instagram** → Customize → Add |
+| Threads | `threads_read_replies`, `threads_manage_replies` | Meta app → Use cases → **Access the Threads API** → Customize → Add |
+| YouTube | `https://www.googleapis.com/auth/youtube.force-ssl` | Google Cloud → Google Auth Platform → **Data access** → Add or remove scopes |
+| Mastodon | `read:notifications`, `write:statuses` (and `write:favourites` to like) | Your server → Preferences → Development → your app; then add the account again with the new token |
+| Bluesky | nothing extra | The app password already allows it |
+
+Then: Facebook and Instagram → press **Connect Facebook and Instagram** again (tick Instagram); Threads → **Connect
+Threads**; Google → **Connect** Google. Until you do, the Inbox shows "needs permission …" on that account and
+everything else keeps working.
+
+LinkedIn and Pinterest don't give apps like this one access to comments, so the Inbox lists your recent posts there
+with an **Open** link instead.
+
+Mentions monitoring (Mentions tab → Listening settings) uses your web search providers (Integrations → Search),
+Bluesky search, Mastodon hashtag timelines and, optionally, YouTube search (100 quota units per keyword) and Instagram
+hashtag search (only when Meta has granted your app **Instagram Public Content Access**; otherwise it's skipped).

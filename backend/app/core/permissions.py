@@ -29,6 +29,9 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("analytics.view", "SEO & analytics", "View performance analytics"),
     ("analytics.manage", "SEO & analytics", "Refresh growth data, edit competitor handles, act on growth tips and manage reports"),
     ("notification.manage", "Notifications", "Configure notification channels"),
+    ("inbox.view", "Inbox", "View comments, replies and mentions"),
+    ("inbox.reply", "Inbox", "Reply to, assign and update comments and mentions"),
+    ("inbox.manage", "Inbox", "Change listening keywords and refresh the inbox"),
 ]
 
 ALL_CODES = [p[0] for p in PERMISSIONS]
@@ -42,6 +45,7 @@ DEFAULT_ROLES: dict[str, tuple[str, list[str]]] = {
             "org.settings.view", "user.view", "intel.view", "content.view", "content.create",
             "content.approve", "content.publish", "schedule.view", "schedule.manage",
             "media.manage", "integration.view", "seo.view", "seo.manage", "analytics.view", "analytics.manage",
+            "inbox.view", "inbox.reply", "inbox.manage",
         ],
     ),
     "Reviewer": (
