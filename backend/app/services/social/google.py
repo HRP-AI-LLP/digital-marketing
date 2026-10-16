@@ -27,8 +27,13 @@ SCOPES = [
     "https://www.googleapis.com/auth/webmasters.readonly",
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
-    "https://www.googleapis.com/auth/youtube.force-ssl",  # inbox: read and reply to comments
 ]
+# Inbox: reading and replying to YouTube comments. Opt-in, because the scope must first be added in Google Cloud.
+REPLY_SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
+
+
+def scopes(options: dict | None) -> list[str]:
+    return SCOPES + (REPLY_SCOPES if (options or {}).get("enable_replies") else [])
 ACCOUNTS_API = "https://mybusinessaccountmanagement.googleapis.com/v1"
 BUSINESS_INFO_API = "https://mybusinessbusinessinformation.googleapis.com/v1"
 LOCAL_POSTS_API = "https://mybusiness.googleapis.com/v4"  # localPosts still live on the v4 API
@@ -47,7 +52,7 @@ def _bearer(tok: str) -> dict:
 # ------------------------------------------------------------------ OAuth
 def authorize_url(creds: dict, redirect_uri: str, state: str, options: dict, code_challenge: str | None) -> str:
     q = {"client_id": creds["client_id"], "redirect_uri": redirect_uri, "response_type": "code",
-         "scope": " ".join(SCOPES), "access_type": "offline", "prompt": "consent", "include_granted_scopes": "true",
+         "scope": " ".join(scopes(options)), "access_type": "offline", "prompt": "consent", "include_granted_scopes": "true",
          "state": state}
     if code_challenge:
         q.update(code_challenge=code_challenge, code_challenge_method="S256")

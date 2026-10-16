@@ -484,6 +484,12 @@ function ConnectedCard({ c, connected, onAddAnother, onAdd }: {
           ))}
         </div>
       )}
+      {onAdd && c.options.some((o) => o.name === "enable_replies") && (
+        <button type="button" onClick={() => onAdd("enable_replies")}
+          className="mt-3 self-start text-sm font-medium text-primary-700 hover:underline">
+          Allow replying to comments from the Inbox
+        </button>
+      )}
       {onAddAnother && (
         <div className="mt-auto pt-4">
           <button type="button" onClick={onAddAnother} className="text-xs text-muted hover:text-primary-700 hover:underline">
@@ -503,7 +509,11 @@ function ConnectCard({ c, canManage, mediaReady, mediaGuide, connected }: {
   if (c.method !== "manual" && connected.length > 0 && !showConnect) {
     return <ConnectedCard c={c} connected={connected}
       onAddAnother={canManage ? () => { setPreset({}); setShowConnect(true); } : undefined}
-      onAdd={canManage ? (option) => { setPreset({ [option]: true }); setShowConnect(true); } : undefined} />;
+      onAdd={canManage ? (option) => {
+        // Reconnecting replaces the granted permissions, so keep what's already connected (e.g. Instagram).
+        const keep: Record<string, boolean> = connected.some((a) => a.platform === "instagram") ? { include_instagram: true } : {};
+        setPreset({ ...keep, [option]: true }); setShowConnect(true);
+      } : undefined} />;
   }
   return <ConnectForm key={JSON.stringify(preset)} c={c} canManage={canManage} mediaReady={mediaReady} mediaGuide={mediaGuide}
     preset={preset} onBack={showConnect ? () => setShowConnect(false) : undefined} />;

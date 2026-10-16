@@ -135,8 +135,8 @@ async def platforms(ctx: Context = Depends(require("integration.view"))):
                         if c["id"] == "linkedin" else
                         [{"name": "include_instagram",
                           "label": "Include Instagram (needs the Instagram use case with Facebook Login on your Meta app)",
-                          "default": False}]
-                        if c["id"] == "meta" else []),
+                          "default": False}, REPLY_OPTION["meta"]]
+                        if c["id"] == "meta" else [REPLY_OPTION[c["id"]]] if c["id"] in REPLY_OPTION else []),
         })
     return {
         "platforms": [
@@ -168,10 +168,24 @@ async def list_accounts(all: bool = False, ctx: Context = Depends(require("integ
 
 
 # ------------------------------------------------------------------ OAuth
+REPLY_OPTION = {
+    "meta": {"name": "enable_replies", "default": False,
+             "label": "Allow replying to comments from the Inbox (first add pages_manage_engagement, and "
+                      "instagram_manage_comments for Instagram, to your Meta app)"},
+    "threads": {"name": "enable_replies", "default": False,
+                "label": "Allow reading and answering replies in the Inbox (first add threads_read_replies and "
+                         "threads_manage_replies to your Meta app)"},
+    "google": {"name": "enable_replies", "default": False,
+               "label": "Allow reading and replying to YouTube comments in the Inbox (first add the youtube.force-ssl "
+                        "scope in Google Cloud)"},
+}
+
+
 class ConnectIn(BaseModel):
     company_pages: bool = False
     include_profile: bool = True
     include_instagram: bool = False
+    enable_replies: bool = False
 
 
 @router.post("/connect/{provider}")

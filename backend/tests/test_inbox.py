@@ -182,13 +182,19 @@ FB_COMMENTS = (200, {"data": [
 
 
 # ------------------------------------------------------------------ scopes
-async def test_new_scopes_are_requested():
+async def test_reply_scopes_are_opt_in():
     from app.services.social import google, meta, threads
 
-    assert "pages_manage_engagement" in meta.SCOPES
-    assert "instagram_manage_comments" in meta.IG_SCOPES
-    assert {"threads_read_replies", "threads_manage_replies"} <= set(threads.SCOPES)
-    assert "https://www.googleapis.com/auth/youtube.force-ssl" in google.SCOPES
+    # Not requested by default: Facebook/Google reject the whole sign-in if the app doesn't offer them yet.
+    assert "pages_manage_engagement" not in meta.scopes({})
+    assert "pages_manage_engagement" in meta.scopes({"enable_replies": True})
+    ig = meta.scopes({"include_instagram": True, "enable_replies": True})
+    assert "instagram_manage_comments" in ig and "instagram_content_publish" in ig
+    assert "instagram_manage_comments" not in meta.scopes({"include_instagram": True})
+    assert {"threads_read_replies", "threads_manage_replies"} <= set(threads.scopes({"enable_replies": True}))
+    assert "threads_read_replies" not in threads.scopes({})
+    assert "https://www.googleapis.com/auth/youtube.force-ssl" in google.scopes({"enable_replies": True})
+    assert "https://www.googleapis.com/auth/youtube.force-ssl" not in google.scopes({})
 
 
 # ------------------------------------------------------------------ Facebook

@@ -10,7 +10,7 @@ from alembic import op
 from app.db_rls import enable_tenant_rls
 
 revision = "0007"
-down_revision = "0004"
+down_revision = "0006"
 branch_labels = None
 depends_on = None
 

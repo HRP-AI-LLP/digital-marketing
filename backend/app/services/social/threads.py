@@ -14,15 +14,19 @@ THREADS_VERSION = "v1.0"
 API = f"https://graph.threads.net/{THREADS_VERSION}"
 TOKEN_HOST = "https://graph.threads.net"
 AUTHORIZE = "https://threads.net/oauth/authorize"
-SCOPES = ["threads_basic", "threads_content_publish", "threads_manage_insights",
-          "threads_read_replies", "threads_manage_replies"]  # inbox: read and answer replies
+SCOPES = ["threads_basic", "threads_content_publish", "threads_manage_insights"]
+REPLY_SCOPES = ["threads_read_replies", "threads_manage_replies"]  # inbox, opt-in when connecting
+
+
+def scopes(options: dict | None) -> list[str]:
+    return SCOPES + (REPLY_SCOPES if (options or {}).get("enable_replies") else [])
 
 POLLS = 60
 POLL_SECONDS = 5
 
 
 def authorize_url(creds: dict, redirect_uri: str, state: str, options: dict, code_challenge: str | None) -> str:
-    q = {"client_id": creds["client_id"], "redirect_uri": redirect_uri, "scope": ",".join(SCOPES),
+    q = {"client_id": creds["client_id"], "redirect_uri": redirect_uri, "scope": ",".join(scopes(options)),
          "response_type": "code", "state": state}
     return f"{AUTHORIZE}?{urlencode(q)}"
 

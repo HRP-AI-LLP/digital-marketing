@@ -25,16 +25,22 @@ DIALOG = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
 SCOPES = [
     "pages_show_list", "pages_read_engagement", "pages_manage_posts", "pages_read_user_content", "read_insights",
     "business_management",
-    "pages_manage_engagement",  # inbox: reply to and like comments (add it to the Page use case, then reconnect)
 ]
-IG_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_insights",
-             "instagram_manage_comments"]  # inbox: read and reply to comments, @mentions
+IG_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_insights"]
+# Inbox replies are opt-in ("Allow replying to comments" when connecting): Facebook rejects the whole sign-in if a
+# permission is requested that hasn't been added to the Meta app's use cases yet.
+REPLY_SCOPES = ["pages_manage_engagement"]
+IG_REPLY_SCOPES = ["instagram_manage_comments"]
 PAGE_FIELDS = "id,name,access_token,link,username,picture{url}"
 IG_FIELD = ",instagram_business_account{id,username,name,profile_picture_url}"
 
 
 def scopes(options: dict | None) -> list[str]:
-    return SCOPES + (IG_SCOPES if (options or {}).get("include_instagram") else [])
+    o = options or {}
+    out = SCOPES + (REPLY_SCOPES if o.get("enable_replies") else [])
+    if o.get("include_instagram"):
+        out += IG_SCOPES + (IG_REPLY_SCOPES if o.get("enable_replies") else [])
+    return out
 
 # Graph error codes: https://developers.facebook.com/docs/graph-api/guides/error-handling
 TOKEN_CODES = {190, 102, 463, 467}
