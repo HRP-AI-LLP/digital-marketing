@@ -45,7 +45,9 @@ app/services/    shared logic used by API and worker
 | `app/services/media.py` | `async generate_for_post(session, post, brand) -> list[MediaAsset]` | Builds media for `post.post_type` in the platform's format |
 | | `async ensure_public_url(session, asset) -> str` | Uploads to the configured media host when a platform needs a URL |
 | | `asset_out(asset) -> dict` | JSON for the UI incl. signed `url` (`app/core/signing.media_url`) |
-| | `async save_upload(session, org_id, data, filename) -> MediaAsset` | Store an uploaded file |
+| | `async save_upload(session, org_id, data, filename) -> MediaAsset` | Store an uploaded file (images, video, PDF, `.glb/.gltf` -> kind `model3d`, validated) |
+| | `async generate_variants(session, post, brand, count=3) -> list[MediaAsset]` | Same content in 3 layouts/looks |
+| | `async generate_3d(session, org_id, style, scene, output, fields, size, ...) -> MediaAsset` | 3D still / clip / GIF |
 | `app/services/publishing.py` | `async publish(session, post, account) -> (external_id, external_url)` | Raises `PublishError(msg, retryable, reconnect)` |
 | | `async fetch_metrics(session, post, account) -> dict \| None` | Engagement numbers for a published post |
 | | `async refresh_account(session, account) -> None` | Refresh tokens / validate an account |
@@ -65,6 +67,23 @@ Job kinds in use: `intel.crawl`, `intel.extract`, `intel.competitors`, `intel.co
 
 Provider credentials live in `provider_configs.secrets_enc` (Fernet via `app/core/crypto.py`), OAuth tokens in
 `social_accounts.tokens_enc`. Never return raw secrets from the API; use `mask()`.
+
+### Media templates and rendering (app/services/media_templates, media_render.py)
+
+- `kit.py` is the design system (type scale scaled to the canvas, 8-pt grid, safe areas per format, aurora/mesh
+  backgrounds, glass cards, grain, icons, charts, device frames). Fonts (Inter, Plus Jakarta Sans) and three.js r180
+  are bundled in `media_assets/` (licences alongside); pages never load anything from the network (the renderer
+  refuses every request except in-memory 3D model files).
+- Every template is a function `(Kit, fields, photo) -> HTML` registered in `media_templates/__init__.py`
+  (`layouts.py` single images, `carousel.py`, `occasions.py` festive/national/awareness greetings, `three_d.py`
+  three.js scenes, `motion.py` short-video overlay and end card). Elements carry `data-anim` roles; `runtime.py`
+  turns them into a deterministic timeline exposed as `window.__seek(t)` / `__stillTime` / `__activeAt(t)`.
+  `media_render` seeks frame by frame (PNG = composed state, MP4/GIF = 30/15 fps), flattens the static background
+  first and reuses frames where nothing moves.
+- `select.py` picks the layout per post (explicit template > `meta.occasion` > writer's `meta.visual.layout` >
+  occasion named in the text > content signals), penalising the last layouts used for variety.
+- 3D: headless WebGL (GPU when present, SwiftShader otherwise). A page that can't start WebGL reports
+  `window.__glError`; callers fall back to a 2D layout (`meta.fallback_from`).
 
 ### Media files
 

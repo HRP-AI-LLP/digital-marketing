@@ -59,6 +59,30 @@ STATUSES: dict[str, str] = {
 NEEDS_MEDIA = {"image", "carousel", "gif", "video", "animation", "document"}
 SLIDE_TYPES = {"carousel", "document"}
 SCRIPT_TYPES = {"video", "animation", "gif"}
+VISUAL_TYPES = {"image", "gif", "animation"}  # the writer also suggests a layout + the words that go on the graphic
+VISUAL_LAYOUTS = ("photo_headline", "hook_bold", "quote_card", "stat_card", "data_chart", "feature_spotlight", "tip_card",
+                  "steps_card", "myth_fact", "announcement", "event_card", "testimonial", "hiring", "animated_text")
+_VISUAL_STR = ("layout", "headline", "eyebrow", "stat", "stat_label", "quote", "author", "role", "left", "right", "left_label",
+               "right_label", "cta", "date", "time", "place", "source")
+
+
+def _visual(raw: Any) -> dict | None:
+    """Sanitised layout hints from the writer (only known keys, short strings, short lists)."""
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, Any] = {}
+    for k in _VISUAL_STR:
+        v = raw.get(k)
+        if isinstance(v, (str, int, float)) and str(v).strip():
+            out[k] = str(v).strip()[:220]
+    if out.get("layout") not in VISUAL_LAYOUTS:
+        out.pop("layout", None)
+    b = raw.get("bullets")
+    if isinstance(b, list):
+        items = [str(x).strip()[:140] for x in b if isinstance(x, (str, int, float)) and str(x).strip()][:5]
+        if items:
+            out["bullets"] = items
+    return out or None
 MANUAL_PLATFORMS = {"manual", "x"}
 
 SIMILARITY_THRESHOLD = 0.88  # cosine similarity on embeddings
@@ -439,6 +463,10 @@ def normalize_draft(raw: Any, platform: str, post_type: str) -> dict:
             elif isinstance(s, str) and s.strip():
                 slides.append({"heading": s.strip()[:200], "body": ""})
         draft["slides"] = slides[:10]
+    if post_type in VISUAL_TYPES:
+        vis = _visual(raw.get("visual"))
+        if vis:
+            draft["visual"] = vis
     if post_type in SCRIPT_TYPES:
         script = []
         for s in raw.get("video_script") or raw.get("scenes") or []:
@@ -505,6 +533,10 @@ def build_system_prompt(brand: BrandProfile, platform: str, post_type: str, cfg:
         shape.insert(0, f'"title": "<under {p.title_chars} characters>"')
     if post_type in SLIDE_TYPES:
         shape.append('"slides": [{"heading": "...", "body": "..."}]  (5 to 8 slides)')
+    if post_type in VISUAL_TYPES:
+        shape.append('"visual": {"layout": "<one of: ' + ", ".join(VISUAL_LAYOUTS) + '>", "headline": "<max 8 words for the graphic; wrap 1-2 key words in *stars*>", '
+                     '"eyebrow": "<2-3 word label>", optional only when true and supported by the facts: "stat", "stat_label", "quote", "author", '
+                     '"bullets": ["<max 6 words each>"], "left"/"right" (myth vs fact), "date"/"time"/"place" (events), "cta"}')
     if post_type in SCRIPT_TYPES:
         shape.append('"video_script": [{"caption": "<on-screen text>", "voiceover": "<spoken line>"}]  (4 to 8 scenes, under 45 seconds total)')
     parts.append("Reply with ONLY a JSON object: {" + ", ".join(shape) + "}")
@@ -917,7 +949,7 @@ async def generate_post(session: AsyncSession, post: Post, *, now: datetime | No
     if sim.vector is not None and sim.model:
         post.embedding = sim.vector
         post.embedding_model = sim.model
-    set_meta(post, **{k: draft.get(k) for k in ("image_brief", "alt_text", "slides", "video_script") if draft.get(k) is not None},
+    set_meta(post, **{k: draft.get(k) for k in ("image_brief", "alt_text", "slides", "video_script", "visual") if draft.get(k) is not None},
              similar_post_id=str(sim.similar_post_id) if sim.too_similar and sim.similar_post_id else None,
              regenerate_note=None, previous_text=None)
 

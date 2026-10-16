@@ -13,6 +13,7 @@ Chromium: settings.playwright_chromium_path, else /opt/pw-browsers/chromium-*/ch
 from __future__ import annotations
 
 import asyncio
+import base64
 import glob
 import io
 import logging
@@ -25,6 +26,10 @@ from app.core.config import get_settings
 log = logging.getLogger("media.render")
 
 MAX_PAGES = 3  # concurrent pages per process
+# WebGL for the 3D scenes: use the GPU when there is one, otherwise ANGLE's SwiftShader software rasteriser
+# (works headless on servers without a GPU; measured ~250 ms per 540x960 frame on 2 vCPUs).
+GL_ARGS = ["--ignore-gpu-blocklist", "--enable-unsafe-swiftshader", "--enable-webgl"]
+JPEG_Q = 92
 
 
 class RenderError(Exception):
@@ -76,7 +81,7 @@ async def get_browser():
         except ImportError as e:  # pragma: no cover
             raise RenderError("Playwright isn't installed. Run: pip install playwright") from e
         args = ["--force-color-profile=srgb", "--font-render-hinting=none", "--disable-dev-shm-usage",
-                "--hide-scrollbars", "--disable-lcd-text"]
+                "--hide-scrollbars", "--disable-lcd-text", *GL_ARGS]
         exe = chromium_path()
         try:
             if st["pw"] is None:
@@ -112,7 +117,9 @@ async def shutdown() -> None:
 
 
 @asynccontextmanager
-async def _page(width: int, height: int):
+async def _page(width: int, height: int, assets: dict[str, tuple[bytes, str]] | None = None):
+    """A fresh offline page. `assets`: {url: (bytes, mime)} served from memory (3D models); every other
+    request is refused, so templates can never pull anything from a CDN or the network."""
     st = _loop_state()
     async with st["sem"]:
         browser = await get_browser()
@@ -120,6 +127,14 @@ async def _page(width: int, height: int):
                                         java_script_enabled=True, offline=True)
         try:
             page = await ctx.new_page()
+            if assets:
+                async def handle(route):
+                    hit = assets.get(route.request.url)
+                    if hit:
+                        await route.fulfill(body=hit[0], content_type=hit[1], headers={"Access-Control-Allow-Origin": "*"})
+                    else:
+                        await route.abort()
+                await page.route("**/*", handle)
             yield page
         finally:
             await ctx.close()
@@ -129,9 +144,18 @@ async def _load(page, html: str, timeout_s: float) -> None:
     await page.set_content(html, wait_until="load", timeout=timeout_s * 1000)
     try:
         await page.wait_for_function("document.body && document.body.getAttribute('data-ready')==='1'",
-                                     timeout=min(8000, timeout_s * 1000))
-    except Exception:  # noqa: BLE001 - custom HTML without the fitter: render as is
+                                     timeout=min(30000, timeout_s * 1000))
+    except Exception:  # noqa: BLE001 - custom HTML without the runtime: render as is
         pass
+
+
+async def _seek_still(page) -> None:
+    await page.evaluate("() => { if (window.__seek) window.__seek(window.__stillTime || 0);"
+                        " document.getAnimations().forEach(a => { try { a.finish(); } catch (e) { a.pause(); } }); }")
+
+
+async def page_error(page) -> str | None:
+    return await page.evaluate("() => window.__glError || window.__runtimeError || null")
 
 
 def _check_size(width: int, height: int) -> None:
@@ -139,39 +163,110 @@ def _check_size(width: int, height: int) -> None:
         raise RenderError("Size must be between 16 and 4096 pixels.")
 
 
-async def render_png(html: str, width: int, height: int, *, transparent: bool = False, timeout_s: float = 20) -> bytes:
+async def render_png(html: str, width: int, height: int, *, transparent: bool = False, timeout_s: float = 20,
+                     at: float | None = None, require_ok: bool = False, assets: dict | None = None) -> bytes:
+    """PNG of the composed state (or the state at `at` seconds). require_ok: raise when the page reports a
+    WebGL/runtime error (3D scenes use this to fall back to 2D)."""
     _check_size(width, height)
-    async with _page(width, height) as page:
+    async with _page(width, height, assets) as page:
         await _load(page, html, timeout_s)
-        # freeze any animations at their end state for stills
-        await page.evaluate("() => document.getAnimations().forEach(a => { try { a.finish(); } catch (e) { a.pause(); } })")
+        if require_ok:
+            err = await page_error(page)
+            if err:
+                raise RenderError(f"Scene failed to render: {err[:300]}")
+        if at is None:
+            await _seek_still(page)
+        else:
+            await page.evaluate("(t) => window.__seek && window.__seek(t)", at)
         return await page.screenshot(type="png", omit_background=transparent,
                                      clip={"x": 0, "y": 0, "width": width, "height": height}, timeout=timeout_s * 1000)
 
 
-_SEEK_JS = "(t) => { document.getAnimations().forEach(a => { a.pause(); a.currentTime = t; }); }"
+_SEEK_CSS = "(t) => { document.getAnimations().forEach(a => { a.pause(); a.currentTime = t * 1000; }); }"
+_SEEK = """(t) => { if (window.__seek) { window.__seek(t); return window.__activeAt ? !!window.__activeAt(t) : true; }
+  document.getAnimations().forEach(a => { a.pause(); a.currentTime = t * 1000; }); return true; }"""
+_BGL = re.compile(r"<!--bgl:(\w+)-->(.*?)<!--/bgl-->", re.S)
+
+
+async def flatten_background(html: str, width: int, height: int, *, timeout_s: float = 20) -> str:
+    """Replace the (expensive) layered background - blurred blobs, grain, scrims, photo - with one pre-rendered
+    JPEG that keeps a gentle Ken Burns move. Cuts per-frame cost roughly in half; the look is unchanged."""
+    m = _BGL.search(html)
+    if not m:
+        return html
+    hide = "<style>.canvas>*:not(.bgl){visibility:hidden!important}</style>"
+    async with _page(width, height) as page:
+        await _load(page, html.replace("</head>", hide + "</head>", 1), timeout_s)
+        await page.evaluate("() => { document.querySelectorAll('.bgl [data-kb],.bgl [data-drift]').forEach(e => "
+                            "{ e.removeAttribute('data-kb'); e.removeAttribute('data-drift'); e.style.transform='none'; }); }")
+        jpg = await page.screenshot(type="jpeg", quality=95, clip={"x": 0, "y": 0, "width": width, "height": height})
+    uri = "data:image/jpeg;base64," + base64.b64encode(jpg).decode()
+    kb = m.group(1) if m.group(1) in ("in", "out", "left", "right", "drift") else "drift"
+    loop = "data-mode='loop'" in html  # GIF loops keep a still background: smaller files, seamless loop
+    kb_attr = "" if loop else f" data-kb='{kb}'"
+    flat = (f"<div class='bgl layer' style='overflow:hidden'><div class='layer'{kb_attr} style=\"will-change:transform;"
+            f"background:url('{uri}') center/cover\"></div></div>")
+    return html[:m.start()] + flat + html[m.end():]
+
+
+async def _capture(cdp, fmt: str = "jpeg") -> bytes:
+    params = {"format": fmt, "fromSurface": True, "captureBeyondViewport": False}
+    if fmt == "jpeg":
+        params["quality"] = JPEG_Q
+    r = await cdp.send("Page.captureScreenshot", params)
+    return base64.b64decode(r["data"])
+
+
+async def capture_frames(html: str, width: int, height: int, duration: float, fps: int, sink, *, alpha: bool = False,
+                         flatten: bool = True, timeout_s: float = 30, max_frames: int = 3600, require_ok: bool = False,
+                         assets: dict | None = None) -> int:
+    """Seek the page frame by frame (window.__seek contract, CSS animations as fallback) and hand each frame's
+    bytes to `sink(bytes)`. Frames where nothing moves reuse the previous capture. Returns frames written."""
+    _check_size(width, height)
+    frames = max(1, min(max_frames, round(duration * fps)))
+    if flatten and not alpha:
+        html = await flatten_background(html, width, height)
+    async with _page(width, height, assets) as page:
+        await _load(page, html, timeout_s)
+        if require_ok:
+            err = await page_error(page)
+            if err:
+                raise RenderError(f"Scene failed to render: {err[:300]}")
+        cdp = await page.context.new_cdp_session(page)
+        if alpha:
+            await cdp.send("Emulation.setDefaultBackgroundColorOverride", {"color": {"r": 0, "g": 0, "b": 0, "a": 0}})
+        last: bytes | None = None
+        for i in range(frames):
+            active = await page.evaluate(_SEEK, i / fps)
+            if active or last is None:
+                last = await _capture(cdp, "png" if alpha else "jpeg")
+            r = sink(last)
+            if asyncio.iscoroutine(r):
+                await r
+    return frames
 
 
 async def render_video(html: str, width: int, height: int, duration: float, out_path: Path, *, fps: int = 30,
-                       timeout_s: float = 240) -> Path:
-    """Record a CSS-animated page to MP4 by seeking animations frame by frame."""
+                       timeout_s: float = 300, crf: int = 18, require_ok: bool = False, flatten: bool = True,
+                       assets: dict | None = None) -> Path:
+    """Record an animated page to H.264 MP4 (yuv420p, high profile, faststart), frame-accurate."""
     _check_size(width, height)
     w2, h2 = width - width % 2, height - height % 2
-    frames = max(1, round(duration * fps))
     args = ["-f", "image2pipe", "-framerate", str(fps), "-c:v", "mjpeg", "-i", "-",
-            "-vf", f"scale={w2}:{h2}:flags=lanczos,format=yuv420p", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-            "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-r", str(fps), str(out_path)]
+            "-vf", f"scale={w2}:{h2}:flags=lanczos,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf),
+            "-profile:v", "high", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-r", str(fps), str(out_path)]
     proc = await asyncio.create_subprocess_exec(
         ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", *args,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+
+    async def sink(b: bytes) -> None:
+        proc.stdin.write(b)
+        await proc.stdin.drain()
+
     try:
-        async with _page(width, height) as page:
-            await _load(page, html, 20)
-            for i in range(frames):
-                await page.evaluate(_SEEK_JS, i * 1000.0 / fps)
-                shot = await page.screenshot(type="jpeg", quality=94, clip={"x": 0, "y": 0, "width": width, "height": height})
-                proc.stdin.write(shot)
-                await proc.stdin.drain()
+        await asyncio.wait_for(capture_frames(html, width, height, duration, fps, sink, flatten=flatten, require_ok=require_ok,
+                                              assets=assets),
+                               timeout=timeout_s)
         proc.stdin.close()
         _, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
     except BaseException:
@@ -180,6 +275,37 @@ async def render_video(html: str, width: int, height: int, duration: float, out_
         raise
     if proc.returncode != 0:
         raise RenderError(f"ffmpeg failed: {err.decode(errors='ignore')[-600:]}")
+    return out_path
+
+
+async def render_alpha_video(html: str, width: int, height: int, duration: float, out_path: Path, *, fps: int = 30,
+                             timeout_s: float = 600) -> Path:
+    """Transparent overlay track for compositing in ffmpeg. Only frames that change are written (as PNGs with
+    alpha); `out_path` is an ffconcat list giving each one its on-screen duration. Read it with
+    `-f concat -safe 0 -i out_path` (build_video does). No intermediate encode."""
+    folder = out_path.parent / (out_path.stem + "_frames")
+    folder.mkdir(parents=True, exist_ok=True)
+    entries: list[list] = []  # [file, frames]
+    state = {"last": None}
+
+    def sink(b: bytes) -> None:
+        if b is state["last"] and entries:
+            entries[-1][1] += 1
+            return
+        state["last"] = b
+        f = folder / f"f{len(entries):05d}.png"
+        f.write_bytes(b)
+        entries.append([f, 1])
+
+    await asyncio.wait_for(capture_frames(html, width, height, duration, fps, sink, alpha=True, max_frames=60 * fps),
+                           timeout=timeout_s)
+    lines = ["ffconcat version 1.0"]
+    for f, n in entries:
+        lines += [f"file '{f.name}'", f"duration {n / fps:.6f}"]
+    if entries:
+        lines.append(f"file '{entries[-1][0].name}'")  # the concat demuxer needs the last file repeated
+    out_path = folder / "list.ffconcat"
+    out_path.write_text("\n".join(lines) + "\n")
     return out_path
 
 

@@ -48,6 +48,7 @@ from app.services.media_templates import (
     default_logo_uri,
     render_html,
 )
+from app.services.media_templates import select as tsel
 from app.services.media_templates.base import as_list, data_uri, plain
 from app.services.platforms import PLATFORMS
 
@@ -60,10 +61,10 @@ class MediaUnavailable(Exception):
         self.message = message
 
 
-# Motion settings (tests shorten these).
+# Motion settings (tests shorten these). GIFs: 15 fps, <= 720 px wide, < 8 MB, seamless loop.
 MOTION = {
     "gif": {"seconds": 5.0, "fps": 15, "max_width": 720},
-    "animation": {"seconds": 7.0, "fps": 24},
+    "animation": {"seconds": 7.0, "fps": 30},
 }
 VIDEO_FPS = 30
 VIDEO_MIN_S, VIDEO_MAX_S = 15.0, 45.0
@@ -78,6 +79,8 @@ UPLOAD_TYPES = {  # ext -> (kind, mime, max bytes)
     "mp4": ("video", "video/mp4", 300 * 1024 * 1024),
     "mov": ("video", "video/quicktime", 300 * 1024 * 1024),
     "pdf": ("document", "application/pdf", 50 * 1024 * 1024),
+    "glb": ("model3d", "model/gltf-binary", 50 * 1024 * 1024),
+    "gltf": ("model3d", "model/gltf+json", 20 * 1024 * 1024),
 }
 MIME_BY_EXT = {ext: v[1] for ext, v in UPLOAD_TYPES.items()} | {"mp3": "audio/mpeg", "m4a": "audio/mp4", "wav": "audio/wav"}
 
@@ -100,7 +103,58 @@ def sniff(data: bytes) -> str | None:
         return "mov" if brand == b"qt  " else "mp4"
     if data[:3] == b"ID3" or data[:2] in (b"\xff\xfb", b"\xff\xf3"):
         return "mp3"
+    if data[:4] == b"glTF":
+        return "glb"
+    head = data[:4096].lstrip()
+    if head[:1] == b"{" and b'"asset"' in data[:200_000]:
+        return "gltf"
     return None
+
+
+def validate_gltf(data: bytes, ext: str) -> dict:
+    """Checks a 3D model before it's stored: glTF 2.0, well-formed, self-contained (no external or remote
+    URIs - every buffer/image is inside the .glb or a data: URI), sane size. Returns summary info."""
+    import json as _json
+    import struct
+
+    def fail(msg: str):
+        raise MediaUnavailable(msg)
+
+    if ext == "glb":
+        if len(data) < 20:
+            fail("That .glb file is too short to be a 3D model.")
+        magic, version, length = struct.unpack_from("<III", data, 0)
+        if version != 2:
+            fail("Only glTF 2.0 models are supported. Export the model again as glTF 2.0 (.glb).")
+        if length != len(data):
+            fail("That .glb file is incomplete or damaged (its length doesn't match). Export it again.")
+        clen, ctype = struct.unpack_from("<II", data, 12)
+        if ctype != 0x4E4F534A or 20 + clen > len(data):
+            fail("That .glb file has no readable glTF header.")
+        raw = data[20:20 + clen]
+    else:
+        raw = data
+    try:
+        doc = _json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        fail("The model's glTF data isn't valid JSON.")
+    if not isinstance(doc, dict) or not str((doc.get("asset") or {}).get("version", "")).startswith("2"):
+        fail("Only glTF 2.0 models are supported.")
+    for key in ("buffers", "images"):
+        for i, item in enumerate(doc.get(key) or []):
+            uri = (item or {}).get("uri")
+            if uri and not str(uri).startswith("data:"):
+                fail("The model refers to external files. Upload a single self-contained .glb (or a .gltf with embedded data).")
+    ext_req = set(doc.get("extensionsRequired") or [])
+    unsupported = ext_req - {"EXT_meshopt_compression", "KHR_materials_emissive_strength", "KHR_texture_transform",
+                             "KHR_mesh_quantization", "KHR_materials_unlit"}
+    if unsupported:
+        fail(f"The model needs {', '.join(sorted(unsupported))}, which the renderer doesn't support. Export it without "
+             "Draco/KTX2 compression.")
+    meshes = len(doc.get("meshes") or [])
+    if not meshes:
+        fail("The model has no meshes to show.")
+    return {"meshes": meshes, "materials": len(doc.get("materials") or []), "animations": len(doc.get("animations") or [])}
 
 
 def _image_info(data: bytes) -> tuple[int | None, int | None]:
@@ -246,7 +300,7 @@ async def save_upload(session: AsyncSession, org_id, data: bytes, filename: str)
     ext = {"jpeg": "jpg", "m4v": "mp4"}.get(ext, ext)
     real = sniff(data)
     if real is None or real not in UPLOAD_TYPES:
-        raise MediaUnavailable("Upload PNG, JPG, WebP, GIF, MP4, MOV or PDF files.")
+        raise MediaUnavailable("Upload PNG, JPG, WebP, GIF, MP4, MOV, PDF or 3D model (.glb, .gltf) files.")
     if ext in UPLOAD_TYPES and {ext, real} not in ({"mp4", "mov"},) and ext != real:
         raise MediaUnavailable(f"“{filename}” looks like a {real.upper()} file, not {ext.upper()}. Rename it or export it again.")
     kind, mime, limit = UPLOAD_TYPES[real]
@@ -263,6 +317,8 @@ async def save_upload(session: AsyncSession, org_id, data: bytes, filename: str)
             raise MediaUnavailable("That image is too large (over 60 megapixels).")
     elif kind == "document":
         meta["pages"] = _pdf_pages(data)
+    elif kind == "model3d":
+        meta.update(validate_gltf(data, real))
     asset = await store_bytes(session, org_id, data, real, source="upload", kind=kind, mime=mime, meta=meta,
                               area="uploads", width=width, height=height, duration=duration)
     if kind == "video":
@@ -277,6 +333,15 @@ async def save_upload(session: AsyncSession, org_id, data: bytes, filename: str)
                 render.rm_tree(tmp)
         except Exception as e:  # noqa: BLE001
             log.info("poster frame failed: %s", e)
+        await session.flush()
+    if kind == "model3d":  # preview still for the library (best effort; WebGL may be unavailable)
+        try:
+            style = await brand_style(session, await load_brand(session), org_id)
+            png = await render_3d_png("scene3d_model", {"bare": True}, 800, 800, style, session=session, model_asset_id=asset.id)
+            asset.meta = {**asset.meta, "poster_path": await _side_file(org_id, png, "png", "uploads")}
+        except Exception as e:  # noqa: BLE001
+            log.info("model preview failed: %s", e)
+            asset.meta = {**asset.meta, "preview_note": "Preview unavailable (3D rendering isn't available here)."}
         await session.flush()
     return asset
 
@@ -524,62 +589,269 @@ async def background(session: AsyncSession, org_id, brief: str, width: int, heig
     return None, None, "gradient" + (f" ({'; '.join(notes)[:300]})" if notes else "")
 
 
-async def render_template(name: str, fields: dict, width: int, height: int, style: BrandStyle,
-                          photo: str | None = None, theme: str | None = None) -> bytes:
-    html = render_html(name, fields, width, height, style, photo=photo, theme=theme)
-    spec = TEMPLATES[name]
-    return await render.render_png(html, width, height, transparent=spec.name == "video_caption_overlay")
-
-
 def _alt(post: Post, meta: dict, fallback: str) -> str:
     return (meta.get("alt_text") or fallback or post.title or "")[:500]
 
 
 # ============================================================================ builders
+async def _recent_templates(session: AsyncSession, platform: str | None = None, n: int = 4) -> list[str]:
+    """Layouts used by the latest generated images (newest first), for variety."""
+    q = (select(MediaAsset.meta).where(MediaAsset.source.startswith("template:"), MediaAsset.kind.in_(("image", "gif", "video")))
+         .order_by(MediaAsset.created_at.desc()).limit(12))
+    out: list[str] = []
+    for m in (await session.scalars(q)).all():
+        t = (m or {}).get("template")
+        if t and (not platform or (m or {}).get("platform") in (None, platform)) and (m or {}).get("index", 1) == 1:
+            out.append(t)
+        if len(out) >= n:
+            break
+    return out
+
+
+def _photo_ok(meta: dict) -> bool:
+    return bool(meta.get("image_brief") or meta.get("background_asset_id")) and (meta.get("background") or "auto") != "gradient"
+
+
+async def _choose(session, post: Post, meta: dict, kind: str) -> str:
+    recent = await _recent_templates(session, post.platform)
+    return tsel.choose(meta, text=post.text or "", title=post.title or "", kind=kind, photo_ok=_photo_ok(meta), recent=recent)
+
+
 def _image_template(meta: dict) -> str:
-    t = meta.get("template")
-    if t in TEMPLATES and "image" in TEMPLATES[t].kinds:
-        return t
-    if meta.get("stat"):
-        return "stat_card"
-    if meta.get("quote"):
-        return "quote_card"
-    if as_list(meta.get("bullets")):
-        return "tip_card"
-    return "photo_headline"
+    """Kept for callers that pick without a session (no variety)."""
+    return tsel.choose(meta, kind="image", photo_ok=_photo_ok(meta))
 
 
-def _image_fields(post: Post, meta: dict) -> dict:
-    headline = meta.get("headline") or post.title or _first_sentence(post.text)
-    return {
-        "headline": headline, "title": headline, "body": meta.get("subheadline") or meta.get("body") or "",
-        "eyebrow": meta.get("eyebrow") or "", "cta": meta.get("cta") or "", "bullets": meta.get("bullets"),
-        "stat": meta.get("stat"), "stat_label": meta.get("stat_label") or headline, "source": meta.get("source") or "",
-        "quote": meta.get("quote"), "author": meta.get("author"), "role": meta.get("role"), "date": meta.get("date"),
-        "theme": meta.get("theme"),
-    }
+_FIELD_KEYS = ("eyebrow", "cta", "bullets", "stat", "stat_label", "source", "quote", "author", "role", "company", "date", "time",
+               "place", "speaker", "location", "job_type", "experience", "perks", "names", "left_label", "left", "right_label", "right",
+               "steps", "chart", "device", "theme", "lines", "year", "text3d", "screen_title", "before_label", "after_label")
 
 
-async def _make_image(session, post: Post, meta: dict, style: BrandStyle, size: tuple[int, int]) -> MediaAsset:
+def _occasion_info(meta: dict) -> tuple[str | None, str]:
+    occ = meta.get("occasion")
+    name = occ.get("name") if isinstance(occ, dict) else (occ if isinstance(occ, str) else "")
+    date = ""
+    if isinstance(occ, dict) and occ.get("date"):
+        try:
+            from datetime import date as _d
+
+            d = _d.fromisoformat(str(occ["date"])[:10])
+            date = f"{d.day} {d.strftime('%B %Y')}"
+        except ValueError:
+            date = str(occ["date"])[:30]
+    return (str(name)[:60] if name else None), date
+
+
+def _image_fields(post: Post, meta: dict, template: str | None = None) -> dict:
+    v = meta.get("visual") if isinstance(meta.get("visual"), dict) else {}
+
+    def g(key: str):
+        val = meta.get(key)
+        return val if val not in (None, "", []) else v.get(key)
+
+    headline = g("headline") or post.title or _first_sentence(post.text)
+    out = {"headline": headline, "title": headline, "body": meta.get("subheadline") or g("body") or "",
+           "stat_label": g("stat_label") or headline}
+    for key in _FIELD_KEYS:
+        val = g(key)
+        if val not in (None, "", []) and key not in out:
+            out[key] = val
+    if template and template.startswith("greeting_"):
+        name, date = _occasion_info(meta)
+        if name:
+            out["occasion"] = name
+        out.setdefault("eyebrow", date)
+        if not (meta.get("headline") or v.get("headline")):
+            out["headline"] = ""  # the template's own greeting ("Happy Diwali") reads better than the post title
+        if not out.get("body"):
+            out["body"] = _first_sentence(post.text, 110)
+    return out
+
+
+async def render_template(name: str, fields: dict, width: int, height: int, style: BrandStyle,
+                          photo: str | None = None, theme: str | None = None) -> bytes:
+    spec = TEMPLATES[name]
+    if spec.three_d:
+        return await render_3d_png(name, fields, width, height, style)
+    html = render_html(name, fields, width, height, style, photo=photo, theme=theme)
+    return await render.render_png(html, width, height, transparent=spec.name == "video_caption_overlay")
+
+
+# ---------------------------------------------------------------------------- 3D
+THREE_D = {"clip_seconds": 6.0, "fps": 30, "quality": 0.6, "max_seconds": 10.0}
+_GL: dict = {}
+
+
+async def webgl_ok() -> bool:
+    """Whether headless WebGL works here (probed once per process)."""
+    if "ok" not in _GL:
+        try:
+            html = ("<html><body><canvas id=c></canvas><script>var g=document.getElementById('c').getContext('webgl2')||"
+                    "document.getElementById('c').getContext('webgl');document.body.setAttribute('data-ready','1');"
+                    "window.__glError=g?null:'no webgl';</script></body></html>")
+            await render.render_png(html, 32, 32, require_ok=True)
+            _GL["ok"] = True
+        except Exception as e:  # noqa: BLE001
+            log.info("WebGL unavailable: %s", e)
+            _GL["ok"] = False
+    return _GL["ok"]
+
+
+async def _ui_screens(style: BrandStyle) -> list[str]:
+    from app.services.media_templates.three_d import screen_html
+
+    out = []
+    for i, (sw, sh) in enumerate([(540, 1100), (900, 600), (900, 600)]):
+        png = await render.render_png(screen_html(style, sw, sh, i), sw, sh)
+        out.append(data_uri(png, "image/png"))
+    return out
+
+
+async def _three_d_inputs(session, fields: dict, style: BrandStyle, scene: str, model_asset_id=None,
+                          screenshot: str | None = None) -> tuple[dict, dict | None]:
+    """Fields + in-memory assets a 3D scene needs (model file, device screens)."""
+    from app.services.media_templates.three_d import ASSET_HOST
+
+    f = dict(fields)
+    assets = None
+    if scene == "model":
+        a = None
+        if model_asset_id and session is not None:
+            try:
+                a = await session.get(MediaAsset, uuid.UUID(str(model_asset_id)))
+            except ValueError:
+                a = None
+        p = _abs(a.path) if a is not None and a.kind == "model3d" else None
+        if p is None and f.get("demo_model"):
+            from app.services.media_templates.three_d import demo_glb
+
+            url = f"{ASSET_HOST}/model.glb"
+            assets = {url: (demo_glb(), "model/gltf-binary")}
+        elif p is None:
+            raise MediaUnavailable("Choose a 3D model (.glb or .gltf) from the library first.")
+        else:
+            ext = "glb" if a.mime == "model/gltf-binary" else "gltf"
+            url = f"{ASSET_HOST}/model.{ext}"
+            assets = {url: (await asyncio.to_thread(p.read_bytes), a.mime)}
+        f["model_url"] = url
+    if scene == "cards" and not f.get("screens"):
+        f["screens"] = ([screenshot] if screenshot else []) + await _ui_screens(style)
+    return f, assets
+
+
+def _scene_of(name: str) -> str:
+    return name.removeprefix("scene3d_")
+
+
+async def render_3d_png(name: str, fields: dict, width: int, height: int, style: BrandStyle, *, session=None,
+                        model_asset_id=None, screenshot: str | None = None) -> bytes:
+    f, assets = await _three_d_inputs(session, fields, style, _scene_of(name), model_asset_id or fields.get("model_asset_id"), screenshot)
+    html = render_html(name, f, width, height, style, motion="still", duration=THREE_D["clip_seconds"])
+    return await render.render_png(html, width, height, require_ok=True, assets=assets, at=THREE_D["clip_seconds"] / 2, timeout_s=60)
+
+
+async def render_3d_clip(name: str, fields: dict, width: int, height: int, style: BrandStyle, out: Path, *, seconds: float,
+                         loop: bool = True, session=None, model_asset_id=None, fps: int | None = None, quality: float | None = None,
+                         screenshot: str | None = None) -> Path:
+    f, assets = await _three_d_inputs(session, fields, style, _scene_of(name), model_asset_id or fields.get("model_asset_id"), screenshot)
+    f["quality"] = quality or THREE_D["quality"]
+    seconds = min(THREE_D["max_seconds"], seconds)
+    html = render_html(name, f, width, height, style, motion="loop" if loop else "intro", duration=seconds)
+    return await render.render_video(html, width, height, seconds, out, fps=fps or THREE_D["fps"], require_ok=True, assets=assets,
+                                     timeout_s=900)
+
+
+def _fallback_2d(name: str) -> str:
+    return {"scene3d_logo": "animated_text", "scene3d_cards": "feature_spotlight", "scene3d_model": "hook_bold"}.get(name, "hook_bold")
+
+
+# ---------------------------------------------------------------------------- gallery previews
+PREVIEW_SIZES = ("1080x1080", "1080x1350", "1080x1920", "1920x1080", "1000x1500")
+
+
+def _brand_key(style: BrandStyle) -> str:
+    return hashlib.sha1(repr((style.name, style.website, style.colors, style.heading_font, style.body_font,
+                              hashlib.sha1((style.logo_uri or "").encode()).hexdigest())).encode()).hexdigest()[:16]
+
+
+async def template_preview(org_id, style: BrandStyle, name: str, size: str = "1080x1350", theme: str | None = None) -> Path:
+    """JPEG thumbnail (480 px wide) of a template with its sample content in this brand; cached on disk."""
+    from PIL import Image
+
+    spec = TEMPLATES[name]
+    if size not in PREVIEW_SIZES:
+        size = "1080x1350"
+    theme = theme if theme in ("dark", "light", "brand") else None
+    key = hashlib.sha1(f"v3|{name}|{size}|{theme}|{_brand_key(style)}".encode()).hexdigest()[:24]
+    folder = storage.root() / "cache" / "previews" / str(org_id)
+    path = folder / f"{key}.jpg"
+    if path.exists():
+        return path
+    w, h = (int(x) for x in size.split("x"))
+    fields = dict(spec.sample or {})
+    if spec.three_d:
+        fields["demo_model"] = True
+        try:
+            png = await render_3d_png(name, fields, w, h, style)
+        except (render.RenderError, MediaUnavailable):
+            png = await render_template(_fallback_2d(name), {**fields, "lines": [fields.get("headline") or spec.label]}, w, h, style)
+    else:
+        png = await render_template(name, fields, w, h, style, theme=theme)
+
+    def shrink() -> bytes:
+        im = Image.open(io.BytesIO(png)).convert("RGB")
+        im.thumbnail((480, 480 * h // w), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=84, optimize=True)
+        return buf.getvalue()
+
+    data = await asyncio.to_thread(shrink)
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+    return path
+
+
+# ---------------------------------------------------------------------------- image
+async def _make_image(session, post: Post, meta: dict, style: BrandStyle, size: tuple[int, int],
+                      template: str | None = None, theme: str | None = None) -> MediaAsset:
     w, h = size
-    tname = _image_template(meta)
-    fields = _image_fields(post, meta)
+    tname = template or await _choose(session, post, meta, "image")
+    fields = _image_fields(post, meta, tname)
+    spec = TEMPLATES[tname]
     photo, bg_asset, note = None, None, "gradient"
-    if TEMPLATES[tname].photo:
+    wants_photo = spec.photo and (tname in ("photo_headline", "carousel_cover") or (meta.get("background") in ("ai", "stock"))
+                                  or meta.get("background_asset_id"))
+    if spec.photo and wants_photo:
         brief = meta.get("image_brief") or fields["headline"] or post.topic or ""
         photo, bg_asset, note = await background(session, post.organization_id, brief, w, h,
                                                  meta.get("background") or "auto", meta.get("background_asset_id"))
-    png = await render_template(tname, fields, w, h, style, photo=photo, theme=fields.get("theme"))
     m = {"template": tname, "background": note.split(" ")[0], "platform": post.platform}
+    if spec.three_d:
+        try:
+            png = await render_3d_png(tname, fields, w, h, style, session=session, model_asset_id=meta.get("model_asset_id"))
+        except render.RenderError as e:
+            log.info("3D render failed, using a 2D layout: %s", e)
+            m["fallback_from"] = tname
+            tname = _fallback_2d(tname)
+            m["template"] = tname
+            png = await render_template(tname, fields, w, h, style, theme=theme or fields.get("theme"))
+    else:
+        png = await render_template(tname, fields, w, h, style, photo=photo, theme=theme or fields.get("theme"))
     if bg_asset:
         m["background_asset_id"] = str(bg_asset.id)
     if note.startswith("gradient ("):
         m["background_note"] = note
+    if theme:
+        m["theme"] = theme
+    alt_fallback = plain(fields.get("headline") or fields.get("quote") or fields.get("stat_label") or fields.get("occasion") or "")
     return await store_bytes(session, post.organization_id, png, "png", source=f"template:{tname}", kind="image",
-                             alt_text=_alt(post, meta, plain(fields["headline"] or fields.get("quote") or fields.get("stat_label") or "")), meta=m, width=w, height=h,
+                             alt_text=_alt(post, meta, alt_fallback), meta=m, width=w, height=h,
                              prompt=bg_asset.prompt if bg_asset else None)
 
 
+# ---------------------------------------------------------------------------- carousel / document
 def _slides(post: Post, meta: dict, max_total: int) -> tuple[dict, list[dict], dict]:
     raw = meta.get("slides") or []
     items: list[dict] = []
@@ -649,6 +921,7 @@ async def _make_document(session, post: Post, meta: dict, style: BrandStyle) -> 
                              meta={"pages": len(slides), "poster_path": poster, "title": title[:200], "platform": post.platform})
 
 
+# ---------------------------------------------------------------------------- GIF / animation
 def _motion_fields(post: Post, meta: dict) -> dict:
     lines = as_list(meta.get("lines"), 5)
     if not lines:
@@ -658,12 +931,13 @@ def _motion_fields(post: Post, meta: dict) -> dict:
         extra = extra or as_list(meta.get("bullets"))
         if not extra and post.text:
             sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+", plain(post.text)) if 8 < len(x.strip()) < 90]
-            extra = sentences[1:3]
+            extra = [x for x in sentences if plain(x).rstrip(".!?").lower() != plain(head or "").rstrip(".!?").lower()][:2]
         lines += [x for x in extra[:2] if x and x != head]
     return {"lines": lines, "eyebrow": meta.get("eyebrow") or "", "cta": meta.get("cta") or ""}
 
 
-async def _make_motion(session, post: Post, meta: dict, style: BrandStyle, size: tuple[int, int], gif: bool) -> MediaAsset:
+async def _make_motion(session, post: Post, meta: dict, style: BrandStyle, size: tuple[int, int], gif: bool,
+                       template: str | None = None, theme: str | None = None) -> MediaAsset:
     cfg = MOTION["gif" if gif else "animation"]
     w, h = size
     if gif and w > cfg["max_width"]:
@@ -671,33 +945,49 @@ async def _make_motion(session, post: Post, meta: dict, style: BrandStyle, size:
         w = cfg["max_width"]
     w, h = w - w % 2, h - h % 2
     seconds = min(6.0, cfg["seconds"]) if gif else cfg["seconds"]
-    fields = {**_motion_fields(post, meta), "duration": seconds}
+    tname = template or await _choose(session, post, meta, "gif" if gif else "animation")
+    fields = {**_image_fields(post, meta, tname), **(_motion_fields(post, meta) if tname == "animated_text" else {})}
+    spec = TEMPLATES[tname]
     photo = None
-    if meta.get("background_asset_id"):
-        photo, _, _ = await background(session, post.organization_id, "", w, h, "gradient", meta.get("background_asset_id"))
-    html = render_html("animated_text", fields, w, h, style, photo=photo, theme=meta.get("theme"))
+    if spec.photo and (meta.get("background_asset_id") or meta.get("background") in ("ai", "stock")):
+        photo, _, _ = await background(session, post.organization_id, meta.get("image_brief") or fields["headline"] or "", w, h,
+                                       meta.get("background") or "gradient", meta.get("background_asset_id"))
     tmp = render.tmp_dir("motion-")
+    m = {"template": tname, "platform": post.platform, "fps": cfg["fps"]}
     try:
-        mp4 = await render.render_video(html, w, h, seconds, tmp / "anim.mp4", fps=cfg["fps"])
-        poster = await render.poster_frame(mp4, tmp / "poster.jpg", at=max(0.1, seconds - 2.2))
+        mp4 = tmp / "anim.mp4"
+        if spec.three_d:
+            try:
+                await render_3d_clip(tname, fields, w, h, style, mp4, seconds=seconds, loop=True, session=session,
+                                     model_asset_id=meta.get("model_asset_id"), fps=cfg["fps"])
+            except render.RenderError as e:
+                log.info("3D clip failed, using a 2D layout: %s", e)
+                m["fallback_from"] = tname
+                tname = m["template"] = _fallback_2d(tname)
+                spec = TEMPLATES[tname]
+        if not spec.three_d:
+            html = render_html(tname, fields, w, h, style, photo=photo, theme=theme or fields.get("theme"),
+                               motion="loop" if gif else "intro", duration=seconds)
+            await render.render_video(html, w, h, seconds, mp4, fps=cfg["fps"])
+        poster = await render.poster_frame(mp4, tmp / "poster.jpg", at=0.0 if gif else max(0.1, min(seconds - 2.2, 2.8)))
         poster_rel = await _side_file(post.organization_id, poster.read_bytes(), "jpg")
-        alt = _alt(post, meta, " ".join(plain(x) for x in fields["lines"]))
+        alt = _alt(post, meta, " ".join(plain(x) for x in (fields.get("lines") or [fields.get("headline") or ""])))
+        m["poster_path"] = poster_rel
+        if theme:
+            m["theme"] = theme
         if gif:
             g = await render.mp4_to_gif(mp4, tmp / "anim.gif", max_width=cfg["max_width"], fps=cfg["fps"], max_seconds=seconds)
-            mp4_rel = await _side_file(post.organization_id, mp4.read_bytes(), "mp4")
-            return await store_file(session, post.organization_id, g, "gif", source="template:animated_text", kind="gif",
-                                    mime="image/gif", alt_text=alt, duration=seconds,
-                                    meta={"mp4_path": mp4_rel, "poster_path": poster_rel, "template": "animated_text",
-                                          "platform": post.platform, "fps": cfg["fps"]})
-        return await store_file(session, post.organization_id, mp4, "mp4", source="template:animated_text", kind="video",
-                                mime="video/mp4", alt_text=alt, width=w, height=h, duration=seconds,
-                                meta={"poster_path": poster_rel, "template": "animated_text", "animated": True,
-                                      "platform": post.platform, "fps": cfg["fps"]})
+            m["mp4_path"] = await _side_file(post.organization_id, mp4.read_bytes(), "mp4")
+            return await store_file(session, post.organization_id, g, "gif", source=f"template:{tname}", kind="gif",
+                                    mime="image/gif", alt_text=alt, duration=seconds, meta=m)
+        m["animated"] = True
+        return await store_file(session, post.organization_id, mp4, "mp4", source=f"template:{tname}", kind="video",
+                                mime="video/mp4", alt_text=alt, width=w, height=h, duration=seconds, meta=m)
     finally:
         render.rm_tree(tmp)
 
 
-# ---------------------------------------------------------------------------- video
+# ---------------------------------------------------------------------------- short video
 def _script(post: Post, meta: dict) -> list[dict]:
     scenes = []
     for s in meta.get("video_script") or []:
@@ -722,9 +1012,20 @@ def music_files() -> list[Path]:
     return sorted(p for p in d.iterdir() if p.suffix.lower() in (".mp3", ".m4a", ".aac", ".wav", ".ogg") and p.is_file())
 
 
-async def _mesh_png(style: BrandStyle, w: int, h: int, key: str, path: Path) -> Path:
-    page = Page(w, h, style, theme="dark")
-    html = page.document(f"<div class='canvas'>{page.mesh(key)}</div>")
+async def _mesh_png(style: BrandStyle, w: int, h: int, key: str, path: Path, variant: int = 0, icon_name: str | None = None) -> Path:
+    """Branded motion background still (Ken Burns adds the movement): aurora, brand gradient or spotlight."""
+    from app.services.media_templates.kit import Kit
+
+    from app.services.media_templates.kit import icon
+
+    theme, var = [("dark", "aurora"), ("brand", "aurora"), ("dark", "spot"), ("dark", "aurora"), ("brand", "spot")][variant % 5]
+    k = Kit(w, h, style, theme=theme, key=key)
+    deco = k.rings("100%" if variant % 2 else "0%", "0%" if variant % 3 else "100%", 420, 5, .12)
+    if icon_name:  # a large, faint outline icon for the scene's topic (lower corner, clear of the captions)
+        side = "right" if variant % 2 == 0 else "left"
+        deco += (f"<div style='position:absolute;{side}:{k.px(-90)};bottom:{h * .16:.0f}px;color:rgba(255,255,255,.10);transform:rotate({-8 if side == 'right' else 8}deg)'>"
+                 f"{icon(icon_name, k.px(620), sw=1.1)}</div>")
+    html = k.document(f"<div class='canvas'>{k.bg(None, variant=var)}{deco}</div>")
     path.write_bytes(await render.render_png(html, w, h))
     return path
 
@@ -761,8 +1062,26 @@ async def _scene_visual(session, org_id, query: str, w: int, h: int, mode: str, 
     return None, "image", "gradient"
 
 
+_THREE_FOR = [(r"global|world|countr|remote|international", "scene3d_globe"), (r"data|stream|integrat|sync|flow|api", "scene3d_particles"),
+              (r"app|product|dashboard|hrms|screen|platform", "scene3d_cards")]
+TRANSITIONS = ("smoothleft", "fade", "zoomin", "slideup", "hblur", "fade")
+
+
+def _three_scene_for(text: str) -> str:
+    for rx, name in _THREE_FOR:
+        if re.search(rx, text, re.I):
+            return name
+    return "scene3d_neural"
+
+
 async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: tuple[int, int]) -> MediaAsset:
+    """Short video (YouTube Shorts / Reels / TikTok-style): hook in the first 2 s, 4-8 scenes paced by the
+    voice-over, footage (stock clip / AI image / 3D scene / branded motion background) with Ken Burns and
+    varied transitions, kinetic captions and word-by-word subtitles synced to the voice, a progress bar,
+    and an animated end card with the logo and call to action."""
     from app.services import tts, video
+    from app.services.media_templates import motion as motion_tpl
+    from app.services.media_templates.kit import Kit
 
     w, h = size
     w, h = w - w % 2, h - h % 2
@@ -785,11 +1104,14 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
                 voice_note = f"Voice-over unavailable: {str(e)[:200]}"
                 log.info(voice_note)
                 clips = [None] * len(script)
+        # 2. pacing: the voice drives each scene; the hook stays short
         durations = []
-        for s, c in zip(script, clips):
-            d = (c.duration + 0.6) if c else min(6.0, max(2.8, len(plain(s["caption"])) / 13 + 1.2))
-            durations.append(d)
-        outro_d = 2.6
+        for i, (s, c) in enumerate(zip(script, clips)):
+            d = (c.duration + 0.55) if c else min(6.0, max(2.6, len(plain(s["caption"])) / 13 + 1.2))
+            if i == 0 and not c:
+                d = min(d, 2.6)
+            durations.append(max(1.8, d))
+        outro_d = 2.8
         total = sum(durations) + outro_d
         if total < VIDEO_MIN_S:  # stretch to the minimum length
             k = (VIDEO_MIN_S - outro_d) / max(0.1, sum(durations))
@@ -797,12 +1119,21 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
         elif total > VIDEO_MAX_S and not any(clips):
             k = (VIDEO_MAX_S - outro_d) / sum(durations)
             durations = [max(2.0, d * k) for d in durations]
-        # 2. visuals + caption overlays
+        starts, t = [], 0.0
+        for d in durations:
+            starts.append(t)
+            t += d
+        body_len = t
+        # 3. visuals per scene
         mode = meta.get("visuals") or meta.get("background") or "auto"
-        title = plain(meta.get("headline") or post.title or "")
+        use_3d = mode == "3d" or bool(meta.get("three_d")) and mode != "gradient"
+        if use_3d and not await webgl_ok():
+            use_3d = False
         scenes: list[video.Scene] = []
-        sources = []
+        sources, styles = [], []
         ai_clip_budget = 3 if meta.get("ai_video") else 0
+        three_budget = 2
+        used_icons: list[str] = []
         for i, (s, d) in enumerate(zip(script, durations)):
             query = s["query"] or keywords(f"{s['caption']} {s['voiceover']} {meta.get('image_brief') or ''}")
             vis, vkind, src = None, "image", "gradient"
@@ -815,29 +1146,58 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
                 except Exception as e:  # noqa: BLE001
                     log.info("AI clip failed: %s", e)
                     vis = None
-            if vis is None:
+            if vis is None and use_3d and three_budget and (i == 0 or i == len(script) // 2):
+                try:
+                    name = _three_scene_for(f"{s['caption']} {s['voiceover']} {post.topic or ''}") if i else "scene3d_neural"
+                    if i == 0 and mode == "3d":
+                        name = _three_scene_for(f"{s['caption']} {s['voiceover']}")
+                    vis = await render_3d_clip(name, {"bare": True}, w, h, style, tmp / f"3d_{i:02d}.mp4",
+                                               seconds=d + video.XFADE + .1, loop=True, fps=VIDEO_FPS, quality=.5)
+                    vkind, src = "video", "3d:" + name.removeprefix("scene3d_")
+                    three_budget -= 1
+                except Exception as e:  # noqa: BLE001
+                    log.info("3D scene failed: %s", e)
+                    vis = None
+            if vis is None and mode not in ("gradient", "3d"):
                 vis, vkind, src = await _scene_visual(session, post.organization_id, query, w, h, mode, tmp, i, d)
             if vis is None:
-                vis = await _mesh_png(style, w, h, f"{post.id}-{i}", tmp / f"mesh_{i:02d}.png")
+                from app.services.media_templates.kit import icon_for
+
+                ic = icon_for(f"{s['caption']} {s['voiceover']}", i)
+                if ic in used_icons:
+                    ic = icon_for("", i + len(used_icons))
+                used_icons.append(ic)
+                vis = await _mesh_png(style, w, h, f"{post.id}-{i}", tmp / f"mesh_{i:02d}.png", variant=i, icon_name=ic)
             sources.append(src)
-            overlay = tmp / f"ov_{i:02d}.png"
-            overlay.write_bytes(await render_template(
-                "video_caption_overlay", {"caption": s["caption"], "title": title if i == 0 else "", "index": i + 1,
-                                          "total": len(script)}, w, h, style))
-            scenes.append(video.Scene(duration=d, visual=vis, visual_kind=vkind, overlay=overlay,
-                                      zoom=("in", "right", "out", "left")[i % 4]))
-        # outro: branded closing card
-        outro = tmp / "outro.png"
-        outro.write_bytes(await render_template("carousel_cta", {
-            "heading": meta.get("cta_heading") or title or style.name, "body": meta.get("cta_body") or (style.website or ""),
-            "cta": meta.get("cta") or "", "index": 1, "total": 1}, w, h, style))
-        scenes.append(video.Scene(duration=outro_d, visual=outro, visual_kind="image", zoom="in"))
-        # 3. audio: voice clips at scene starts (+ crossfade offsets), optional music
-        starts, t = [], 0.0
-        for d in durations:
-            starts.append(t + 0.25)
-            t += d
-        voice_clips = [(c.path, st) for c, st in zip(clips, starts) if c]
+            footage = src not in ("gradient",) and not src.startswith("3d:")
+            styles.append("caption" if footage else "panel" if src.startswith("3d:") else "kinetic")
+            scenes.append(video.Scene(duration=d, visual=vis, visual_kind=vkind, overlay=None,
+                                      zoom=("in", "right", "out", "left")[i % 4], transition=TRANSITIONS[i % len(TRANSITIONS)]))
+        # 4. overlay track: kinetic captions + subtitles synced to the voice + progress bar + logo
+        title = plain(meta.get("headline") or post.title or "")
+        ov_scenes = []
+        for i, (s, d, st, c) in enumerate(zip(script, durations, starts, clips)):
+            vo_start = st + 0.25
+            if c and c.words:
+                wl = [(vo_start + x.start, vo_start + x.end, x.text) for x in c.words]
+            elif c:
+                wl = [(vo_start + x.start, vo_start + x.end, x.text) for x in tts._estimate_words(s["voiceover"], c.duration)]
+            else:
+                wl = []
+            cap = s["caption"] or (title if i == 0 else "")
+            ov_scenes.append({"start": st, "end": st + d, "caption": cap, "words": wl, "style": styles[i],
+                              "kind": "hook" if i == 0 else "scene"})
+        k = Kit(w, h, style, theme="dark", transparent=True, motion="intro", duration=body_len)
+        ov_html = motion_tpl.short_overlay(k, {"scenes": ov_scenes, "total": body_len + outro_d})
+        overlay_mov = await render.render_alpha_video(ov_html, w, h, body_len, tmp / "overlay.mov", fps=VIDEO_FPS)
+        # 5. end card (animated logo sting + CTA)
+        ek = Kit(w, h, style, theme="dark", motion="intro", duration=outro_d)
+        end_html = motion_tpl.end_card(ek, {"heading": meta.get("cta_heading") or title or style.name,
+                                             "body": meta.get("cta_body") or (style.website or ""), "cta": meta.get("cta") or ""})
+        end_mp4 = await render.render_video(end_html, w, h, outro_d + video.XFADE, tmp / "end.mp4", fps=VIDEO_FPS)
+        scenes.append(video.Scene(duration=outro_d, visual=end_mp4, visual_kind="video", zoom="none", transition="fade"))
+        # 6. audio: voice clips at scene starts, optional music ducked under the voice
+        voice_clips = [(c.path, st + 0.25) for c, st in zip(clips, starts) if c]
         music = None
         if meta.get("music") != "none":
             files = music_files()
@@ -846,13 +1206,15 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
             elif files:
                 music = files[int(hashlib.sha1(str(post.id or post.title).encode()).hexdigest(), 16) % len(files)]
         out = tmp / "video.mp4"
-        info = await video.build_video(scenes, out, w, h, work=tmp, voice_clips=voice_clips, music=music, fps=VIDEO_FPS)
+        info = await video.build_video(scenes, out, w, h, work=tmp, voice_clips=voice_clips, music=music, fps=VIDEO_FPS,
+                                       overlay_video=overlay_mov, overlay_until=body_len, progress_color=style.colors["secondary_light"])
         poster = await render.poster_frame(out, tmp / "poster.jpg", at=min(1.2, info["duration"] / 3))
         poster_rel = await _side_file(post.organization_id, poster.read_bytes(), "jpg")
         captions = [s["caption"] for s in script]
         m = {"poster_path": poster_rel, "scenes": len(script), "visual_sources": sources, "platform": post.platform,
              "voice": clips[0].voice if any(clips) else None, "voice_provider": next((c.provider for c in clips if c), None),
-             "music": music.name if music else None, "captions": captions}
+             "music": music.name if music else None, "captions": captions, "template": "short", "fps": VIDEO_FPS,
+             "subtitles": any(sc["words"] for sc in ov_scenes)}
         if voice_note:
             m["voice_note"] = voice_note
         return await store_file(session, post.organization_id, out, "mp4", source="template:video", kind="video",
@@ -892,6 +1254,76 @@ async def generate_for_post(session: AsyncSession, post: Post, brand: BrandProfi
     raise MediaUnavailable(f"Media for '{kind}' posts isn't supported.")
 
 
+async def generate_variants(session: AsyncSession, post: Post, brand: BrandProfile | None, count: int = 3) -> list[MediaAsset]:
+    """'Generate variants': the same content in `count` different layouts (or looks, when the layout is fixed)."""
+    kind = (post.post_type or "image").lower()
+    if kind not in ("image", "gif", "animation"):
+        raise MediaUnavailable("Variants are available for images, GIFs and animations.")
+    plat = PLATFORMS.get(post.platform) or PLATFORMS["manual"]
+    meta = dict(post.meta or {})
+    style = await brand_style(session, brand, post.organization_id)
+    count = max(1, min(4, count))
+    fixed = meta.get("template") if meta.get("template") in TEMPLATES else None
+    if fixed:
+        themes = [t for t in TEMPLATES[fixed].themes] + [t for t in ("dark", "light", "brand") if t not in TEMPLATES[fixed].themes]
+        plan = [(fixed, themes[i % len(themes)]) for i in range(count)]
+    else:
+        names = tsel.ranked(meta, text=post.text or "", title=post.title or "", kind="gif" if kind != "image" else "image",
+                            photo_ok=_photo_ok(meta), n=count)
+        plan = [(n, None) for n in names]
+    group = uuid.uuid4().hex[:12]
+    out = []
+    size = _size(meta, plat.image_size if kind != "animation" or "image" in plat.post_types else plat.video_size)
+    try:
+        for i, (name, theme) in enumerate(plan):
+            if kind == "image":
+                a = await _make_image(session, post, meta, style, size, template=name, theme=theme)
+            else:
+                a = await _make_motion(session, post, meta, style, size, gif=kind == "gif", template=name, theme=theme)
+            a.meta = {**(a.meta or {}), "variant_group": group, "variant": i + 1}
+            out.append(a)
+    except render.RenderError as e:
+        raise MediaUnavailable(str(e)) from e
+    await session.flush()
+    return out
+
+
+async def generate_3d(session: AsyncSession, org_id, style: BrandStyle, scene: str, output: str, fields: dict,
+                      size: tuple[int, int], *, model_asset_id=None, seconds: float | None = None) -> MediaAsset:
+    """Media studio 3D tab: PNG still, MP4 clip or GIF loop of one 3D scene (2D fallback when WebGL fails)."""
+    name = scene if scene.startswith("scene3d_") else f"scene3d_{scene}"
+    if name not in TEMPLATES:
+        raise MediaUnavailable(f"Unknown 3D scene: {scene}")
+    w, h = size
+    w, h = w - w % 2, h - h % 2
+    post = Post(organization_id=org_id, platform="manual", post_type="image", title=fields.get("headline") or "",
+                text=fields.get("body") or "", meta={})
+    meta = {**fields, "template": name, "model_asset_id": str(model_asset_id) if model_asset_id else None}
+    if output == "image":
+        return await _make_image(session, post, meta, style, (w, h), template=name)
+    gif = output == "gif"
+    if gif:
+        return await _make_motion(session, post, meta, style, (w, h), gif=True, template=name)
+    tmp = render.tmp_dir("three-")
+    try:
+        secs = min(THREE_D["max_seconds"], seconds or THREE_D["clip_seconds"])
+        mp4 = tmp / "clip.mp4"
+        m = {"template": name, "animated": True, "fps": THREE_D["fps"], "three_d": True}
+        try:
+            await render_3d_clip(name, fields, w, h, style, mp4, seconds=secs, loop=True, session=session, model_asset_id=model_asset_id)
+        except render.RenderError as e:
+            log.info("3D clip failed, using 2D: %s", e)
+            m.update(fallback_from=name, template=_fallback_2d(name), three_d=False)
+            html = render_html(m["template"], {**fields, "lines": [fields.get("headline") or style.name]}, w, h, style, motion="intro", duration=secs)
+            await render.render_video(html, w, h, secs, mp4, fps=30)
+        poster = await render.poster_frame(mp4, tmp / "poster.jpg", at=secs / 2)
+        m["poster_path"] = await _side_file(org_id, poster.read_bytes(), "jpg")
+        return await store_file(session, org_id, mp4, "mp4", source=f"template:{m['template']}", kind="video", mime="video/mp4",
+                                alt_text=plain(fields.get("headline") or TEMPLATES[name].label)[:300], width=w, height=h, duration=secs, meta=m)
+    finally:
+        render.rm_tree(tmp)
+
+
 async def generate_ai_image(session: AsyncSession, org_id, prompt: str, width: int, height: int, *, enhance: bool = True) -> MediaAsset:
     """Media studio 'AI image' tab: one image from a prompt, stored in the library."""
     from app.services import image_gen
@@ -927,4 +1359,5 @@ async def capabilities(session: AsyncSession) -> dict:
         "media_host": bool(hosts) or bool((get_settings().public_base_url or "").strip()),
         "renderer": render.chromium_path() or "playwright",
         "music": [p.name for p in music_files()],
+        "webgl": _GL.get("ok"),  # None until the first 3D render or preview has probed it
     }

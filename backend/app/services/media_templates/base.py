@@ -94,7 +94,7 @@ class BrandStyle:
     handle: str | None = None
     logo_uri: str | None = None  # data: URI
     colors: dict = field(default_factory=lambda: dict(DEFAULT_COLORS))
-    heading_font: str = "Inter"
+    heading_font: str = "Plus Jakarta Sans"
     body_font: str = "Inter"
 
     @classmethod
@@ -111,7 +111,7 @@ class BrandStyle:
             c["secondary_light"] = _hex(colors.get("secondary_light"), mix(c["secondary"], "#ffffff", 0.3))
         fonts = fonts or {}
         safe = lambda f: re.sub(r"[^A-Za-z0-9 \-]", "", str(f or ""))[:40].strip() or "Inter"  # noqa: E731
-        return cls(colors=c, heading_font=safe(fonts.get("heading") or fonts.get("primary")),
+        return cls(colors=c, heading_font=safe(fonts.get("heading") or fonts.get("primary") or "Plus Jakarta Sans"),
                    body_font=safe(fonts.get("body") or fonts.get("secondary")), **kw)
 
 

@@ -49,14 +49,14 @@ function UploadZone({ onDone }: { onDone: () => void }) {
           <span className="grid h-10 w-10 place-items-center rounded-lg bg-brand-tint text-brand"><Upload size={18} /></span>
           <div>
             <p className="text-sm font-medium">Drop files here to add them to the library</p>
-            <p className="text-xs text-muted">PNG, JPG, WebP, GIF, MP4, MOV or PDF. Images up to 20 MB, videos up to 300 MB.</p>
+            <p className="text-xs text-muted">PNG, JPG, WebP, GIF, MP4, MOV, PDF or 3D models (.glb, .gltf). Images up to 20 MB, videos up to 300 MB, models up to 50 MB.</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           {send.isPending && <Spinner label="Uploading…" />}
           <Button variant="secondary" onClick={() => input.current?.click()} disabled={send.isPending}>Choose files</Button>
         </div>
-        <input ref={input} type="file" multiple hidden accept=".png,.jpg,.jpeg,.webp,.gif,.mp4,.mov,.pdf"
+        <input ref={input} type="file" multiple hidden accept=".png,.jpg,.jpeg,.webp,.gif,.mp4,.mov,.pdf,.glb,.gltf"
           onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
       </div>
       {msg && <div className="mt-2"><Alert tone={msg.tone}>{msg.text}</Alert></div>}
@@ -191,6 +191,7 @@ export default function Library() {
           <option value="gif">GIFs</option>
           <option value="video">Videos</option>
           <option value="document">PDFs</option>
+          <option value="model3d">3D models</option>
         </Select>
         <Select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)} className="!w-48">
           <option value="">All sources</option>

@@ -1,13 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, Film, Image as ImageIcon, Images, Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { FileText, Film, Image as ImageIcon, Images, LayoutGrid, Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { api } from "../../api/client";
 import { useJob, type Job } from "../../api/hooks";
 import { Alert, Button, Card, EmptyState, Field, Input, Select, Spinner, Textarea } from "../../components/ui";
+import { TemplatePicker } from "./Gallery";
 import { AssetDetail } from "./Library";
 import {
-  AssetPreview, textToList, useCaps, useTemplates, type Asset, type Template, type Voice,
+  AssetPreview, textToList, useCaps, useTemplates, type Asset, type Template, type TemplateField, type Voice,
 } from "./shared";
+import UseInPost from "./UseInPost";
+
+const AUTO_FIELDS: TemplateField[] = [
+  { name: "eyebrow", label: "Small label", type: "text" }, { name: "headline", label: "Headline", type: "textarea" },
+  { name: "body", label: "Supporting line", type: "textarea" }, { name: "bullets", label: "Points (optional, one per line)", type: "list" },
+  { name: "stat", label: "Number (optional, e.g. 68%)", type: "text" }, { name: "cta", label: "Button text", type: "text" },
+];
 
 type Kind = "image" | "carousel" | "gif" | "animation" | "video" | "document";
 type Slide = { heading: string; body: string };
@@ -104,6 +112,7 @@ function TemplateFields({ tpl, values, onChange }: { tpl: Template; values: Reco
 function Results({ ids }: { ids: string[] }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState<Asset | null>(null);
+  const [attach, setAttach] = useState<string[] | null>(null);
   const assets = useQuery({
     queryKey: ["media-results", ids],
     queryFn: () => Promise.all(ids.map((id) => api<Asset>(`/media/${id}`))),
@@ -121,26 +130,32 @@ function Results({ ids }: { ids: string[] }) {
               <AssetPreview asset={a} controls={items.length === 1 || a.kind === "video"} />
             </div>
             <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-muted">
-              <span>{a.width && `${a.width} × ${a.height}`}{a.duration_s ? ` · ${a.duration_s.toFixed(1)} s` : ""}</span>
-              <button className="font-medium text-brand hover:underline" onClick={() => setOpen(a)}>Details</button>
+              <span className="truncate">{a.width && `${a.width} × ${a.height}`}{a.duration_s ? ` · ${a.duration_s.toFixed(1)} s` : ""}
+                {a.meta?.template ? ` · ${String(a.meta.template).replace(/_/g, " ")}` : ""}</span>
+              <span className="flex shrink-0 gap-3">
+                <button className="font-medium text-brand hover:underline" onClick={() => setAttach(a.meta?.group && items.length > 1 && !a.meta?.variant_group ? items.map((x) => x.id) : [a.id])}>Use in a post</button>
+                <button className="font-medium text-brand hover:underline" onClick={() => setOpen(a)}>Details</button>
+              </span>
             </div>
           </div>
         ))}
       </div>
+      {attach && <UseInPost assetIds={attach} onClose={() => setAttach(null)} />}
       {open && <AssetDetail asset={open} onClose={() => setOpen(null)}
         onChanged={() => { qc.invalidateQueries({ queryKey: ["media"] }); qc.invalidateQueries({ queryKey: ["media-results"] }); }} />}
     </>
   );
 }
 
-export default function Create() {
+export default function Create({ initial }: { initial?: { template: string; theme?: string; kind?: Kind } | null }) {
   const qc = useQueryClient();
   const templates = useTemplates();
   const caps = useCaps();
-  const [kind, setKind] = useState<Kind>("image");
+  const [kind, setKind] = useState<Kind>(initial?.kind ?? "image");
   const [platform, setPlatform] = useState("instagram");
   const [size, setSize] = useState("");
-  const [tplName, setTplName] = useState("photo_headline");
+  const [tplName, setTplName] = useState(initial?.template ?? "auto");
+  useEffect(() => { if (initial) { setTplName(initial.template); setTheme(initial.theme ?? ""); if (initial.kind) setKind(initial.kind); } }, [initial]);
   const [values, setValues] = useState<Record<string, string>>({ headline: "", eyebrow: "", body: "", cta: "" });
   const [theme, setTheme] = useState("");
   const [background, setBackground] = useState("auto");
@@ -164,7 +179,11 @@ export default function Create() {
 
   const data = templates.data;
   const imageTemplates = useMemo(() => (data?.templates ?? []).filter((t) => t.kinds.includes("image")), [data]);
-  const tpl = imageTemplates.find((t) => t.name === tplName) ?? imageTemplates[0];
+  const autoTpl: Template | undefined = imageTemplates.length ? { ...imageTemplates[0], name: "auto", label: "Picked for each post",
+    description: "The layout is chosen from your content: a number becomes a chart, points become a list, a quote gets a quote card.",
+    fields: AUTO_FIELDS, photo: true, three_d: false } : undefined;
+  const tpl = tplName === "auto" ? autoTpl : (data?.templates.find((t) => t.name === tplName) ?? autoTpl);
+  const motionKind = kind === "gif" || kind === "animation";
   const platforms = useMemo(() => (data?.platforms ?? []).filter((p) => p.post_types.includes(kind)), [data, kind]);
   useEffect(() => {
     if (platforms.length && !platforms.some((p) => p.id === platform)) setPlatform(platforms[0].id);
@@ -183,12 +202,13 @@ export default function Create() {
 
   const fields = (): Record<string, unknown> => {
     const f: Record<string, unknown> = {};
-    if (kind === "image") {
+    if (kind === "image" || (motionKind && tpl && tpl.name !== "animated_text")) {
       for (const fd of tpl?.fields ?? []) {
         const v = values[fd.name];
         if (v) f[fd.name] = fd.type === "list" ? textToList(v) : v;
       }
-      f.template = tpl?.name;
+      if (motionKind && lines) f.lines = textToList(lines);
+      if (tpl && tpl.name !== "auto") f.template = tpl.name;
       if (theme) f.theme = theme;
       if (tpl?.photo) { f.background = background; if (brief) f.image_brief = brief; }
     } else if (kind === "carousel" || kind === "document") {
@@ -196,8 +216,8 @@ export default function Create() {
         cta_heading: closing.heading, cta_body: closing.body,
         slides: slides.filter((s) => s.heading || s.body) });
       if (brief && kind === "carousel") { f.image_brief = brief; f.background = background; }
-    } else if (kind === "gif" || kind === "animation") {
-      Object.assign(f, { lines: textToList(lines), eyebrow: values.eyebrow, cta: values.cta });
+    } else if (motionKind) {
+      Object.assign(f, { lines: textToList(lines), eyebrow: values.eyebrow, cta: values.cta, template: "animated_text" });
     } else if (kind === "video") {
       Object.assign(f, { headline: values.headline, video_script: scenes.filter((s) => s.caption || s.voiceover),
         voice, visuals, cta: values.cta });
@@ -208,8 +228,8 @@ export default function Create() {
   };
 
   const generate = useMutation({
-    mutationFn: () => api<{ job_id: string }>("/media/generate", {
-      method: "POST", json: { kind, platform, size: size || null, fields: fields() },
+    mutationFn: (variants: number = 0) => api<{ job_id: string }>("/media/generate", {
+      method: "POST", json: { kind, platform, size: size || null, fields: fields(), variants },
     }),
     onMutate: () => { setResultIds([]); setJobError(null); },
     onSuccess: (r) => setJobId(r.job_id),
@@ -265,24 +285,32 @@ export default function Create() {
 
         <Card>
           <h2 className="mb-3 font-semibold">Content</h2>
-          {kind === "image" && tpl && (
+          {(kind === "image" || motionKind) && tpl && (
             <div className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Template" hint={tpl.description}>
-                  <Select value={tpl.name} onChange={(e) => setTplName(e.target.value)}>
-                    {imageTemplates.map((t) => <option key={t.name} value={t.name}>{t.label}</option>)}
-                  </Select>
-                </Field>
+              <Field label="Template" hint={tpl.description}>
+                <TemplatePicker kind={kind === "image" ? "image" : "gif"} value={tplName} onChange={setTplName} size={size || "1080x1350"} />
+              </Field>
+              {tpl.themes?.length > 1 && (
                 <Field label="Look">
                   <Select value={theme} onChange={(e) => setTheme(e.target.value)}>
                     <option value="">Template default</option>
-                    <option value="dark">Dark (navy)</option>
-                    <option value="light">Light</option>
+                    {tpl.themes.map((th) => <option key={th} value={th}>{{ dark: "Dark (navy)", light: "Light", brand: "Brand blue" }[th] ?? th}</option>)}
                   </Select>
                 </Field>
-              </div>
-              <TemplateFields tpl={tpl} values={values} onChange={(k, v) => set(k)(v)} />
-              {tpl.photo && (
+              )}
+              {motionKind && (tpl.name === "animated_text" || tpl.name === "auto") ? (
+                <>
+                  <Field label="Lines" hint="2–4 short lines revealed word by word, then your logo. Wrap a word in *stars* to highlight it.">
+                    <Textarea rows={4} value={lines} onChange={(e) => setLines(e.target.value)}
+                      placeholder={"Your HR team, *amplified*\nAI that drafts, screens and schedules\nSo people can focus on people"} />
+                  </Field>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Small label"><Input value={values.eyebrow ?? ""} onChange={(e) => set("eyebrow")(e.target.value)} /></Field>
+                    <Field label="Button text"><Input value={values.cta ?? ""} onChange={(e) => set("cta")(e.target.value)} /></Field>
+                  </div>
+                </>
+              ) : <TemplateFields tpl={tpl} values={values} onChange={(k, v) => set(k)(v)} />}
+              {kind === "image" && tpl.photo && !tpl.three_d && (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Background">
                     <Select value={background} onChange={(e) => setBackground(e.target.value)}>
@@ -294,6 +322,7 @@ export default function Create() {
                   </Field>
                 </div>
               )}
+              {motionKind && <p className="text-xs text-muted">{kind === "gif" ? "GIFs loop seamlessly for 5 seconds at 15 fps and stay under 8 MB; an MP4 copy is saved for platforms that prefer video." : "Animations are 7-second, 30 fps MP4 files that end on your logo."}</p>}
             </div>
           )}
 
@@ -320,20 +349,6 @@ export default function Create() {
             </div>
           )}
 
-          {(kind === "gif" || kind === "animation") && (
-            <div className="space-y-4">
-              <Field label="Lines" hint="2–4 short lines revealed one after another, then your logo. Wrap a word in *stars* to highlight it.">
-                <Textarea rows={4} value={lines} onChange={(e) => setLines(e.target.value)}
-                  placeholder={"Your HR team, *amplified*\nAI that drafts, screens and schedules\nSo people can focus on people"} />
-              </Field>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Small label"><Input value={values.eyebrow ?? ""} onChange={(e) => set("eyebrow")(e.target.value)} /></Field>
-                <Field label="Button text"><Input value={values.cta ?? ""} onChange={(e) => set("cta")(e.target.value)} /></Field>
-              </div>
-              <p className="text-xs text-muted">{kind === "gif" ? "GIFs last 5 seconds and stay under 8 MB; an MP4 copy is saved for platforms that prefer video." : "Animations are 7-second MP4 files."}</p>
-            </div>
-          )}
-
           {kind === "video" && (
             <div className="space-y-4">
               <Field label="Title" hint="Shown on the first scene and the closing card.">
@@ -351,7 +366,8 @@ export default function Create() {
                     <option value="auto">Best available (stock clips, AI images, stock photos)</option>
                     <option value="stock">Stock clips and photos</option>
                     <option value="ai">AI images</option>
-                    <option value="gradient">Brand gradient only</option>
+                    <option value="gradient">Brand motion backgrounds only</option>
+                    <option value="3d">3D scenes + brand motion backgrounds</option>
                   </Select>
                 </Field>
                 <Field label="Background music" hint={caps.data?.music.length ? undefined : "Add royalty-free tracks to storage/music/ to use music."}>
@@ -370,15 +386,20 @@ export default function Create() {
         {generate.error && <Alert>{(generate.error as Error).message}</Alert>}
         {preview.error && <Alert>{(preview.error as Error).message}</Alert>}
         <div className="flex flex-wrap items-center gap-2">
-          {kind === "image" && (
+          {kind === "image" && tplName !== "auto" && (
             <Button variant="secondary" onClick={() => preview.mutate()} disabled={busy}>
               {preview.isPending ? "Rendering…" : "Render preview"}
             </Button>
           )}
-          <Button onClick={() => generate.mutate()} disabled={busy}>
+          <Button onClick={() => generate.mutate(0)} disabled={busy}>
             <Sparkles size={16} />{kind === "video" ? "Generate video" : "Generate"}
           </Button>
-          {kind === "image" && <span className="text-xs text-muted">Preview uses the brand gradient and is ready in seconds. Generate also fetches the background photo.</span>}
+          {(kind === "image" || motionKind) && (
+            <Button variant="secondary" onClick={() => generate.mutate(3)} disabled={busy} title="Three different layouts (or looks) to choose from">
+              <LayoutGrid size={16} />Generate 3 variants
+            </Button>
+          )}
+          {kind === "image" && tplName !== "auto" && <span className="text-xs text-muted">Preview uses the brand background and is ready in seconds. Generate also fetches the background photo.</span>}
         </div>
       </div>
 
