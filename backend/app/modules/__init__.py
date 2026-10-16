@@ -11,6 +11,7 @@ MODULES = [
     "app.modules.media",
     "app.modules.seo",
     "app.modules.analytics",
+    "app.modules.analytics_growth",
     "app.modules.ai_models",
 ]
 

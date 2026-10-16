@@ -29,6 +29,10 @@ TENANT_TABLES_V2 = [
 ]
 TENANT_TABLES_V3 = ["model_status"]
 
+from app.models.analytics_ext import (  # noqa: E402
+    TENANT_TABLES_ANALYTICS, AccountMetric, AnalyticsReport, CompetitorMetric, Recommendation, ReportSchedule,
+)
+
 __all__ = [
     "Base",
     "AuditLog",

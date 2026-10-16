@@ -41,8 +41,25 @@ function Tile({ label, value, to, tone }: { label: string; value: number; to: st
   );
 }
 
+type HealthSummary = { score: number | null; grade: string; weakest: { label: string; score: number }[]; top_tip: string | null };
+
+function HealthCard() {
+  const q = useQuery({ queryKey: ["analytics-health-summary"], queryFn: () => api<HealthSummary>("/analytics/health/summary"), staleTime: 300000 });
+  const h = q.data;
+  return (
+    <Card>
+      <div className="text-sm text-muted">Marketing health</div>
+      <div className="mt-1 text-3xl font-bold tabular-nums">{h?.score ?? "—"}<span className="text-base font-normal text-muted">{h?.score != null ? " / 100" : ""}</span></div>
+      {h && <div className="text-sm font-medium text-primary-800">{h.grade}</div>}
+      {h?.weakest[0] && <p className="mt-1 text-sm text-muted">Weakest area: {h.weakest[0].label} ({h.weakest[0].score})</p>}
+      {h?.top_tip && <p className="mt-1 text-sm">Next step: {h.top_tip}</p>}
+      <Link className="text-sm text-primary-700 hover:underline" to="/analytics?tab=health">How to improve</Link>
+    </Card>
+  );
+}
+
 export default function Dashboard() {
-  const { session } = useAuth();
+  const { session, can } = useAuth();
   const q = useQuery({ queryKey: ["dashboard"], queryFn: () => api<Dash>("/dashboard"), refetchInterval: 60000 });
   const org = session?.organization;
 
@@ -180,6 +197,7 @@ export default function Dashboard() {
                   </ul>
                 ) : <p className="mt-1 text-sm">None yet. <Link className="text-primary-700 underline" to="/settings/accounts">Connect one</Link>.</p>}
               </Card>
+              {can("analytics.view") && <HealthCard />}
               <Card>
                 <div className="text-sm text-muted">Digital presence score</div>
                 <div className="mt-1 text-3xl font-bold tabular-nums">{d.audit_score ?? "—"}<span className="text-base font-normal text-muted">{d.audit_score !== null ? " / 100" : ""}</span></div>

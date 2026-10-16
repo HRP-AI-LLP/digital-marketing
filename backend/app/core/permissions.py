@@ -27,6 +27,7 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("seo.view", "SEO & analytics", "View SEO articles and reports"),
     ("seo.manage", "SEO & analytics", "Generate and edit SEO articles"),
     ("analytics.view", "SEO & analytics", "View performance analytics"),
+    ("analytics.manage", "SEO & analytics", "Refresh growth data, edit competitor handles, act on growth tips and manage reports"),
     ("notification.manage", "Notifications", "Configure notification channels"),
 ]
 
@@ -40,7 +41,7 @@ DEFAULT_ROLES: dict[str, tuple[str, list[str]]] = {
         [
             "org.settings.view", "user.view", "intel.view", "content.view", "content.create",
             "content.approve", "content.publish", "schedule.view", "schedule.manage",
-            "media.manage", "integration.view", "seo.view", "seo.manage", "analytics.view",
+            "media.manage", "integration.view", "seo.view", "seo.manage", "analytics.view", "analytics.manage",
         ],
     ),
     "Reviewer": (
