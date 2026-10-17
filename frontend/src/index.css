@@ -28,6 +28,7 @@ body {
   font-family: "Inter Variable", "Inter", system-ui, sans-serif;
   font-size: 15px;
   line-height: 1.55;
+  overflow-wrap: break-word; /* long links and IDs wrap inside cards instead of spilling out */
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3 { letter-spacing: -0.02em; }

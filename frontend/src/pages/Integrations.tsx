@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowDown, ArrowUp, ExternalLink, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { UsageReport } from "./AiUsage";
 import { useAuth } from "../auth/AuthContext";
 import {
-  Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Tabs, Textarea, Toggle, formatDate,
+  Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Tabs, Textarea, Toggle, formatDate,
 } from "../components/ui";
 
 export type Spec = {
@@ -15,7 +17,7 @@ export type ProviderCfg = {
   id: string; kind: string; provider: string; name: string; label: string; base_url: string;
   secrets: Record<string, string>; fields: Record<string, string>; settings: Record<string, any>; enabled: boolean;
   monthly_budget_usd: number | null; month_spend_usd: number | null; last_test_ok: boolean | null;
-  last_test_at: string | null; last_test_message: string | null;
+  last_test_at: string | null; last_test_message: string | null; billing?: "free" | "paid";
 };
 type RouteTask = { label: string; kind: string; model_type: string };
 type Catalog = { providers: Spec[]; tasks: Record<string, string>; media_tasks: Record<string, string>; route_tasks: Record<string, RouteTask> };
@@ -51,7 +53,6 @@ function until(iso: string | null) {
   if (!iso) return "";
   return new Intl.DateTimeFormat("en-IN", { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" }).format(new Date(iso));
 }
-const fmtNum = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${(n / 1e3).toFixed(1)}k` : n.toLocaleString();
 
 function useCatalog() {
   return useQuery({ queryKey: ["int-catalog"], queryFn: () => api<Catalog>("/integrations/catalog"), staleTime: Infinity });
@@ -114,6 +115,7 @@ function ProviderForm({ spec, existing, onClose }: { spec: Spec; existing?: Prov
   const [embedModel, setEmbedModel] = useState<string>(st.embed_model ?? "");
   const [voice, setVoice] = useState<string>(st.voice ?? "");
   const [budget, setBudget] = useState(existing?.monthly_budget_usd?.toString() ?? "");
+  const [billing, setBilling] = useState<string>(st.billing ?? existing?.billing ?? (/^(free|limited free)/i.test(spec.free) ? "free" : "paid"));
   const [priceIn, setPriceIn] = useState<string>(st.prices?.["*"]?.[0]?.toString() ?? "");
   const [priceOut, setPriceOut] = useState<string>(st.prices?.["*"]?.[1]?.toString() ?? "");
   const unitKey = spec.kind === "image" ? "image" : spec.kind === "tts" ? "minute" : spec.kind === "video" ? "video" : "";
@@ -147,6 +149,7 @@ function ProviderForm({ spec, existing, onClose }: { spec: Spec; existing?: Prov
   const save = useMutation({
     mutationFn: () => {
       const settings: Record<string, unknown> = {};
+      if (isAI && !spec.local) settings.billing = billing;
       if (spec.kind === "llm") {
         settings.default_model = defaultModel || null;
         settings.embed_model = embedModel || null;
@@ -237,14 +240,24 @@ function ProviderForm({ spec, existing, onClose }: { spec: Spec; existing?: Prov
           </div>
         )}
         {isAI && !spec.local && (
+          <Field label="Billing" hint={billing === "free"
+            ? "No charge is counted. AI usage still shows what it would cost at list price."
+            : "Costs use the public list price for each model, unless you enter your own price below."}>
+            <Select value={billing} onChange={(e) => setBilling(e.target.value)}>
+              <option value="free">Free tier (no charges)</option>
+              <option value="paid">Paid (pay per use)</option>
+            </Select>
+          </Field>
+        )}
+        {isAI && !spec.local && (
           <div className="grid gap-4 sm:grid-cols-3">
             {spec.kind === "llm" ? (
               <>
-                <Field label="Price per 1M input tokens (USD)"><Input inputMode="decimal" value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="0" /></Field>
-                <Field label="Price per 1M output tokens (USD)"><Input inputMode="decimal" value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="0" /></Field>
+                <Field label="Your price per 1M input tokens (USD)" hint="Leave empty to use the list price."><Input inputMode="decimal" value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="0" /></Field>
+                <Field label="Your price per 1M output tokens (USD)"><Input inputMode="decimal" value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="0" /></Field>
               </>
             ) : (
-              <Field label={unitLabel}><Input inputMode="decimal" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} placeholder="0" /></Field>
+              <Field label={unitLabel} hint="Leave empty to use the list price."><Input inputMode="decimal" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} placeholder="0" /></Field>
             )}
             <Field label="Monthly budget (USD)" hint="Skipped for the rest of the month when reached."><Input inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value)} placeholder="No limit" /></Field>
           </div>
@@ -480,82 +493,13 @@ function Routing({ providers, catalog, statuses }: { providers: ProviderCfg[]; c
 }
 
 // ------------------------------------------------------------------ usage
-type UsageRow = {
-  provider_id: string | null; integration: string | null; provider: string; model: string; kind: string; calls: number;
-  failures: number; input_tokens: number; output_tokens: number; units: number; cost_usd: number; last_used: string; tasks: string[];
-};
-type UsageData = {
-  totals: { calls: number; failures: number; input_tokens: number; output_tokens: number; images: number; audio_seconds: number; videos: number; cost_usd: number };
-  models: UsageRow[];
-};
-const TASK_LABEL: Record<string, string> = {
-  write: "writing", plan: "planning", qa: "reviews", extract: "reading", longform: "articles", image_prompt: "image prompts",
-  embed: "embeddings", image: "images", tts: "voice-over", video: "video", carousel: "carousels",
-};
-const KIND_SHORT: Record<string, string> = { chat: "Text", embed: "Embeddings", image: "Image", tts: "Voice", video: "Video" };
-
-function output(r: UsageRow) {
-  if (r.kind === "image") return `${r.units} image${r.units === 1 ? "" : "s"}`;
-  if (r.kind === "tts") return `${Math.floor(r.units / 60)}m ${r.units % 60}s audio`;
-  if (r.kind === "video") return `${r.units} clip${r.units === 1 ? "" : "s"}`;
-  return `${fmtNum(r.input_tokens)} in / ${fmtNum(r.output_tokens)} out`;
-}
-
-function Usage({ statuses }: { statuses: Status[] }) {
-  const [days, setDays] = useState("30");
-  const q = useQuery({ queryKey: ["int-usage", days], queryFn: () => api<UsageData>(`/integrations/usage?days=${days}`) });
+function Usage() {
   const [prompt, setPrompt] = useState("Write a two-line LinkedIn hook about AI-powered HR software.");
   const run = useMutation({ mutationFn: () => api<{ text: string; provider: string; model: string }>("/integrations/playground", { method: "POST", json: { task: "write", prompt } }) });
-  const t = q.data?.totals;
-  const periodLabel = days === "0" ? "since the start" : `last ${days} days`;
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted">Every AI call is counted per model: text tokens, embeddings, images, seconds of voice-over and video clips.</p>
-        <Select className="w-44" value={days} onChange={(e) => setDays(e.target.value)}>
-          <option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option>
-          <option value="90">Last 90 days</option><option value="0">All time</option>
-        </Select>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card><div className="text-sm text-muted">AI calls, {periodLabel}</div><div className="text-2xl font-bold tabular-nums">{fmtNum(t?.calls ?? 0)}</div>
-          {!!t?.failures && <div className="text-xs text-danger">{t.failures} failed (fell back)</div>}</Card>
-        <Card><div className="text-sm text-muted">Text tokens</div><div className="text-2xl font-bold tabular-nums">{fmtNum((t?.input_tokens ?? 0) + (t?.output_tokens ?? 0))}</div>
-          <div className="text-xs text-muted">{fmtNum(t?.input_tokens ?? 0)} in · {fmtNum(t?.output_tokens ?? 0)} out</div></Card>
-        <Card><div className="text-sm text-muted">Media made</div><div className="text-2xl font-bold tabular-nums">{t?.images ?? 0} <span className="text-base font-normal text-muted">images</span></div>
-          <div className="text-xs text-muted">{Math.round((t?.audio_seconds ?? 0) / 60)} min voice-over · {t?.videos ?? 0} AI clips</div></Card>
-        <Card><div className="text-sm text-muted">Spend</div><div className="text-2xl font-bold tabular-nums">${(t?.cost_usd ?? 0).toFixed(2)}</div>
-          <div className="text-xs text-muted">From the prices set on each integration</div></Card>
-      </div>
-      <div className="overflow-x-auto rounded-xl border border-line bg-surface">
-        <table className="w-full text-sm">
-          <thead className="border-b border-line text-left text-muted"><tr>
-            <th className="min-w-[200px] px-4 py-2.5 font-medium">Model</th><th className="px-4 py-2.5 font-medium">Used for</th>
-            <th className="px-4 py-2.5 text-right font-medium">Calls</th><th className="px-4 py-2.5 text-right font-medium">Usage</th>
-            <th className="px-4 py-2.5 text-right font-medium">Cost</th><th className="px-4 py-2.5 font-medium">Last used</th><th className="px-4 py-2.5 font-medium">Status</th></tr></thead>
-          <tbody className="divide-y divide-line">
-            {q.isLoading && <tr><td colSpan={7} className="px-4 py-6"><Spinner label="Loading usage…" /></td></tr>}
-            {q.data?.models.map((r, i) => {
-              const s = statuses.find((x) => x.provider_id === r.provider_id && x.model === r.model);
-              return (
-                <tr key={i} className="align-top">
-                  <td className="px-4 py-2.5">
-                    <div className="font-medium">{r.model}</div>
-                    <div className="text-xs text-muted">{r.integration ?? r.provider} · {KIND_SHORT[r.kind] ?? r.kind}</div>
-                  </td>
-                  <td className="px-4 py-2.5 text-muted">{r.tasks.map((x) => TASK_LABEL[x] ?? x).join(", ")}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(r.calls)}{r.failures ? <div className="text-xs text-danger">{r.failures} failed</div> : null}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums">{output(r)}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums">${r.cost_usd.toFixed(4)}</td>
-                  <td className="px-4 py-2.5 whitespace-nowrap text-muted">{ago(r.last_used)}</td>
-                  <td className="px-4 py-2.5">{s && s.state !== "ok" ? <StatusBadge s={s} /> : <span className="text-xs text-emerald-700">Ready</span>}</td>
-                </tr>
-              );
-            })}
-            {q.data && !q.data.models.length && <tr><td colSpan={7} className="px-4 py-6 text-muted">No AI calls in this period.</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      <p className="text-sm text-muted">Also in the sidebar as <Link to="/settings/ai-usage" className="text-primary-700 underline">AI usage and costs</Link>.</p>
+      <UsageReport />
       <Card>
         <h3 className="font-semibold">Try the writing model</h3>
         <p className="text-sm text-muted">Runs the 'Write social posts' route with its fallbacks and shows which model answered.</p>
@@ -617,7 +561,7 @@ export default function Integrations() {
         </>
       )}
       {tab === "routing" && catalog.data && <Routing providers={providers.data ?? []} catalog={catalog.data} statuses={statuses} />}
-      {tab === "usage" && <Usage statuses={statuses} />}
+      {tab === "usage" && <Usage />}
       {picking && group && catalog.data && (
         <AddPicker specs={catalog.data.providers.filter((s) => group.kinds.includes(s.kind))} onClose={() => setPicking(false)} onPick={(s) => { setPicking(false); setAdding(s); }} />
       )}

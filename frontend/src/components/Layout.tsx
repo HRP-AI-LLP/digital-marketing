@@ -2,7 +2,7 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   CalendarDays, CheckCheck, ChevronsUpDown, FileText, Gauge, History, Image, KeyRound,
-  LineChart, LogOut, Menu, Plug, Radar, Settings, ShieldCheck, Bell, Users as UsersIcon, X, Globe2, ListChecks,
+  LineChart, LogOut, Menu, Plug, Coins, Radar, Settings, ShieldCheck, Bell, Users as UsersIcon, X, Globe2, ListChecks,
   Palette, Clock, Share2, Inbox as InboxIcon, Lightbulb,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
@@ -44,6 +44,7 @@ export const NAV: Group[] = [
       { to: "/settings/schedules", label: "Posting schedules", icon: Clock, perm: "schedule.view" },
       { to: "/settings/accounts", label: "Social accounts", icon: Share2, perm: "integration.view" },
       { to: "/settings/integrations", label: "Integrations", icon: Plug, perm: "integration.view" },
+      { to: "/settings/ai-usage", label: "AI usage and costs", icon: Coins, perm: "integration.view" },
       { to: "/settings/notifications", label: "Notifications", icon: Bell },
       { to: "/settings/users", label: "Users", icon: UsersIcon, perm: "user.view" },
       { to: "/settings/roles", label: "Roles and access", icon: ShieldCheck, perm: "role.view" },

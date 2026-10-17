@@ -294,3 +294,21 @@ async def test_timeouts_get_a_readable_reason():
     assert "took too long" in health.describe(e)
     v = health.classify(e, local=True)
     assert v.state == "cooldown" and v.reason.startswith("Took too long")
+
+
+async def test_pricing_rules():
+    from app.services.llm import pricing
+
+    paid = pricing.cost("openai", {}, "gpt-4o-mini", "chat", 1_000_000, 1_000_000)
+    assert paid.source == "list" and paid.cost > 0 and paid.cost == paid.list_value
+    free = pricing.cost("gemini", {}, "gemini-2.5-flash", "chat", 1_000_000, 0)
+    assert free.source == "free" and free.cost == 0 and free.list_value > 0
+    assert pricing.cost("gemini", {"billing": "paid"}, "gemini-2.5-flash", "chat", 1_000_000, 0).cost == free.list_value
+    mine = pricing.cost("openai", {"prices": {"*": [2, 4]}}, "gpt-4o-mini", "chat", 1_000_000, 500_000)
+    assert mine.source == "custom" and mine.cost == 4.0
+    assert pricing.cost("ollama", {}, "llama3.1:8b", "chat", 10**6, 10**6).source == "local"
+    assert pricing.cost("openrouter", {}, "meta-llama/llama-3.3-70b-instruct:free", "chat", 10**6, 10**6).cost == 0
+    assert pricing.cost("openai", {}, "no-such-model-xyz", "chat", 10, 10).source == "unknown"
+    assert pricing.cost("openai_tts", {}, "tts-1", "tts", units=60).cost > 0
+    assert pricing.cost("openai_images", {"prices": {"image": 0.05}}, "x", "image", units=2).cost == 0.1
+    assert pricing.default_billing("groq") == "free" and pricing.default_billing("anthropic") == "paid"

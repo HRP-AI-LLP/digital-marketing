@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Sparkles } from "lucide-react";
+import { CalendarRange, Check, Pencil, RefreshCw, Sparkles, X } from "lucide-react";
 import { api } from "../../api/client";
 import { useJob, type Job } from "../../api/hooks";
-import { Alert, Button, Modal, Spinner } from "../../components/ui";
-import type { Pillar } from "./shared";
+import { Alert, Badge, Button, Modal, Spinner } from "../../components/ui";
+import type { Campaign, Pillar } from "./shared";
 
 // ------------------------------------------------------------------ shared: start a suggestion job and wait
-function useSuggestion<T>(kind: "voice" | "pillars") {
+function useSuggestion<T>(kind: "voice" | "pillars" | "campaigns") {
   const [jobId, setJobId] = useState<string | null>(null);
   const [result, setResult] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -179,5 +179,91 @@ export function PillarSuggest({ current }: { current: Pillar[] }) {
         </Modal>
       )}
     </>
+  );
+}
+
+// ------------------------------------------------------------------ campaigns
+export type CampaignIdea = {
+  name: string; brief: string | null; starts_on: string | null; ends_on: string | null; boost: number; goal: string;
+  occasion: string; channels: string[]; post_ideas: string[]; reason: string;
+};
+type CampaignResult = { suggested: CampaignIdea[]; notes: string; window: { start: string; end: string } };
+const GOAL: Record<string, string> = {
+  awareness: "Awareness", leads: "Leads", launch: "Launch", engagement: "Engagement", hiring: "Hiring", community: "Community",
+};
+const day = (d: string) => new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" }).format(new Date(`${d}T00:00:00`));
+
+/** "Suggest campaigns": the AI plans the next ~4 months from your offerings, research ideas and the festivals and
+ * special days calendar. Each idea can be added as is, edited first, or dismissed. Nothing is saved until you add it. */
+export function CampaignSuggest({ onEdit }: { onEdit: (draft: Partial<Campaign>) => void }) {
+  const qc = useQueryClient();
+  const s = useSuggestion<CampaignResult>("campaigns");
+  const [done, setDone] = useState<Record<string, "added" | "dismissed" | "edited">>({});
+  const add = useMutation({
+    mutationFn: (c: CampaignIdea) => api("/content/campaigns", { method: "POST", json: {
+      name: c.name, brief: c.brief, starts_on: c.starts_on, ends_on: c.ends_on, boost: c.boost, active: true } }),
+    onSuccess: (_r, c) => { setDone((d) => ({ ...d, [c.name]: "added" })); qc.invalidateQueries({ queryKey: ["campaigns"] }); },
+  });
+  const ideas = s.result?.suggested ?? [];
+  const open = ideas.filter((c) => !done[c.name]);
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <SuggestButton onClick={() => { setDone({}); s.start(); }} busy={s.busy} label={s.result ? "Suggest again" : "Suggest campaigns with AI"} />
+        {s.busy && s.progress && <span className="text-sm text-muted">{s.progress}</span>}
+        {!s.busy && !s.result && <span className="text-sm text-muted">Plans the next 4 months from your offerings, market research and upcoming festivals and special days.</span>}
+      </div>
+      {s.error && <Alert>{s.error}</Alert>}
+      {add.error && <Alert>{(add.error as Error).message}</Alert>}
+      {s.result && (
+        <div className="rounded-xl border border-primary-500/30 bg-brand-tint/40 p-4">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="font-semibold">AI campaign plan · {day(s.result.window.start)} – {day(s.result.window.end)}</h3>
+              {s.result.notes && <p className="text-sm text-muted">{s.result.notes}</p>}
+            </div>
+            <div className="flex gap-2">
+              {open.length > 1 && <Button onClick={() => open.forEach((c) => add.mutate(c))} disabled={add.isPending}><Check size={15} />Add all {open.length}</Button>}
+              <Button variant="ghost" onClick={s.clear}>Close</Button>
+            </div>
+          </div>
+          <ul className="grid gap-3 lg:grid-cols-2">
+            {ideas.map((c) => {
+              const state = done[c.name];
+              return (
+                <li key={c.name} className={`flex min-w-0 flex-col rounded-lg border border-line bg-surface p-4 ${state ? "opacity-60" : ""}`}>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-semibold">{c.name}</span>
+                    {c.goal && <Badge tone="brand">{GOAL[c.goal] ?? c.goal}</Badge>}
+                    {c.occasion && <Badge>{c.occasion}</Badge>}
+                  </div>
+                  <div className="mt-1 flex items-center gap-1 text-sm text-muted">
+                    <CalendarRange size={14} />
+                    {c.starts_on ? `${day(c.starts_on)}${c.ends_on ? ` – ${day(c.ends_on)}` : ""}` : "No dates"} · {c.boost}% of posts
+                    {c.channels.length > 0 && <> · {c.channels.join(", ")}</>}
+                  </div>
+                  {c.reason && <p className="mt-2 text-sm text-ink/80 [overflow-wrap:anywhere]"><span className="font-medium">Why now:</span> {c.reason}</p>}
+                  {c.brief && <p className="mt-1 line-clamp-4 whitespace-pre-line text-sm text-muted [overflow-wrap:anywhere]">{c.brief.split("\nPost ideas:")[0]}</p>}
+                  {c.post_ideas.length > 0 && (
+                    <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm [overflow-wrap:anywhere]">{c.post_ideas.map((i) => <li key={i}>{i}</li>)}</ul>
+                  )}
+                  <div className="mt-auto flex flex-wrap gap-2 pt-3">
+                    {state === "added" ? <span className="inline-flex items-center gap-1 text-sm font-medium text-emerald-700"><Check size={15} />Added</span>
+                      : state === "dismissed" ? <span className="text-sm text-muted">Dismissed</span>
+                      : state === "edited" ? <span className="text-sm text-muted">Opened for editing</span> : (
+                      <>
+                        <Button onClick={() => add.mutate(c)} disabled={add.isPending}><Check size={15} />Add</Button>
+                        <Button variant="secondary" onClick={() => { setDone((d) => ({ ...d, [c.name]: "edited" })); onEdit(c); }}><Pencil size={14} />Edit first</Button>
+                        <Button variant="ghost" onClick={() => setDone((d) => ({ ...d, [c.name]: "dismissed" }))}><X size={15} />Dismiss</Button>
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }

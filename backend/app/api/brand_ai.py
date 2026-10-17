@@ -15,7 +15,7 @@ router = APIRouter(prefix="/brand-ai", tags=["brand"])
 
 
 class SuggestIn(BaseModel):
-    kind: Literal["voice", "pillars"]
+    kind: Literal["voice", "pillars", "campaigns"]
 
 
 @router.post("/suggest", status_code=202)

@@ -9,7 +9,7 @@ import logging
 
 from app.core.db import SessionLocal, set_tenant
 from app.services.jobs import org_ids_active, periodic
-from app.services.llm import discovery
+from app.services.llm import discovery, pricing
 
 log = logging.getLogger(__name__)
 
@@ -29,3 +29,11 @@ async def refresh_model_lists() -> None:
             await refresh_org(org_id)
         except Exception:
             log.exception("model list refresh failed for org %s", org_id)
+
+
+@periodic(24 * 3600, name="ai_price_list_refresh")
+async def refresh_price_list() -> None:
+    """Daily: download the latest public AI price list so costs stay current."""
+    n = await pricing.refresh()
+    if n:
+        log.info("AI price list refreshed: %d models", n)

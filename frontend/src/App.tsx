@@ -11,6 +11,7 @@ import PlatformOrganizations from "./pages/PlatformOrganizations";
 import Roles from "./pages/Roles";
 import Users from "./pages/Users";
 import Integrations from "./pages/Integrations";
+import AiUsage from "./pages/AiUsage";
 import NotificationSettings from "./pages/NotificationSettings";
 import Calendar from "./pages/Calendar";
 import Approvals from "./pages/Approvals";
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="settings/activity" element={<Guard perm="audit.view"><Activity /></Guard>} />
         <Route path="platform/organizations" element={<Guard platform><PlatformOrganizations /></Guard>} />
         <Route path="settings/integrations" element={<Guard perm="integration.view"><Integrations /></Guard>} />
+        <Route path="settings/ai-usage" element={<Guard perm="integration.view"><AiUsage /></Guard>} />
         <Route path="settings/notifications" element={<NotificationSettings />} />
         <Route path="settings/brand" element={<Guard perm="content.view"><Brand /></Guard>} />
         <Route path="settings/schedules" element={<Guard perm="schedule.view"><Schedules /></Guard>} />

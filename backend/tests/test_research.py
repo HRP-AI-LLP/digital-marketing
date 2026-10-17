@@ -145,6 +145,15 @@ def _payload(system: str, prompt: str):
                             {"name": "AI insights", "description": "Trends", "weight": 30},
                             {"name": "HR compliance", "weight": 20}, {"name": "product", "weight": 5}],
                 "notes": "Balanced"}
+    if system == brand_suggest.CAMPAIGNS_SYSTEM:
+        STATE["campaign_prompt"] = prompt
+        return {"campaigns": [
+            {"name": "Diwali wishes", "starts_on": "2000-01-01", "ends_on": "1999-01-01", "boost": 500, "brief": "Warm wishes.",
+             "post_ideas": ["Team rangoli"], "goal": "community", "occasion": "Diwali", "reason": "Festive season"},
+            {"name": "Payroll launch", "starts_on": "2099-01-01", "ends_on": "2099-02-01", "brief": "Too far out"},
+            {"name": "Existing push", "brief": "dup"},
+            {"name": "AI in HR series", "brief": "Weekly insights.", "boost": 30},
+        ], "notes": "Good mix"}
     raise AssertionError(f"unexpected prompt: {system[:60]}")
 
 
@@ -604,6 +613,18 @@ async def test_brand_voice_and_pillar_suggestions(client, org):
     names = [p["name"] for p in res["suggested"]]
     assert names == ["Product", "AI insights", "HR compliance"]  # duplicate dropped
     assert res["suggested"][0]["existing_id"] and sum(p["weight"] for p in res["suggested"]) == 100
+
+
+async def test_campaign_suggestions(client, org):
+    await client.post("/content/campaigns", headers=org["h"], json={"name": "Existing push"})
+    assert (await client.post("/brand-ai/suggest", headers=org["h"], json={"kind": "campaigns"})).status_code == 202
+    res = await run_inline("brand.suggest", org["id"], {"kind": "campaigns"})
+    names = [c["name"] for c in res["suggested"]]
+    assert "Existing push" not in names and "Payroll launch" not in names  # duplicate and out-of-window dropped
+    diwali = next(c for c in res["suggested"] if c["name"] == "Diwali wishes")
+    assert diwali["starts_on"] >= res["window"]["start"] and diwali["ends_on"] > diwali["starts_on"]  # fixed dates
+    assert diwali["boost"] == 100 and "Team rangoli" in diwali["brief"]
+    assert "Planning window" in STATE["campaign_prompt"] and "Existing push" in STATE["campaign_prompt"]
 
 
 # ------------------------------------------------------------------ permissions and tenancy

@@ -206,14 +206,12 @@ def _usage(session, cfg: ProviderConfig | None, provider: str, voice: str, *, ok
     org_id = cfg.organization_id if cfg is not None else session.info.get("org_id")
     if org_id is None:
         return
-    prices = ((cfg.settings or {}).get("prices") or {}) if cfg is not None else {}
-    try:
-        per_min = float(prices.get("minute") or 0)
-    except (TypeError, ValueError):
-        per_min = 0.0
+    from app.services.llm import pricing
+
+    c = pricing.cost(provider, (cfg.settings or {}) if cfg is not None else {}, voice, "tts", units=units).cost
     session.add(LlmUsage(organization_id=org_id, provider_id=cfg.id if cfg is not None else None, provider=provider,
                          model=voice, task="tts", kind="tts", units=units,
-                         cost_usd=round(per_min * units / 60, 6) if ok else 0, ok=ok, error=error, latency_ms=latency))
+                         cost_usd=c if ok else 0, ok=ok, error=error, latency_ms=latency))
 
 
 # ----------------------------------------------------------------------------- voices

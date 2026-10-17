@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.crypto import decrypt_json
 from app.models import LlmUsage, ProviderConfig, TaskRoute
 from app.services.llm import client as llm
-from app.services.llm import health
+from app.services.llm import health, pricing
 from app.services.llm.catalog import BY_ID
 
 
@@ -91,11 +91,11 @@ async def resolve_chain(session: AsyncSession, task: str, kind: str = "llm") -> 
 
 def _log(session: AsyncSession, cfg: ProviderConfig, model: str, task: str, kind: str, *, tin=0, tout=0, units=0,
          ok=True, error=None, latency=0) -> None:
-    pin, pout = _price(cfg, model)
+    c = pricing.cost(cfg.provider, cfg.settings or {}, model, kind, tin, tout, units)
     session.add(LlmUsage(
         organization_id=cfg.organization_id, provider_id=cfg.id, provider=cfg.provider, model=model, task=task,
         kind=kind, input_tokens=tin, output_tokens=tout, units=units,
-        cost_usd=round((tin * pin + tout * pout) / 1_000_000, 6), ok=ok, error=error, latency_ms=latency,
+        cost_usd=c.cost if ok else 0, ok=ok, error=error, latency_ms=latency,
     ))
 
 

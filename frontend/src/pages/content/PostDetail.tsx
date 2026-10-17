@@ -338,10 +338,10 @@ export default function PostDetail() {
             {p.activities.length === 0 ? <p className="text-sm text-muted">Nothing yet.</p> : (
               <ol className="space-y-3 border-l border-line pl-4">
                 {p.activities.map((a) => (
-                  <li key={a.id} className="relative text-sm">
+                  <li key={a.id} className="relative min-w-0 text-sm">
                     <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-primary-500" />
                     <div className="font-medium">{ACTION_LABELS[a.action] ?? a.action.replace(/_/g, " ")}</div>
-                    {a.note && <div className="text-muted">{a.note}</div>}
+                    {a.note && <div className="text-muted [overflow-wrap:anywhere]">{a.note}</div>}
                     <div className="text-xs text-muted">{a.actor ?? "system"} · {fmt(a.created_at, tz)}</div>
                   </li>
                 ))}

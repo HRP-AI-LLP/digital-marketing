@@ -361,11 +361,9 @@ STYLES = {
 # ----------------------------------------------------------------------------- public API
 def _log_usage(session: AsyncSession, cfg: ProviderConfig, model: str, task: str, *, ok: bool, error: str | None,
                latency: int) -> None:
-    prices = (cfg.settings or {}).get("prices") or {}
-    try:
-        price = float(prices.get("image") or 0)
-    except (TypeError, ValueError):
-        price = 0.0
+    from app.services.llm import pricing
+
+    price = pricing.cost(cfg.provider, cfg.settings or {}, model or "", "image", units=1).cost
     session.add(LlmUsage(
         organization_id=cfg.organization_id, provider_id=cfg.id, provider=cfg.provider, model=model or "-", task=task,
         kind="image", units=1 if ok else 0, cost_usd=round(price if ok else 0, 6), ok=ok, error=error, latency_ms=latency,

@@ -231,6 +231,9 @@ async def h_brand_suggest(ctx: JobContext) -> dict:
         if kind == "pillars":
             await ctx.progress("Working out the topic mix")
             return await brand_suggest.suggest_pillars(ctx.session)
+        if kind == "campaigns":
+            await ctx.progress("Checking upcoming occasions, research ideas and your offerings")
+            return await brand_suggest.suggest_campaigns(ctx.session)
     except NoProviderError:
         raise PermanentError(svc.NO_AI)
     except ValueError as e:

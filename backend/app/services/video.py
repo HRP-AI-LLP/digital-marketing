@@ -320,11 +320,9 @@ async def _replicate_one(session: AsyncSession, cfg: ProviderConfig, model: str,
         err = str(e)[:1000]
         raise
     finally:
-        prices = (cfg.settings or {}).get("prices") or {}
-        try:
-            price = float(prices.get("video") or 0)
-        except (TypeError, ValueError):
-            price = 0.0
+        from app.services.llm import pricing
+
+        price = pricing.cost(cfg.provider, cfg.settings or {}, model or "", "video", units=1).cost
         session.add(LlmUsage(organization_id=cfg.organization_id, provider_id=cfg.id, provider=cfg.provider, model=model or "-",
                              task="video", kind="video", units=1 if ok else 0, cost_usd=price if ok else 0, ok=ok, error=err,
                              latency_ms=int((time.perf_counter() - t0) * 1000)))

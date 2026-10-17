@@ -81,6 +81,12 @@ def _secret_fields(provider: str) -> list[str]:
     return names
 
 
+def _billing(cfg: ProviderConfig) -> str:
+    from app.services.llm import pricing
+
+    return pricing.billing_of(cfg.provider, cfg.settings)
+
+
 def _out(cfg: ProviderConfig, spend: float | None = None) -> dict:
     secrets = decrypt_json(cfg.secrets_enc)
     spec = BY_ID.get(cfg.provider)
@@ -90,7 +96,7 @@ def _out(cfg: ProviderConfig, spend: float | None = None) -> dict:
         "base_url": cfg.base_url or (spec.base_url if spec else ""),
         "secrets": {k: mask(v) for k, v in secrets.items() if k in _secret_fields(cfg.provider) and v},
         "fields": {k: v for k, v in secrets.items() if k not in _secret_fields(cfg.provider)},
-        "settings": cfg.settings or {}, "enabled": cfg.enabled,
+        "settings": cfg.settings or {}, "enabled": cfg.enabled, "billing": _billing(cfg),
         "monthly_budget_usd": float(cfg.monthly_budget_usd) if cfg.monthly_budget_usd is not None else None,
         "month_spend_usd": spend, "last_test_ok": cfg.last_test_ok, "last_test_at": cfg.last_test_at,
         "last_test_message": cfg.last_test_message, "created_at": cfg.created_at,
@@ -355,42 +361,118 @@ async def set_routes(body: RoutesIn, ctx: Context = Depends(require("integration
 
 
 # ------------------------------------------------------------------ usage & playground
+KIND_NAMES = {"chat": "Text", "embed": "Embeddings", "image": "Images", "tts": "Voice", "video": "Video"}
+
+
+def _period(days: int, start: str | None, end: str | None) -> tuple[datetime, datetime | None]:
+    try:
+        if start:
+            s = datetime.fromisoformat(start).replace(tzinfo=UTC) if "T" not in start else datetime.fromisoformat(start)
+            e = (datetime.fromisoformat(end).replace(tzinfo=UTC) + timedelta(days=1)) if end else None
+            return s, e
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Dates must look like 2026-10-01.") from None
+    if days:
+        return datetime.now(UTC) - timedelta(days=max(1, min(days, 3650))), None
+    return datetime(2000, 1, 1, tzinfo=UTC), None
+
+
 @router.get("/usage")
-async def usage(days: int = 30, ctx: Context = Depends(require("integration.view"))):
-    """Usage per model. days=0 means since the beginning."""
-    since = datetime.now(UTC) - timedelta(days=max(1, min(days, 3650))) if days else datetime(2000, 1, 1, tzinfo=UTC)
-    period = LlmUsage.created_at >= since
+async def usage(days: int = 30, start: str | None = None, end: str | None = None,
+                ctx: Context = Depends(require("integration.view"))):
+    """Usage and cost per model, provider and type. days=0 means since the beginning; start/end (YYYY-MM-DD) win.
+
+    Costs are worked out from the recorded tokens/images/seconds at today's prices (see services/llm/pricing):
+    your own price first, then free tier / local (0, with the list-price value shown), then the public list price.
+    """
+    from app.services.llm import pricing
+
+    since, until = _period(days, start, end)
+    cond = [LlmUsage.created_at >= since] + ([LlmUsage.created_at < until] if until else [])
     fails = func.sum(case((LlmUsage.ok.is_(False), 1), else_=0))
-    rows = (await ctx.session.execute(
-        select(
-            LlmUsage.provider, LlmUsage.model, LlmUsage.task,
-            func.count(), func.sum(LlmUsage.input_tokens), func.sum(LlmUsage.output_tokens),
-            func.sum(LlmUsage.cost_usd), fails,
-        ).where(period).group_by(LlmUsage.provider, LlmUsage.model, LlmUsage.task)
-    )).all()
+    ok_units = func.sum(case((LlmUsage.ok.is_(True), LlmUsage.units), else_=0))
     per_model = (await ctx.session.execute(
         select(
             LlmUsage.provider_id, LlmUsage.provider, LlmUsage.model, LlmUsage.kind,
-            func.count(), fails, func.sum(LlmUsage.input_tokens), func.sum(LlmUsage.output_tokens),
-            func.sum(case((LlmUsage.ok.is_(True), LlmUsage.units), else_=0)), func.sum(LlmUsage.cost_usd),
-            func.max(LlmUsage.created_at), func.array_agg(func.distinct(LlmUsage.task)),
-        ).where(period).group_by(LlmUsage.provider_id, LlmUsage.provider, LlmUsage.model, LlmUsage.kind)
+            func.count(), fails, func.sum(LlmUsage.input_tokens), func.sum(LlmUsage.output_tokens), ok_units,
+            func.max(LlmUsage.created_at), func.array_agg(func.distinct(LlmUsage.task)), func.min(LlmUsage.created_at),
+        ).where(*cond).group_by(LlmUsage.provider_id, LlmUsage.provider, LlmUsage.model, LlmUsage.kind)
         .order_by(func.max(LlmUsage.created_at).desc())
     )).all()
-    names = {c.id: c.name for c in (await ctx.session.scalars(select(ProviderConfig))).all()}
-    day = func.date_trunc(literal_column("'day'"), LlmUsage.created_at)
-    daily = (await ctx.session.execute(
-        select(day, func.count(), func.sum(LlmUsage.cost_usd), func.sum(LlmUsage.input_tokens + LlmUsage.output_tokens))
-        .where(LlmUsage.created_at >= max(since, datetime.now(UTC) - timedelta(days=90))).group_by(day).order_by(day)
+    cfgs = {c.id: c for c in (await ctx.session.scalars(select(ProviderConfig))).all()}
+
+    def settings_of(pid):
+        c = cfgs.get(pid)
+        return (c.settings or {}) if c else {}
+
+    models = []
+    for pid, p, m, k, n, f, i, o, u, last, tasks, first in per_model:
+        tin, tout, units = int(i or 0), int(o or 0), int(u or 0)
+        c = pricing.cost(p, settings_of(pid), m, k, tin, tout, units)
+        spec = BY_ID.get(p)
+        models.append({
+            "provider_id": pid, "integration": cfgs[pid].name if pid in cfgs else None,
+            "provider": p, "provider_label": spec.label if spec else p, "model": m, "kind": k,
+            "calls": n, "failures": int(f or 0), "input_tokens": tin, "output_tokens": tout, "units": units,
+            "cost_usd": c.cost, "list_value_usd": c.list_value, "price_source": c.source,
+            "billing": pricing.billing_of(p, settings_of(pid)), "price": pricing.describe_price(p, m, k),
+            "first_used": first, "last_used": last, "tasks": sorted(t for t in (tasks or []) if t),
+        })
+
+    def roll(key) -> list[dict]:
+        out: dict = {}
+        for r in models:
+            g = out.setdefault(key(r), {"calls": 0, "failures": 0, "input_tokens": 0, "output_tokens": 0, "units": 0,
+                                        "cost_usd": 0.0, "list_value_usd": 0.0, "models": 0})
+            for f in ("calls", "failures", "input_tokens", "output_tokens", "units", "cost_usd", "list_value_usd"):
+                g[f] += r[f]
+            g["models"] += 1
+        return [{"key": k, **{f: (round(v, 6) if isinstance(v, float) else v) for f, v in g.items()}} for k, g in out.items()]
+
+    by_provider = roll(lambda r: str(r["provider_id"] or r["provider"]))
+    for g in by_provider:
+        ex = next(r for r in models if str(r["provider_id"] or r["provider"]) == g["key"])
+        g.update({"provider_id": ex["provider_id"], "provider": ex["provider"], "label": ex["integration"] or ex["provider_label"],
+                  "billing": ex["billing"]})
+    by_provider.sort(key=lambda g: (-g["cost_usd"], -(g["input_tokens"] + g["output_tokens"])))
+    by_kind = roll(lambda r: r["kind"])
+    for g in by_kind:
+        g["label"] = KIND_NAMES.get(g["key"], g["key"])
+
+    task_rows = (await ctx.session.execute(
+        select(LlmUsage.provider_id, LlmUsage.provider, LlmUsage.model, LlmUsage.kind, LlmUsage.task, func.count(),
+               func.sum(LlmUsage.input_tokens), func.sum(LlmUsage.output_tokens), ok_units, fails)
+        .where(*cond).group_by(LlmUsage.provider_id, LlmUsage.provider, LlmUsage.model, LlmUsage.kind, LlmUsage.task)
     )).all()
-    models = [
-        {"provider_id": pid, "integration": names.get(pid) if pid else None, "provider": p, "model": m, "kind": k,
-         "calls": n, "failures": int(f or 0), "input_tokens": int(i or 0), "output_tokens": int(o or 0),
-         "units": int(u or 0), "cost_usd": float(c or 0), "last_used": last, "tasks": sorted(t for t in (tasks or []) if t)}
-        for pid, p, m, k, n, f, i, o, u, c, last, tasks in per_model
+    by_task = [
+        {"provider": p, "model": m, "kind": k, "task": t, "calls": n, "input_tokens": int(i or 0), "output_tokens": int(o or 0),
+         "units": int(u or 0), "failures": int(f or 0),
+         "cost_usd": pricing.cost(p, settings_of(pid), m, k, int(i or 0), int(o or 0), int(u or 0)).cost}
+        for pid, p, m, k, t, n, i, o, u, f in task_rows
     ]
+
+    # daily series (max 120 days), priced the same way
+    day = func.date_trunc(literal_column("'day'"), LlmUsage.created_at)
+    dstart = max(since, (until or datetime.now(UTC)) - timedelta(days=120))
+    drows = (await ctx.session.execute(
+        select(day, LlmUsage.provider_id, LlmUsage.provider, LlmUsage.model, LlmUsage.kind, func.count(),
+               func.sum(LlmUsage.input_tokens), func.sum(LlmUsage.output_tokens), ok_units)
+        .where(LlmUsage.created_at >= dstart, *([LlmUsage.created_at < until] if until else []))
+        .group_by(day, LlmUsage.provider_id, LlmUsage.provider, LlmUsage.model, LlmUsage.kind).order_by(day)
+    )).all()
+    daily: dict[str, dict] = {}
+    for d, pid, p, m, k, n, i, o, u in drows:
+        c = pricing.cost(p, settings_of(pid), m, k, int(i or 0), int(o or 0), int(u or 0))
+        x = daily.setdefault(d.date().isoformat(), {"day": d.date().isoformat(), "calls": 0, "tokens": 0, "cost_usd": 0.0,
+                                                    "list_value_usd": 0.0})
+        x["calls"] += n
+        x["tokens"] += int(i or 0) + int(o or 0)
+        x["cost_usd"] = round(x["cost_usd"] + c.cost, 6)
+        x["list_value_usd"] = round(x["list_value_usd"] + c.list_value, 6)
+
+    _, _, src = pricing.table()
     return {
-        "days": days,
+        "days": days, "start": since if since.year > 2000 else None, "end": until,
         "totals": {
             "calls": sum(x["calls"] for x in models), "failures": sum(x["failures"] for x in models),
             "input_tokens": sum(x["input_tokens"] for x in models), "output_tokens": sum(x["output_tokens"] for x in models),
@@ -398,16 +480,23 @@ async def usage(days: int = 30, ctx: Context = Depends(require("integration.view
             "audio_seconds": sum(x["units"] for x in models if x["kind"] == "tts"),
             "videos": sum(x["units"] for x in models if x["kind"] == "video"),
             "cost_usd": round(sum(x["cost_usd"] for x in models), 6),
+            "list_value_usd": round(sum(x["list_value_usd"] for x in models), 6),
+            "unpriced_models": sum(1 for x in models if x["price_source"] == "unknown"),
         },
-        "models": models,
-        "by_model": [
-            {"provider": p, "model": m, "task": t, "calls": n, "input_tokens": int(i or 0), "output_tokens": int(o or 0),
-             "cost_usd": float(c or 0), "failures": int(f or 0)}
-            for p, m, t, n, i, o, c, f in rows
-        ],
-        "daily": [{"day": d.date().isoformat(), "calls": n, "cost_usd": float(c or 0), "tokens": int(tk or 0)}
-                  for d, n, c, tk in daily],
+        "models": models, "by_provider": by_provider, "by_kind": by_kind, "by_model": by_task, "daily": list(daily.values()),
+        "price_list": {"source": src, "updated_at": pricing.updated_at()},
     }
+
+
+@router.post("/prices/refresh")
+async def refresh_prices(ctx: Context = Depends(require("integration.manage"))):
+    """Download the latest public AI price list now (it also refreshes daily)."""
+    from app.services.llm import pricing
+
+    n = await pricing.refresh()
+    if not n:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Couldn't download the price list right now. The last copy is still used.")
+    return {"models": n, "message": f"Prices updated for {n:,} models."}
 
 
 @router.post("/playground")

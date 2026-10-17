@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import BrandProfile, Competitor, ContentPillar, IdeaBrief, Organization
+from app.models import BrandProfile, Campaign, Competitor, ContentPillar, IdeaBrief, Organization
 from app.services import knowledge
 from app.services.knowledge import normalize_name
 from app.services.llm import router as llm_router
@@ -169,3 +169,105 @@ async def suggest_pillars(session: AsyncSession) -> dict:
         for p, a in zip(out, alloc, strict=True):
             p["weight"] = a * 5
     return {"current": cur, "suggested": out, "notes": _s(raw.get("notes") if isinstance(raw, dict) else "", 600)}
+
+
+CAMPAIGNS_SYSTEM = """You are a B2B marketing strategist for an Indian technology company.
+Plan 4-6 social media campaigns for the coming months. Mix:
+- occasion campaigns tied to the festivals, national days, awareness days and business seasons listed (only when the
+  tie-in is natural and respectful; never sell on solemn or commemorative days),
+- product or offering pushes (a launch, a feature, a free trial, a demo offer),
+- thought-leadership series on topics the buyers care about right now (use the research ideas),
+- proof campaigns (customer stories, results, behind the scenes).
+Dates must fall inside the planning window, use YYYY-MM-DD, and start a few days BEFORE an occasion so posts can
+build up. Campaigns may overlap but avoid more than two running at once. Do not repeat an existing campaign.
+Each brief is what the AI writer gets for every campaign post: the message, the angle, the offer or call to action
+and any link from the facts. Never invent discounts, prices, customers or statistics.
+Return ONLY JSON: {"campaigns": [{"name": "short name", "goal": "awareness|leads|launch|engagement|hiring|community",
+ "starts_on": "YYYY-MM-DD", "ends_on": "YYYY-MM-DD", "boost": 30, "occasion": "occasion name or empty",
+ "brief": "3-6 sentences", "post_ideas": ["3-5 concrete post ideas"], "channels": ["linkedin", "instagram"],
+ "reason": "one sentence on why now and why it fits the company"}],
+ "notes": "one or two sentences on the overall plan"}"""
+
+
+async def suggest_campaigns(session: AsyncSession, horizon_days: int = 120) -> dict:
+    """Campaign ideas for the next few months, grounded in the company, research ideas and the occasions calendar."""
+    from datetime import date, timedelta
+
+    from app.services import occasions
+    from app.services import research as rsvc
+
+    ctx = await _context(session)
+    if len(ctx) < 80:
+        raise ValueError("Analyze your website on the Company intelligence page first, so the AI knows what you do.")
+    org_id = session.info.get("org_id")
+    org = await session.get(Organization, org_id) if org_id else None
+    today = date.today()
+    try:
+        from datetime import datetime
+
+        today = datetime.now(rsvc.org_tz(org)).date()
+    except Exception:  # noqa: BLE001
+        pass
+    end = today + timedelta(days=horizon_days)
+    row = await rsvc.get_settings_row(session, org_id) if org_id else None
+    occ_cfg = rsvc.effective_config(row)["occasions"]
+    occ = [o for o in occasions.occasions_between(today, end, rsvc.verified_dates(row))
+           if occasions.matches_settings(o, {**occ_cfg, "enabled": True})][:40]
+    existing = (await session.scalars(select(Campaign).order_by(Campaign.starts_on.desc().nullslast()).limit(20))).all()
+    parts = [ctx, f"Planning window: {today.isoformat()} to {end.isoformat()} (today is {today.strftime('%A %d %B %Y')})."]
+    if occ:
+        parts.append("Occasions in the window (date, name, tone, how to tie in):\n" + "\n".join(
+            f"- {o.date.isoformat()}{(' to ' + o.end_date.isoformat()) if o.end_date else ''}: {o.name} "
+            f"[{o.category}, {o.tone}] {o.hint}" for o in occ))
+    if existing:
+        parts.append("Existing campaigns (do not repeat):\n" + "\n".join(
+            f"- {c.name} ({c.starts_on or '?'} to {c.ends_on or '?'})" for c in existing))
+    raw = await llm_router.complete_json(session, "plan", "\n\n".join(parts)[:14000], system=CAMPAIGNS_SYSTEM,
+                                         temperature=0.6, max_tokens=3000)
+    rows = raw.get("campaigns") if isinstance(raw, dict) else raw
+    taken = {normalize_name(c.name) for c in existing}
+    out: list[dict] = []
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        name = _s(r.get("name"), 200)
+        if not name or normalize_name(name) in taken:
+            continue
+        taken.add(normalize_name(name))
+        s_on, e_on = _date(r.get("starts_on")), _date(r.get("ends_on"))
+        if s_on and s_on < today:
+            s_on = today
+        if s_on and s_on > end:
+            continue
+        if s_on and (not e_on or e_on < s_on):
+            e_on = s_on + timedelta(days=14)
+        try:
+            boost = int(round(float(r.get("boost") or 40)))
+        except (TypeError, ValueError):
+            boost = 40
+        ideas = _ls(r.get("post_ideas"), 6, 300)
+        brief = _s(r.get("brief"), 3000)
+        if ideas:
+            brief = (brief + "\nPost ideas:\n" + "\n".join(f"- {i}" for i in ideas)).strip()
+        out.append({
+            "name": name, "brief": brief[:4000] or None,
+            "starts_on": s_on.isoformat() if s_on else None, "ends_on": e_on.isoformat() if e_on else None,
+            "boost": max(10, min(100, boost)), "goal": _s(r.get("goal"), 40), "occasion": _s(r.get("occasion"), 120),
+            "channels": _ls(r.get("channels"), 6, 40), "post_ideas": ideas, "reason": _s(r.get("reason"), 400),
+        })
+        if len(out) >= 8:
+            break
+    out.sort(key=lambda c: c["starts_on"] or "9999")
+    if not out:
+        raise ValueError("The AI didn't return usable campaign ideas. Try again, or pick a different model in Task routing.")
+    return {"suggested": out, "notes": _s(raw.get("notes") if isinstance(raw, dict) else "", 600),
+            "window": {"start": today.isoformat(), "end": end.isoformat()}}
+
+
+def _date(v):
+    from datetime import date
+
+    try:
+        return date.fromisoformat(str(v)[:10]) if v else None
+    except ValueError:
+        return None

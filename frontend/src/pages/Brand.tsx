@@ -8,7 +8,7 @@ import {
 } from "../components/ui";
 import { usePillars, type Campaign, type Pillar } from "./content/shared";
 import BrandLook from "./content/BrandLook";
-import { PillarSuggest, VoiceSuggest, type VoiceValues } from "./content/BrandSuggest";
+import { CampaignSuggest, PillarSuggest, VoiceSuggest, type VoiceValues } from "./content/BrandSuggest";
 
 type Brand = {
   voice: string | null; audience: string | null; do_list: string[]; dont_list: string[]; hashtags: string[];
@@ -286,11 +286,12 @@ function Pillars({ canEdit }: { canEdit: boolean }) {
 }
 
 // ------------------------------------------------------------------ campaigns
-function CampaignForm({ existing, onClose }: { existing?: Campaign; onClose: () => void }) {
+function CampaignForm({ existing, draft, onClose }: { existing?: Campaign; draft?: Partial<Campaign>; onClose: () => void }) {
   const qc = useQueryClient();
   const [c, setC] = useState({
-    name: existing?.name ?? "", brief: existing?.brief ?? "", starts_on: existing?.starts_on ?? "", ends_on: existing?.ends_on ?? "",
-    boost: existing?.boost ?? 50, active: existing?.active ?? true,
+    name: existing?.name ?? draft?.name ?? "", brief: existing?.brief ?? draft?.brief ?? "",
+    starts_on: existing?.starts_on ?? draft?.starts_on ?? "", ends_on: existing?.ends_on ?? draft?.ends_on ?? "",
+    boost: existing?.boost ?? draft?.boost ?? 50, active: existing?.active ?? true,
   });
   const save = useMutation({
     mutationFn: () => {
@@ -328,6 +329,7 @@ function Campaigns({ canEdit }: { canEdit: boolean }) {
   const qc = useQueryClient();
   const campaigns = useQuery({ queryKey: ["campaigns"], queryFn: () => api<Campaign[]>("/content/campaigns") });
   const [editing, setEditing] = useState<Campaign | "new" | null>(null);
+  const [draft, setDraft] = useState<Partial<Campaign> | null>(null);
   const remove = useMutation({ mutationFn: (id: string) => api(`/content/campaigns/${id}`, { method: "DELETE" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["campaigns"] }) });
   const today = new Date().toISOString().slice(0, 10);
   const list = campaigns.data ?? [];
@@ -341,6 +343,7 @@ function Campaigns({ canEdit }: { canEdit: boolean }) {
   return (
     <div className="space-y-4">
       <p className="max-w-2xl text-sm text-muted">Campaigns take over a share of posting slots between their dates, for launches, festivals and events.</p>
+      {canEdit && <CampaignSuggest onEdit={(d) => { setDraft(d); setEditing("new"); }} />}
       {campaigns.error && <Alert>{(campaigns.error as Error).message}</Alert>}
       {campaigns.isLoading ? <Spinner /> : list.length === 0 ? (
         <EmptyState title="No campaigns" body="Add one when you have a launch, offer or event coming up."
@@ -358,7 +361,7 @@ function Campaigns({ canEdit }: { canEdit: boolean }) {
                       {live ? <Badge tone="brand">Running</Badge> : !c.active ? <Badge>Off</Badge> : null}
                     </div>
                     <div className="text-sm text-muted">{range(c)} · {c.boost}% of posts</div>
-                    {c.brief && <p className="mt-1 line-clamp-2 max-w-2xl text-sm">{c.brief}</p>}
+                    {c.brief && <p className="mt-1 line-clamp-2 max-w-2xl text-sm [overflow-wrap:anywhere]">{c.brief}</p>}
                   </div>
                   {canEdit && (
                     <div className="flex gap-1">
@@ -373,7 +376,8 @@ function Campaigns({ canEdit }: { canEdit: boolean }) {
         </Card>
       )}
       {canEdit && list.length > 0 && <Button variant="secondary" onClick={() => setEditing("new")}><Plus size={15} /> Add campaign</Button>}
-      {editing && <CampaignForm existing={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
+      {editing && <CampaignForm existing={editing === "new" ? undefined : editing} draft={editing === "new" ? draft ?? undefined : undefined}
+        onClose={() => { setEditing(null); setDraft(null); }} />}
     </div>
   );
 }
