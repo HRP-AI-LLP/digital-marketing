@@ -9,6 +9,7 @@ import { Badge } from "../../components/ui";
 export type PlatformMeta = {
   id: string; label: string; max_chars: number; max_hashtags: number; title_chars: number;
   post_types: string[]; max_images: number; notes: string; manual: boolean;
+  image_size?: string; video_size?: string;
 };
 export type Meta = {
   platforms: PlatformMeta[]; post_types: Record<string, string>; needs_media: string[];

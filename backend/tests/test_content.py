@@ -752,3 +752,27 @@ async def test_daily_digest_once_per_day(client, fake):
     assert await daily_digest_for(o["id"], morning + timedelta(minutes=10)) is None
     early = datetime.now(IST).replace(hour=7).astimezone(UTC) + timedelta(days=1)
     assert await daily_digest_for(o["id"], early) is None
+
+
+async def test_posts_bulk_actions(client, fake):
+    o = await new_org(client)
+    other = await new_org(client)
+    acc = await mk_account(o["id"])
+    a = await mk_post(o["id"], acc, status="in_review", text="One")
+    b = await mk_post(o["id"], acc, status="in_review", text="Two")
+    no_time = await mk_post(o["id"], acc, status="in_review", text="Three", scheduled_at=None)
+    pub = await mk_post(o["id"], acc, status="published", text="Live")
+    h = o["h"]
+    r = (await client.post("/content/posts/bulk", headers=h, json={"ids": [str(a.id), str(no_time.id)], "action": "approve"})).json()
+    assert r["ok"] == 1 and r["failed"] == 1 and "date and time" in [x for x in r["results"] if not x["ok"]][0]["message"]
+    assert (await get_post(o["id"], a.id)).status in ("scheduled", "approved")
+    r = (await client.post("/content/posts/bulk", headers=h, json={"ids": [str(b.id)], "action": "reject", "reason": "Off brand"})).json()
+    assert r["ok"] == 1 and (await get_post(o["id"], b.id)).status == "rejected"
+    r = (await client.post("/content/posts/bulk", headers=h, json={"ids": [str(no_time.id), str(pub.id)], "action": "publish"})).json()
+    assert r["ok"] == 1 and "already published" in [x for x in r["results"] if not x["ok"]][0]["message"]
+    assert (await get_post(o["id"], no_time.id)).status == "scheduled"
+    r = (await client.post("/content/posts/bulk", headers=h, json={"ids": [str(b.id), str(pub.id)], "action": "delete"})).json()
+    assert r["ok"] == 1 and (await get_post(o["id"], pub.id)) is not None
+    # another organization can't touch these posts
+    r = (await client.post("/content/posts/bulk", headers=other["h"], json={"ids": [str(a.id)], "action": "delete"})).json()
+    assert r["failed"] == 1 and (await get_post(o["id"], a.id)) is not None

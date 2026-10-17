@@ -94,7 +94,8 @@ async def generate_job(ctx: JobContext) -> dict:
                 # Approved content must not change silently: keep the assets in the library only.
                 return {"asset_ids": ids, "kind": kind, "post_id": None,
                         "note": "The post was approved meanwhile, so the new media wasn't attached."}
-            post.media_ids = [*(post.media_ids or []), *ids]
+            post.media_ids = ids if p.get("replace") else [*(post.media_ids or []), *ids]
+            post.meta = {**(post.meta or {}), "keep_media": True}
         await s.flush()
         return {"asset_ids": ids, "kind": kind, "post_id": str(post.id) if post else None}
     except media_svc.MediaUnavailable as e:

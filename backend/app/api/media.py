@@ -347,6 +347,7 @@ class GenerateIn(BaseModel):
     size: str | None = None
     post_id: uuid.UUID | None = None
     variants: int = Field(0, ge=0, le=4)  # >1: render that many layout options instead of one
+    replace: bool = False  # with post_id: replace the post's current media instead of adding to it
 
 
 @router.post("/generate", status_code=202)
@@ -369,7 +370,8 @@ async def generate(body: GenerateIn, ctx: Context = Depends(require("media.manag
     if body.variants > 1 and body.kind not in ("image", "gif", "animation"):
         raise _bad("Variants are available for images, GIFs and animations.")
     payload = {"kind": body.kind, "fields": body.fields, "platform": body.platform, "size": body.size,
-               "post_id": str(body.post_id) if body.post_id else None, "variants": body.variants if body.variants > 1 else 0}
+               "post_id": str(body.post_id) if body.post_id else None, "variants": body.variants if body.variants > 1 else 0,
+               "replace": bool(body.replace and body.post_id)}
     job = await enqueue(ctx.session, "media.generate", ctx.org_id, payload, created_by=ctx.user.id, max_attempts=1)
     await ctx.session.commit()
     return {"job_id": job.id}

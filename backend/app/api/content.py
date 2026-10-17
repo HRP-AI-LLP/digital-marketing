@@ -81,6 +81,7 @@ async def meta(ctx: Context = Depends(require("content.view"))):
         "platforms": [
             {"id": p.id, "label": p.label, "max_chars": p.max_chars, "max_hashtags": p.max_hashtags,
              "title_chars": p.title_chars, "post_types": list(p.post_types), "max_images": p.max_images,
+             "image_size": "%dx%d" % p.image_size, "video_size": "%dx%d" % p.video_size,
              "notes": p.notes, "manual": p.id in svc.MANUAL_PLATFORMS}
             for p in PLATFORMS.values()
         ],
@@ -1056,6 +1057,13 @@ async def regenerate(pid: uuid.UUID, body: RegenerateIn | None = None, ctx: Cont
 @router.post("/posts/{pid}/publish-now")
 async def publish_now(pid: uuid.UUID, ctx: Context = Depends(require("content.publish"))):
     p = await _post(ctx, pid)
+    job = await _publish_now(ctx, p)
+    await ctx.session.commit()
+    return {"message": "Publishing now.", "job_id": job.id}
+
+
+async def _publish_now(ctx: Context, p: Post):
+    """Queue a post for immediate publishing (caller commits). Raises HTTPException when it can't be."""
     if p.status in ("published", "publishing"):
         raise _bad("This post is already published or being published.", 409)
     if p.status in ("planned", "generating"):
@@ -1071,10 +1079,8 @@ async def publish_now(pid: uuid.UUID, ctx: Context = Depends(require("content.pu
     svc.add_activity(ctx.session, p, "publish_now", None, user=ctx.user)
     audit.record(ctx.session, action="post.publish_now", organization_id=ctx.org_id, actor=ctx.user, entity_type="post",
                  entity_id=p.id, summary=f"Published a {p.platform} post now", ip=ctx.ip)
-    job = await enqueue(ctx.session, "post.publish", ctx.org_id, {"post_id": str(p.id)}, dedupe_key=f"pub:{p.id}",
-                        priority=1, created_by=ctx.user.id)
-    await ctx.session.commit()
-    return {"message": "Publishing now.", "job_id": job.id}
+    return await enqueue(ctx.session, "post.publish", ctx.org_id, {"post_id": str(p.id)}, dedupe_key=f"pub:{p.id}",
+                         priority=1, created_by=ctx.user.id)
 
 
 @router.post("/posts/{pid}/mark-published")
@@ -1097,6 +1103,12 @@ async def mark_published(pid: uuid.UUID, body: MarkPublishedIn | None = None,
 @router.delete("/posts/{pid}", status_code=204)
 async def delete_post(pid: uuid.UUID, ctx: Context = Depends(require("content.create"))):
     p = await _post(ctx, pid)
+    await _delete_post(ctx, p)
+    await ctx.session.commit()
+
+
+async def _delete_post(ctx: Context, p: Post) -> None:
+    """Delete a post, or keep a skipped tombstone for a future schedule slot (caller commits)."""
     if p.status in ("published", "publishing"):
         raise _bad("Published posts can't be deleted here. Delete it on the platform.", 409)
     audit.record(ctx.session, action="post.deleted", organization_id=ctx.org_id, actor=ctx.user, entity_type="post",
@@ -1107,7 +1119,6 @@ async def delete_post(pid: uuid.UUID, ctx: Context = Depends(require("content.cr
         svc.add_activity(ctx.session, p, "deleted", "Slot skipped", user=ctx.user)
     else:
         await ctx.session.delete(p)
-    await ctx.session.commit()
 
 
 class DuplicateIn(BaseModel):
@@ -1176,6 +1187,52 @@ async def bulk(body: BulkIn, ctx: Context = Depends(require("content.approve")))
             results.append({"id": pid, "ok": True, "message": msg})
         except ValueError as e:
             results.append({"id": pid, "ok": False, "message": str(e)})
+    await ctx.session.commit()
+    return {"results": results, "ok": sum(1 for r in results if r["ok"]), "failed": sum(1 for r in results if not r["ok"])}
+
+
+class PostsBulkIn(BaseModel):
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
+    action: Literal["approve", "reject", "publish", "delete"]
+    reason: str | None = Field(None, max_length=1000)
+
+
+BULK_PERMS = {"approve": "content.approve", "reject": "content.approve", "publish": "content.publish",
+              "delete": "content.create"}
+BULK_DONE = {"approve": "Approved", "reject": "Rejected", "publish": "Publishing now", "delete": "Deleted"}
+
+
+@router.post("/posts/bulk")
+async def posts_bulk(body: PostsBulkIn, ctx: Context = Depends(require("content.view"))):
+    """Approve, reject, publish now or delete several posts at once. Each post succeeds or fails on its own."""
+    perm = BULK_PERMS[body.action]
+    if perm not in ctx.permissions:
+        raise _bad("You don't have permission to do that.", 403)
+    results = []
+    for pid in dict.fromkeys(body.ids):
+        try:
+            async with ctx.session.begin_nested():
+                p = await ctx.session.scalar(select(Post).where(Post.id == pid))
+                if p is None:
+                    raise ValueError("Post not found.")
+                if body.action == "approve":
+                    msg = await content_actions.approve_by_id(ctx.session, pid, ctx.user, "app")
+                elif body.action == "reject":
+                    msg = await content_actions.reject_by_id(ctx.session, pid, ctx.user, body.reason, "app")
+                elif body.action == "publish":
+                    await _publish_now(ctx, p)
+                    msg = BULK_DONE["publish"]
+                else:
+                    await _delete_post(ctx, p)
+                    msg = BULK_DONE["delete"]
+            results.append({"id": pid, "ok": True, "message": msg})
+        except HTTPException as e:
+            results.append({"id": pid, "ok": False, "message": str(e.detail)})
+        except ValueError as e:
+            results.append({"id": pid, "ok": False, "message": str(e)})
+    if body.action == "delete" and any(r["ok"] for r in results):
+        audit.record(ctx.session, action="post.bulk_deleted", organization_id=ctx.org_id, actor=ctx.user,
+                     summary=f"Deleted {sum(1 for r in results if r['ok'])} posts", ip=ctx.ip)
     await ctx.session.commit()
     return {"results": results, "ok": sum(1 for r in results if r["ok"]), "failed": sum(1 for r in results if not r["ok"])}
 

@@ -80,7 +80,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/40 backdrop-blur-sm p-4 pt-[10vh]" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/40 backdrop-blur-sm overflow-y-auto p-4 pt-[6vh] pb-[6vh]" onMouseDown={onClose}>
       <div
         ref={ref}
         role="dialog"

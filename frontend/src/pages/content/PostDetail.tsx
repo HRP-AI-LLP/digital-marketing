@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, Copy, Download, ExternalLink, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, Copy, Download, ExternalLink, ImagePlus, RefreshCw, Send, Trash2, X } from "lucide-react";
 import { api } from "../../api/client";
 import { useJob } from "../../api/hooks";
 import { useAuth } from "../../auth/AuthContext";
 import { Alert, Badge, Button, Field, Input, Modal, Select, Spinner, Textarea } from "../../components/ui";
 import { RejectDialog } from "../Approvals";
+import { PostMediaDialog } from "./PostMedia";
 import {
   ACTION_LABELS, CharCounter, PostPreview, PostStatus, QaPanel, Section, Warnings, caption, fmt, fromLocalInput,
   parseTags, toLocalInput, tzLabel, until, useContentAccounts, useMeta, useTz, type PostDetail as Post,
@@ -103,7 +104,7 @@ export default function PostDetail() {
   const p = q.data;
   const [d, setD] = useState<Draft | null>(null);
   const [baseline, setBaseline] = useState<string>("");
-  const [dialog, setDialog] = useState<"reject" | "dup" | "mark" | "regen" | null>(null);
+  const [dialog, setDialog] = useState<"reject" | "dup" | "mark" | "regen" | "media" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
 
@@ -112,7 +113,12 @@ export default function PostDetail() {
     const fresh = toDraft(p, tz);
     const key = JSON.stringify(fresh);
     // Only reset the editor when the server copy changed and there are no unsaved edits.
-    setD((cur) => (!cur || JSON.stringify(cur) === baseline ? fresh : cur));
+    setD((cur) => {
+      if (!cur || JSON.stringify(cur) === baseline) return fresh;
+      // Unsaved text edits: still pick up media the server attached (new designs, library picks).
+      const old = baseline ? (JSON.parse(baseline) as Draft) : null;
+      return old && JSON.stringify(cur.media_ids) === JSON.stringify(old.media_ids) ? { ...cur, media_ids: fresh.media_ids } : cur;
+    });
     setBaseline(key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p?.updated_at, p?.status, tz]);
@@ -156,6 +162,7 @@ export default function PostDetail() {
   const writing = p.status === "planned" || p.status === "generating";
   const locked = writing || p.status === "published" || p.status === "publishing";
   const canEdit = can("content.create") && !locked;
+  const mediaLocked = ["scheduled", "approved"].includes(p.status);
   const tags = parseTags(d.tags);
   const count = caption(d.text, tags).length;
   const preview = { ...p, text: d.text, title: d.title || null, hashtags: tags, link_url: d.link_url || null, media: p.media.filter((m) => d.media_ids.includes(m.id)) };
@@ -252,9 +259,16 @@ export default function PostDetail() {
                 <Textarea rows={2} value={d.first_comment} onChange={(e) => setD({ ...d, first_comment: e.target.value })} />
               </Field>
             </fieldset>
-            {p.media.length > 0 && (
+            {(p.media.length > 0 || canEdit) && (
               <div className="mt-4">
-                <div className="mb-2 text-sm font-medium">Media</div>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-medium">Media</span>
+                  {canEdit && can("media.manage") && !mediaLocked && (
+                    <Button variant="secondary" onClick={() => setDialog("media")}><ImagePlus size={15} />{p.media.length ? "Create or change media" : "Create media"}</Button>
+                  )}
+                </div>
+                {canEdit && mediaLocked && <p className="mb-2 text-xs text-muted">This post is approved, so its media is locked. Reject it to send it back for changes, then create new media.</p>}
+                {p.media.length === 0 && <p className="text-sm text-muted">No media yet.{canEdit && can("media.manage") && !mediaLocked ? " Create a branded design, an AI image, a 3D scene or pick from the library." : ""}</p>}
                 <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   {p.media.map((m) => {
                     const on = d.media_ids.includes(m.id);
@@ -340,6 +354,7 @@ export default function PostDetail() {
       {dialog === "reject" && <RejectDialog count={1} onClose={() => setDialog(null)} onReject={(r) => reject.mutate(r)} busy={reject.isPending} error={reject.error as Error | null} />}
       {dialog === "dup" && <DuplicateDialog post={p} onClose={() => setDialog(null)} />}
       {dialog === "mark" && <MarkPublishedDialog post={p} onClose={() => setDialog(null)} />}
+      {dialog === "media" && <PostMediaDialog post={p} onClose={() => setDialog(null)} onAttached={(m) => { setNotice(m); refresh(); }} />}
       {dialog === "regen" && <RegenerateDialog onClose={() => setDialog(null)} onGo={(n) => regen.mutate(n)} busy={regen.isPending} />}
     </div>
   );
