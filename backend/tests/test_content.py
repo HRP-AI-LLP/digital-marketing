@@ -776,3 +776,17 @@ async def test_posts_bulk_actions(client, fake):
     # another organization can't touch these posts
     r = (await client.post("/content/posts/bulk", headers=other["h"], json={"ids": [str(a.id)], "action": "delete"})).json()
     assert r["failed"] == 1 and (await get_post(o["id"], a.id)) is not None
+
+
+async def test_generated_text_has_no_markdown():
+    from app.services.content import normalize_draft, plain
+
+    assert plain("At **HRP AI LLP**, we *really* help. Visit **[hrpai.in](https://hrpai.in)**.") == \
+        "At HRP AI LLP, we really help. Visit https://hrpai.in."
+    assert plain("See [our products](https://hrpai.in/products)") == "See our products (https://hrpai.in/products)"
+    assert plain("snake_case_names, 5 * 3 = 15, #HRTech") == "snake_case_names, 5 * 3 = 15, #HRTech"
+    assert plain("## Big news\n`x`") == "Big news\nx"
+    d = normalize_draft({"text": "**Hi** there", "slides": [{"heading": "**Clear** pay", "body": "Built for **teams**"}]},
+                        "instagram", "carousel")
+    assert d["text"] == "Hi there"
+    assert d["slides"][0] == {"heading": "*Clear* pay", "body": "Built for *teams*"}  # template accent kept

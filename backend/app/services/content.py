@@ -417,6 +417,35 @@ def _str(v: Any, limit: int = 20000) -> str | None:
     return s[:limit] or None
 
 
+_MD_LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
+_MD_BOLD = re.compile(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1", re.S)
+_MD_ITALIC = re.compile(r"(?<![\w*])([*_])(?=\S)([^*_\n]+?)(?<=\S)\1(?![\w*])")
+_MD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(?=\S)", re.M)
+_MD_CODE = re.compile(r"`([^`\n]+)`")
+
+
+def plain(text: str | None, accent: bool = False) -> str | None:
+    """Social networks show text as typed, so remove markdown the model adds (**bold**, *italic*, [a](url),
+    headings, `code`). Hashtags and emojis are kept. With accent=True (slide and video text), bold becomes the
+    templates' *accent* highlight instead of being dropped."""
+    if not text:
+        return text
+
+    def link(m: re.Match) -> str:
+        label, url = m.group(1).strip(), m.group(2)
+        bare = lambda u: re.sub(r"^https?://(www\.)?", "", u).rstrip("/")  # noqa: E731
+        return url if bare(label) == bare(url) else f"{label} ({url})"
+
+    t = _MD_LINK.sub(link, text)
+    if accent:
+        return _MD_HEADING.sub("", _MD_CODE.sub(r"\1", _MD_BOLD.sub(r"*\2*", t)))
+    t = _MD_BOLD.sub(r"\2", t)
+    t = _MD_ITALIC.sub(r"\2", t)
+    t = _MD_CODE.sub(r"\1", t)
+    t = _MD_HEADING.sub("", t)
+    return t
+
+
 def normalize_draft(raw: Any, platform: str, post_type: str) -> dict:
     """Coerce model output into the draft shape. Raises ValueError when there is no usable text."""
     if isinstance(raw, list) and raw and isinstance(raw[0], dict):
@@ -424,7 +453,7 @@ def normalize_draft(raw: Any, platform: str, post_type: str) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("The AI model did not return a post in the expected format.")
     p = platform_of(platform)
-    text = _str(raw.get("text") or raw.get("body") or raw.get("caption") or raw.get("post")) or ""
+    text = plain(_str(raw.get("text") or raw.get("body") or raw.get("caption") or raw.get("post"))) or ""
     tags_raw = raw.get("hashtags") or []
     if isinstance(tags_raw, str):
         tags_raw = re.split(r"[\s,]+", tags_raw)
@@ -448,8 +477,8 @@ def normalize_draft(raw: Any, platform: str, post_type: str) -> dict:
 
     draft: dict[str, Any] = {
         "text": text, "hashtags": hashtags,
-        "title": _str(raw.get("title"), 300) if p.title_chars else None,
-        "first_comment": _str(raw.get("first_comment"), 2000),
+        "title": plain(_str(raw.get("title"), 300)) if p.title_chars else None,
+        "first_comment": plain(_str(raw.get("first_comment"), 2000)),
         "image_brief": _str(raw.get("image_brief"), 2000),
         "alt_text": _str(raw.get("alt_text"), 1000),
     }
@@ -457,11 +486,11 @@ def normalize_draft(raw: Any, platform: str, post_type: str) -> dict:
         slides = []
         for s in raw.get("slides") or []:
             if isinstance(s, dict):
-                h, b = _str(s.get("heading"), 200), _str(s.get("body"), 600)
+                h, b = plain(_str(s.get("heading"), 200), True), plain(_str(s.get("body"), 600), True)
                 if h or b:
                     slides.append({"heading": h or "", "body": b or ""})
             elif isinstance(s, str) and s.strip():
-                slides.append({"heading": s.strip()[:200], "body": ""})
+                slides.append({"heading": plain(s.strip()[:200], True), "body": ""})
         draft["slides"] = slides[:10]
     if post_type in VISUAL_TYPES:
         vis = _visual(raw.get("visual"))
@@ -471,7 +500,7 @@ def normalize_draft(raw: Any, platform: str, post_type: str) -> dict:
         script = []
         for s in raw.get("video_script") or raw.get("scenes") or []:
             if isinstance(s, dict):
-                c, v = _str(s.get("caption"), 200), _str(s.get("voiceover"), 600)
+                c, v = plain(_str(s.get("caption"), 200), True), plain(_str(s.get("voiceover"), 600))
                 if c or v:
                     script.append({"caption": c or "", "voiceover": v or ""})
         draft["video_script"] = script[:12]
@@ -484,7 +513,9 @@ def build_system_prompt(brand: BrandProfile, platform: str, post_type: str, cfg:
     parts = [
         "You write social media posts for a company. Write in the company's own voice and only state facts "
         "supported by the company facts and knowledge below. Never invent statistics, quotes, prices or client names: "
-        "mention a client only if its name appears in the company facts.",
+        "mention a client only if its name appears in the company facts. No percentages or numbers unless they "
+        "appear in the facts. Write plain text: no markdown (no **bold**, *italics*, # headings or [text](link)); "
+        "write links as plain URLs.",
         f"Platform: {p.label}. Style: {p.style or 'clear and professional'}",
         f"Format: {POST_TYPES.get(post_type, post_type)}.",
         f"Hard limits: the text plus hashtags must fit in {p.max_chars} characters; at most {p.max_hashtags} hashtags."
