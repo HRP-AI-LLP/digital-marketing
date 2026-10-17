@@ -32,7 +32,8 @@ IG_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_i
 REPLY_SCOPES = ["pages_manage_engagement"]
 IG_REPLY_SCOPES = ["instagram_manage_comments"]
 PAGE_FIELDS = "id,name,access_token,link,username,picture{url}"
-IG_FIELD = ",instagram_business_account{id,username,name,profile_picture_url}"
+IG_FIELD = (",instagram_business_account{id,username,name,profile_picture_url}"
+            ",connected_instagram_account{id,username}")
 
 
 def scopes(options: dict | None) -> list[str]:
@@ -105,6 +106,7 @@ async def complete(session, org_id, user_id, creds: dict, redirect_uri: str, cod
     if not pages:
         raise PublishError("No Facebook pages were shared. Connect again and tick the pages you manage.")
     accounts: list[SocialAccount] = []
+    found_ig = False
     for p in pages:
         if not p.get("access_token"):
             continue
@@ -117,6 +119,7 @@ async def complete(session, org_id, user_id, creds: dict, redirect_uri: str, cod
         ))
         ig = p.get("instagram_business_account")
         if ig and ig.get("id"):
+            found_ig = True
             accounts.append(await common.upsert_account(
                 session, org_id, user_id, "instagram", str(ig["id"]),
                 name=ig.get("name") or ig.get("username") or "Instagram", handle=ig.get("username"),
@@ -125,7 +128,40 @@ async def complete(session, org_id, user_id, creds: dict, redirect_uri: str, cod
                 tokens={**tokens, "page_id": str(p["id"])}, expires_at=None,
                 settings={"page_id": str(p["id"])},
             ))
+    if with_ig and not found_ig:
+        session.info["connect_warning"] = await instagram_diagnosis(user_token, pages)
     return accounts
+
+
+async def instagram_diagnosis(user_token: str, pages: list[dict]) -> str:
+    """Why no Instagram account came back: permissions not granted, not in the app, or no linked IG account."""
+    try:
+        async with net.client() as c:
+            d = check(await c.get(f"{GRAPH}/me/permissions", params={"access_token": user_token}), "Checking permissions")
+        perms = {x.get("permission"): x.get("status") for x in d.get("data") or []}
+    except Exception:  # noqa: BLE001 - the diagnosis must never break the sign-in
+        perms = {}
+    names = ", ".join(p.get("name") or str(p.get("id")) for p in pages)
+    declined = [x for x in IG_SCOPES if perms.get(x) == "declined"]
+    missing = [x for x in IG_SCOPES if x not in perms]
+    if declined:
+        return ("Facebook is connected, but Instagram wasn't: the Instagram permissions were turned off in Facebook's "
+                f"window ({', '.join(declined)}). Press Add Instagram again; when Facebook asks, choose Edit access, "
+                "tick your Instagram account and keep every permission switched on.")
+    if missing and perms:
+        return ("Facebook is connected, but Meta didn't grant the Instagram permissions "
+                f"({', '.join(missing)}). In developers.facebook.com, open your app → Use cases, and make sure the "
+                "Instagram use case (manage content on Instagram with Facebook Login) has instagram_basic, "
+                "instagram_content_publish and instagram_manage_insights added. Then press Add Instagram again.")
+    linked = [p for p in pages if p.get("connected_instagram_account")]
+    if linked:
+        return ("Facebook is connected, and the Page has an Instagram account, but Meta didn't share it with this app. "
+                "Press Add Instagram again and, in Facebook's window, choose Edit access and tick the Instagram account "
+                "as well as the Page. The Instagram account must be a Business or Creator account.")
+    return (f"Facebook is connected, but none of the shared Pages ({names}) has an Instagram professional account "
+            "linked. In the Instagram app: Settings → Account type and tools → switch to a Business or Creator account, "
+            "then link it to the Facebook Page (Facebook Page → Settings → Linked accounts → Instagram). In Facebook's "
+            "window, also tick the Page that is linked to Instagram. Then press Add Instagram again.")
 
 
 async def refresh(session, account: SocialAccount) -> None:

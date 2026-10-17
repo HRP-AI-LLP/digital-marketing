@@ -8,7 +8,7 @@ import sys
 import types
 import uuid
 from datetime import UTC, datetime, timedelta
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote_plus, urlsplit
 
 import httpx
 import pytest
@@ -274,6 +274,28 @@ async def test_meta_callback_creates_page_and_instagram_accounts(client, hrp, mo
     # The state is single-use.
     r = await client.get(f"/social/oauth/meta/callback?code=the-code&state={state}")
     assert "error=" in r.headers["location"]
+
+
+async def test_meta_callback_explains_missing_instagram(client, hrp, mock):
+    def token(req):
+        if query(req).get("grant_type") == "fb_exchange_token":
+            return httpx.Response(200, json={"access_token": "long-user-tok", "expires_in": 5184000})
+        return httpx.Response(200, json={"access_token": "short-tok"})
+
+    mock.on("GET", r"/oauth/access_token$", token)
+    mock.on("GET", r"/me/accounts$", (200, {"data": [{"id": "111", "name": "HRP AI", "access_token": "page-tok"}]}))
+    for perms, expect in (
+        ([{"permission": "instagram_basic", "status": "declined"}, {"permission": "pages_show_list", "status": "granted"}],
+         "turned off"),
+        ([{"permission": "pages_show_list", "status": "granted"}], "Use cases"),
+        ([{"permission": p, "status": "granted"} for p in ("instagram_basic", "instagram_content_publish",
+                                                          "instagram_manage_insights")], "Business or Creator"),
+    ):
+        mock.on("GET", r"/me/permissions$", (200, {"data": perms}))
+        _, state = await start_oauth(client, hrp, "meta", {"include_instagram": True})
+        r = await client.get(f"/social/oauth/meta/callback?code=the-code&state={state}")
+        loc = unquote_plus(r.headers["location"])
+        assert "connected=meta" in loc and "warning=" in loc and expect in loc, loc
 
 
 async def test_linkedin_callback_creates_person_and_company_page(client, hrp, mock):

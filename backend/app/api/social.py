@@ -269,7 +269,8 @@ async def oauth_callback(provider: str, code: str | None = None, state: str | No
                      + (", ".join(a.name for a in accounts)[:400] or "no accounts"),
                      details={"provider": provider, "accounts": [str(a.id) for a in accounts]})
         await s.commit()
-    return _back(connected=provider, count=str(len(visible)))
+        warning = s.info.pop("connect_warning", None)
+    return _back(connected=provider, count=str(len(visible)), warning=warning)
 
 
 # ------------------------------------------------------------------ non-OAuth accounts

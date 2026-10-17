@@ -593,14 +593,16 @@ export default function SocialAccounts() {
   const accounts = useAccounts();
   const info = useQuery({ queryKey: ["social-platforms"], queryFn: () => api<PlatformsInfo>("/social/platforms") });
   const [params, setParams] = useSearchParams();
-  const [banner, setBanner] = useState<{ tone: "info" | "danger"; text: string } | null>(null);
+  const [banner, setBanner] = useState<{ tone: "info" | "danger" | "warn"; text: string } | null>(null);
   const qc = useQueryClient();
 
   useEffect(() => {
     const connected = params.get("connected");
     const error = params.get("error");
     if (!connected && !error) return;
+    const warning = params.get("warning");
     if (error) setBanner({ tone: "danger", text: error });
+    else if (warning) { setBanner({ tone: "warn", text: warning }); qc.invalidateQueries({ queryKey: KEY }); }
     else {
       const n = Number(params.get("count") ?? "0");
       const label = { meta: "Facebook and Instagram", threads: "Threads", linkedin: "LinkedIn", pinterest: "Pinterest", google: "Google" }[connected!] ?? connected;
