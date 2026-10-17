@@ -14,5 +14,3 @@ storage/*
 !storage/.gitkeep
 # tools downloaded by start.ps1 (cloudflared)
 tools/
-frontend/dist/
-backend/.pytest_cache/
