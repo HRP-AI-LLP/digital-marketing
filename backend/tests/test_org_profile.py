@@ -64,3 +64,14 @@ async def test_org_logo_upload(client, a):
     assert bad.status_code == 400
     r = await client.delete("/organization/logo?variant=dark", headers=h)
     assert r.json()["logo_dark_asset_id"] is None and r.json()["logo_asset_id"]
+
+
+async def test_logs_hide_secrets():
+    from app.core.logsafe import redact
+
+    line = ("GET https://graph.facebook.com/v21.0/oauth/access_token?client_id=110&client_secret=abc123"
+            "&redirect_uri=https%3A%2F%2Fx&code=AQJr5&fb_exchange_token=EAA9 Authorization: Bearer sk-live-1")
+    out = redact(line)
+    for secret in ("abc123", "AQJr5", "EAA9", "sk-live-1"):
+        assert secret not in out
+    assert "client_id=110" in out

@@ -20,6 +20,9 @@ from app.modules import load_all
 from app.services.tenancy import bootstrap
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+from app.core import logsafe  # noqa: E402
+
+logsafe.install()
 API_PREFIX = "/api/v1"  # versioned for the web app and the future Android / iOS apps
 
 

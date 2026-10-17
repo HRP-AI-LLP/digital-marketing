@@ -10,6 +10,9 @@ from app.modules import load_all
 from app.services.jobs import Worker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+from app.core import logsafe  # noqa: E402
+
+logsafe.install()
 
 
 async def main() -> None:
