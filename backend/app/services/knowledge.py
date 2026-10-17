@@ -291,6 +291,15 @@ async def company_context(session: AsyncSession, max_chars: int = 3500) -> str:
     lines: list[str] = []
     if org is not None:
         lines.append(f"Company: {org.name}" + (f" ({org.website})" if org.website else ""))
+        if org.tagline:
+            lines.append(f"Tagline: {_short(org.tagline, 200)}")
+        if org.description and not (profile is not None and profile.summary):
+            lines.append(f"About: {_short(org.description, 700)}")
+        place = ", ".join(x for x in ((org.address or {}).get("city"), (org.address or {}).get("state"), org.country) if x)
+        facts = [x for x in (org.industry and f"industry {org.industry}", org.company_size and f"{org.company_size} employees",
+                             org.founded_year and f"founded {org.founded_year}", place and f"based in {place}") if x]
+        if facts:
+            lines.append("Company facts: " + "; ".join(facts))
     if profile is not None:
         if profile.summary:
             lines.append(f"Summary: {_short(profile.summary, 700)}")

@@ -18,6 +18,23 @@ class Organization(IdMixin, TimestampMixin, Base):
     website: Mapped[str | None] = mapped_column(String(300))
     status: Mapped[str] = mapped_column(String(20), default="active")  # active | suspended
     plan: Mapped[str] = mapped_column(String(40), default="internal")
+    # Profile shown in Settings -> Organization and used in reports, emails and AI prompts.
+    legal_name: Mapped[str | None] = mapped_column(String(200))
+    tagline: Mapped[str | None] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    industry: Mapped[str | None] = mapped_column(String(120))
+    company_size: Mapped[str | None] = mapped_column(String(40))
+    founded_year: Mapped[int | None] = mapped_column(Integer)
+    email: Mapped[str | None] = mapped_column(String(254))
+    phone: Mapped[str | None] = mapped_column(String(40))
+    country: Mapped[str | None] = mapped_column(String(80))
+    currency: Mapped[str] = mapped_column(String(3), default="INR", server_default="INR")
+    address: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")  # line1, line2, city, state, postal_code
+    registration: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")  # gstin, cin, pan, other
+    social_links: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    contacts: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")  # [{name, role, email, phone}]
+    logo_asset_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    logo_dark_asset_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)  # version for dark backgrounds
 
 
 class User(IdMixin, TimestampMixin, Base):

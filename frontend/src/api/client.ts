@@ -7,7 +7,13 @@ const REFRESH_KEY = "dm.refresh";
 export type Organization = {
   id: string; name: string; slug: string; timezone: string; website: string | null;
   status: string; plan: string; created_at: string;
+  legal_name?: string | null; tagline?: string | null; description?: string | null; industry?: string | null;
+  company_size?: string | null; founded_year?: number | null; email?: string | null; phone?: string | null;
+  country?: string | null; currency?: string; address?: Record<string, string>; registration?: Record<string, string>;
+  social_links?: Record<string, string>; contacts?: OrgContact[];
+  logo_asset_id?: string | null; logo_dark_asset_id?: string | null; logo_url?: string | null; logo_dark_url?: string | null;
 };
+export type OrgContact = { name: string; role?: string | null; email?: string | null; phone?: string | null };
 export type Membership = { organization_id: string; organization_name: string; organization_slug: string; roles: string[] };
 export type SessionUser = { id: string; email: string; full_name: string; is_platform_admin: boolean; must_change_password: boolean };
 export type Session = { user: SessionUser; organization: Organization | null; permissions: string[]; memberships: Membership[] };

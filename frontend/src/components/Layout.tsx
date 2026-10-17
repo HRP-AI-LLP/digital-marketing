@@ -69,9 +69,15 @@ function OrgSwitcher() {
         aria-expanded={open}
         className="w-full flex items-center gap-2.5 rounded-md px-2 py-2 text-left hover:bg-white/10 disabled:hover:bg-transparent"
       >
-        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-blue-700 to-cyan-500 font-bold text-white">
-          {(session.organization?.name ?? "P").slice(0, 1)}
-        </span>
+        {session.organization?.logo_dark_url || session.organization?.logo_url ? (
+          <span className={`grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-lg ${session.organization.logo_dark_url ? "" : "bg-white"}`}>
+            <img src={session.organization.logo_dark_url || session.organization.logo_url || ""} alt="" className="h-full w-full object-contain p-0.5" />
+          </span>
+        ) : (
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-blue-700 to-cyan-500 font-bold text-white">
+            {(session.organization?.name ?? "P").slice(0, 1)}
+          </span>
+        )}
         <span className="min-w-0 flex-1">
           <span className="block truncate font-semibold text-white">{session.organization?.name ?? "Platform"}</span>
           <span className="block truncate text-xs text-white/60">
