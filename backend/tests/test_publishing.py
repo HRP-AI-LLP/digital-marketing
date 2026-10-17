@@ -289,13 +289,26 @@ async def test_meta_callback_explains_missing_instagram(client, hrp, mock):
          "turned off"),
         ([{"permission": "pages_show_list", "status": "granted"}], "Use cases"),
         ([{"permission": p, "status": "granted"} for p in ("instagram_basic", "instagram_content_publish",
-                                                          "instagram_manage_insights")], "Business or Creator"),
+                                                          "instagram_manage_insights")], "Choose the Instagram accounts"),
     ):
         mock.on("GET", r"/me/permissions$", (200, {"data": perms}))
         _, state = await start_oauth(client, hrp, "meta", {"include_instagram": True})
         r = await client.get(f"/social/oauth/meta/callback?code=the-code&state={state}")
         loc = unquote_plus(r.headers["location"])
         assert "connected=meta" in loc and "warning=" in loc and expect in loc, loc
+
+    # Facebook Login for Business: the Instagram account is granted on its own, so the Page field stays empty.
+    mock.on("GET", r"/debug_token$", (200, {"data": {"granular_scopes": [
+        {"scope": "instagram_basic", "target_ids": ["17899"]}, {"scope": "pages_show_list", "target_ids": ["111"]}]}}))
+    mock.on("GET", r"/17899$", (200, {"id": "17899", "username": "hrp.ai", "name": "HRP AI"}))
+    mock.on("GET", r"/111$", (200, {"id": "111", "instagram_business_account": {"id": "17899"}}))
+    _, state = await start_oauth(client, hrp, "meta", {"include_instagram": True})
+    r = await client.get(f"/social/oauth/meta/callback?code=the-code&state={state}")
+    loc = unquote_plus(r.headers["location"])
+    assert "warning=" not in loc and "count=2" in loc, loc
+    accounts = (await client.get("/social/accounts", headers=auth(hrp))).json()
+    ig = next(a for a in accounts if a["platform"] == "instagram" and a["handle"] == "hrp.ai")
+    assert ig["status"] == "connected"
 
 
 async def test_linkedin_callback_creates_person_and_company_page(client, hrp, mock):

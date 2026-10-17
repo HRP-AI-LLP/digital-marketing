@@ -129,11 +129,70 @@ async def complete(session, org_id, user_id, creds: dict, redirect_uri: str, cod
                 settings={"page_id": str(p["id"])},
             ))
     if with_ig and not found_ig:
-        session.info["connect_warning"] = await instagram_diagnosis(user_token, pages)
+        # Facebook Login for Business shares Instagram accounts one by one; when it does, the Page field can stay
+        # empty. Ask Meta which Instagram accounts this sign-in was granted and add them directly.
+        granted = await _granted_instagram_ids(creds, user_token)
+        valid_pages = [p for p in pages if p.get("access_token")]
+        for ig_id in granted:
+            try:
+                async with net.client() as c:
+                    ig = check(await c.get(f"{GRAPH}/{ig_id}", params={
+                        "fields": "id,username,name,profile_picture_url", "access_token": user_token}), "Instagram account")
+            except PublishError:
+                continue
+            page = await _page_for_instagram(ig_id, valid_pages) or (valid_pages[0] if len(valid_pages) == 1 else None)
+            if page is None:
+                continue
+            tokens = {"access_token": page["access_token"], "user_token": user_token, "page_id": str(page["id"]),
+                      "user_token_expires_at": user_expires.isoformat() if user_expires else None}
+            accounts.append(await common.upsert_account(
+                session, org_id, user_id, "instagram", str(ig["id"]),
+                name=ig.get("name") or ig.get("username") or "Instagram", handle=ig.get("username"),
+                avatar_url=ig.get("profile_picture_url"),
+                profile_url=f"https://www.instagram.com/{ig['username']}/" if ig.get("username") else None,
+                tokens=tokens, expires_at=None, settings={"page_id": str(page["id"])},
+            ))
+            found_ig = True
+        if not found_ig:
+            session.info["connect_warning"] = await instagram_diagnosis(user_token, pages, granted_checked=True,
+                                                                        granted=granted)
     return accounts
 
 
-async def instagram_diagnosis(user_token: str, pages: list[dict]) -> str:
+async def _granted_instagram_ids(creds: dict, user_token: str) -> list[str]:
+    """Instagram account ids this sign-in was granted (debug_token granular scopes)."""
+    try:
+        async with net.client() as c:
+            d = check(await c.get(f"{GRAPH}/debug_token", params={
+                "input_token": user_token, "access_token": f"{creds['client_id']}|{creds['client_secret']}"}),
+                "Checking the sign-in")
+    except Exception:  # noqa: BLE001
+        return []
+    ids: list[str] = []
+    for g in (d.get("data") or {}).get("granular_scopes") or []:
+        if g.get("scope") in ("instagram_basic", "instagram_content_publish"):
+            for t in g.get("target_ids") or []:
+                if str(t) not in ids:
+                    ids.append(str(t))
+    return ids
+
+
+async def _page_for_instagram(ig_id: str, pages: list[dict]) -> dict | None:
+    """The shared Page whose linked Instagram account is ig_id (asked with each Page's own token)."""
+    for p in pages:
+        try:
+            async with net.client() as c:
+                d = check(await c.get(f"{GRAPH}/{p['id']}", params={
+                    "fields": "instagram_business_account{id}", "access_token": p["access_token"]}), "Facebook page")
+        except PublishError:
+            continue
+        if str((d.get("instagram_business_account") or {}).get("id")) == ig_id:
+            return p
+    return None
+
+
+async def instagram_diagnosis(user_token: str, pages: list[dict], granted_checked: bool = False,
+                              granted: list[str] | None = None) -> str:
     """Why no Instagram account came back: permissions not granted, not in the app, or no linked IG account."""
     try:
         async with net.client() as c:
@@ -153,6 +212,12 @@ async def instagram_diagnosis(user_token: str, pages: list[dict]) -> str:
                 f"({', '.join(missing)}). In developers.facebook.com, open your app → Use cases, and make sure the "
                 "Instagram use case (manage content on Instagram with Facebook Login) has instagram_basic, "
                 "instagram_content_publish and instagram_manage_insights added. Then press Add Instagram again.")
+    if granted_checked and not granted:
+        return ("Facebook is connected, but no Instagram account was shared with the app in Facebook's window. "
+                "Press Add Instagram again. In Facebook's window choose Edit access (or Edit previous settings), and on "
+                "the 'Choose the Instagram accounts' step tick your Instagram account, not only the Page. If that step "
+                "doesn't appear, remove HRP Digital Marketing in Facebook → Settings → Business integrations and connect "
+                "again so Facebook asks from scratch.")
     linked = [p for p in pages if p.get("connected_instagram_account")]
     if linked:
         return ("Facebook is connected, and the Page has an Instagram account, but Meta didn't share it with this app. "
