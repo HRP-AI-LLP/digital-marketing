@@ -92,7 +92,7 @@ export default function Dashboard() {
             <div className="mt-6 flex items-start gap-3 rounded-xl border border-danger/20 bg-danger-tint px-4 py-3 text-sm text-danger">
               <AlertTriangle size={18} className="mt-0.5 shrink-0" />
               <div>
-                {d.counts.failed > 0 && <div>{d.counts.failed} post(s) failed or were missed in the last two weeks. <Link className="underline" to="/posts?status=failed">Review them</Link>.</div>}
+                {d.counts.failed > 0 && <div>{d.counts.failed} post(s) failed to publish in the last two weeks. <Link className="underline" to="/posts?status=failed">Review them</Link>.</div>}
                 {d.accounts.filter((a) => a.status === "expired").map((a) => <div key={a.id}>{a.name} needs reconnecting. <Link className="underline" to="/settings/accounts">Reconnect</Link>.</div>)}
                 {d.failing_jobs > 0 && <div>{d.failing_jobs} background task(s) failed recently. Details are in the notifications.</div>}
               </div>

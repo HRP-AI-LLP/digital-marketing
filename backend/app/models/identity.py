@@ -35,6 +35,8 @@ class Organization(IdMixin, TimestampMixin, Base):
     contacts: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")  # [{name, role, email, phone}]
     logo_asset_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     logo_dark_asset_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)  # version for dark backgrounds
+    # Catching up after downtime: {catch_up_max_hours, catch_up_gap_minutes, wake_for_posts}
+    publishing: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
 
 
 class User(IdMixin, TimestampMixin, Base):

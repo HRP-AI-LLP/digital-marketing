@@ -12,10 +12,9 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Post, Schedule
+from app.models import Post
 from app.services import audit
 from app.services.content import (
-    DEFAULT_GRACE_HOURS,
     add_activity,
     as_uuid,
     now_utc,
@@ -39,14 +38,6 @@ async def _load(session: AsyncSession, post_id: str | uuid.UUID) -> Post:
 def _actor(user, via: str) -> str:
     email = getattr(user, "email", None) or "someone"
     return email if via == "app" else f"{email} via {via}"
-
-
-async def _grace(session: AsyncSession, post: Post) -> int:
-    if post.schedule_id:
-        s = await session.get(Schedule, post.schedule_id)
-        if s and s.catch_up_grace_hours is not None:
-            return s.catch_up_grace_hours
-    return DEFAULT_GRACE_HOURS
 
 
 async def approve_by_id(session: AsyncSession, post_id: str | uuid.UUID, user, via: str = "app",
@@ -73,13 +64,10 @@ async def approve_by_id(session: AsyncSession, post_id: str | uuid.UUID, user, v
     if post.scheduled_at is None:
         raise ValueError("Pick a date and time for this post first, then approve it.")
     if post.scheduled_at <= now:
-        grace = await _grace(session, post)
-        if now - post.scheduled_at > timedelta(hours=grace):
-            raise ValueError(
-                f"Its posting time passed more than {grace} h ago. Pick a new time, then approve it."
-            )
+        # Late (the app was off, or it waited for approval): it goes out now, gently spaced per account.
         post.scheduled_at = now + timedelta(minutes=1)
-        note = " It was late, so it will go out in about a minute."
+        note = " Its time has passed, so it will go out in about a minute."
+    post.meta = {k: v for k, v in (post.meta or {}).items() if k not in ("held_reason", "overdue_reminded", "catch_up_at")}
 
     post.status = "scheduled"
     post.error = None

@@ -3,7 +3,8 @@ import { useMutation } from "@tanstack/react-query";
 import { Building2, ImagePlus, Plus, Trash2, Upload } from "lucide-react";
 import { api, refreshSession, type OrgContact, type Organization } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { Alert, Button, Card, Field, Input, PageHeader, Select, Spinner, Textarea } from "../components/ui";
+import { Alert, Button, Card, Field, Input, PageHeader, Select, Spinner, Textarea, Toggle } from "../components/ui";
+import { useSystemStatus } from "../components/SystemBanner";
 
 export const TIMEZONES = [
   "Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Asia/Tokyo", "Europe/London", "Europe/Berlin",
@@ -84,6 +85,47 @@ function LogoSlot({ label, hint, url, dark, editable, busy, onUpload, onRemove }
   );
 }
 
+/** How the studio behaves when the laptop was off, asleep or offline at a post's time. Saves on change. */
+function CatchUpSettings({ editable }: { editable: boolean }) {
+  const st = useSystemStatus();
+  const [gap, setGap] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (json: { catch_up_gap_minutes?: number; wake_for_posts?: boolean }) =>
+      api("/organization/publishing", { method: "PATCH", json }),
+    onSuccess: () => st.refetch(),
+  });
+  const cfg = st.data?.settings;
+  if (!cfg) return null;
+  const gapValue = gap ?? String(cfg.catch_up_gap_minutes);
+  const commitGap = () => {
+    const n = Math.max(0, Math.min(240, Number(gapValue) || 0));
+    setGap(null);
+    if (n !== cfg.catch_up_gap_minutes) save.mutate({ catch_up_gap_minutes: n });
+  };
+  const wakeAt = st.data?.wake_at;
+  return (
+    <Section title="When the laptop was off, asleep or offline"
+      description="Nothing is dropped. Posts whose time passed while the app couldn't run go out as soon as it's back: oldest first, one at a time per account, and you get one summary of what's going out when. Festival greetings whose day has passed wait for you instead of posting late on their own.">
+      <div className="space-y-4">
+        {save.error && <Alert>{(save.error as Error).message}</Alert>}
+        <Field label="Space late posts on the same account (minutes)" hint="0 posts them all at once. 20 is a gentle default.">
+          <Input type="number" min={0} max={240} className="w-32" value={gapValue} disabled={!editable || save.isPending}
+            onChange={(e) => setGap(e.target.value)} onBlur={commitGap} onKeyDown={(e) => e.key === "Enter" && commitGap()} />
+        </Field>
+        <div>
+          <Toggle checked={cfg.wake_for_posts} disabled={!editable || save.isPending}
+            onChange={(v) => save.mutate({ wake_for_posts: v })} label="Wake this laptop from sleep or hibernation for scheduled posts" />
+          <p className="mt-1 text-xs text-muted">
+            Windows only. The laptop wakes about 3 minutes before the next post, posts it, then can sleep again. It
+            can't wake a laptop that is shut down. Keep it plugged in: most laptops ignore wake timers on battery.
+            {cfg.wake_for_posts && wakeAt ? ` Next wake-up: ${new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(wakeAt))}.` : ""}
+          </p>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 export default function OrganizationSettings() {
   const { session, can } = useAuth();
   const org = session?.organization;
@@ -148,6 +190,8 @@ export default function OrganizationSettings() {
               onUpload={(file) => logo.mutate({ variant: "dark", file })} onRemove={() => logo.mutate({ variant: "dark", file: null })} />
           </div>
         </Section>
+
+        {can("content.view") && <CatchUpSettings editable={editable} />}
 
         <form className="space-y-5" onSubmit={(e: FormEvent) => { e.preventDefault(); setNotice(null); save.mutate(); }}>
           <fieldset disabled={!editable} className="space-y-5">

@@ -8,6 +8,7 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import NotificationBell from "./NotificationBell";
 import InboxBadge from "./InboxBadge";
+import SystemBanner from "./SystemBanner";
 
 type Item = { to: string; label: string; icon: typeof Gauge; perm?: string; soon?: boolean; badge?: "inbox" };
 type Group = { label: string; items: Item[]; platformOnly?: boolean };
@@ -200,6 +201,7 @@ export default function Layout() {
         </div>
         <main className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-[1120px] px-4 py-8 sm:px-8">
+            <SystemBanner />
             <Outlet />
           </div>
         </main>

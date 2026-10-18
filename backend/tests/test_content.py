@@ -190,6 +190,12 @@ async def scalar(org_id, q):
         return await s.scalar(q)
 
 
+async def scalars(org_id, q):
+    async with SessionLocal() as s:
+        set_tenant(s, org_id)
+        return list((await s.scalars(q)).all())
+
+
 async def generate(org_id, pid):
     return await run_inline("post.generate", org_id, {"post_id": str(pid)})
 
@@ -478,22 +484,27 @@ async def test_window_promotion_dispatch_and_catch_up(client, fake):
     unapproved = await mk_post(o["id"], acc, status="in_review", mode="approve_first", text="u",
                                scheduled_at=now - timedelta(minutes=30))
     result = await scheduler.run_org(o["id"])
-    assert result["promoted"] == 1 and result["queued"] == 1 and result["missed"] == 2
+    # Nothing is ever dropped: both late posts are queued, spaced per account; the unapproved one waits.
+    assert result["promoted"] == 1 and result["queued"] == 2 and result["catching_up"] == 2
     assert (await get_post(o["id"], promote.id)).status == "scheduled"
     assert (await get_post(o["id"], still.id)).status == "in_review"
-    assert (await get_post(o["id"], too_late.id)).status == "missed"
-    assert (await get_post(o["id"], unapproved.id)).status == "missed"
-    job = await scalar(o["id"], select(Job).where(Job.dedupe_key == f"pub:{late.id}"))
-    assert job.kind == "post.publish"
-    # running again doesn't duplicate the publish job
+    assert (await get_post(o["id"], too_late.id)).status == "scheduled"
+    assert (await get_post(o["id"], unapproved.id)).status == "in_review"
+    first = await scalar(o["id"], select(Job).where(Job.dedupe_key == f"pub:{too_late.id}"))
+    second = await scalar(o["id"], select(Job).where(Job.dedupe_key == f"pub:{late.id}"))
+    assert first.kind == second.kind == "post.publish"
+    # oldest first, the next one 20 minutes later (same account)
+    assert abs((second.run_after - first.run_after).total_seconds() - 20 * 60) < 5
+    # running again doesn't duplicate the publish jobs or the reminders
     await scheduler.run_org(o["id"])
     n = await scalar(o["id"], select(func.count()).select_from(Job).where(Job.dedupe_key == f"pub:{late.id}"))
     assert n == 1
-    missed_notes = await scalar(o["id"], select(func.count()).select_from(Notification).where(
-        Notification.user_id == o["user_id"], Notification.title.like("Missed%")))
-    assert missed_notes == 1
+    titles = (await scalars(o["id"], select(Notification.title).where(Notification.user_id == o["user_id"])))
+    assert sum(t.startswith("Catching up") or t.startswith("Welcome back") for t in titles) == 1
+    assert sum("waiting for your approval" in t for t in titles) == 1
+    assert not any("issed" in t for t in titles)
 
-    # Approving a missed post within grace publishes it about now; too late needs a new time.
+    # Approving a post after its time sends it out about now (no time limit).
     async with SessionLocal() as s:
         set_tenant(s, o["id"])
         from app.models import User
@@ -503,12 +514,43 @@ async def test_window_promotion_dispatch_and_catch_up(client, fake):
         assert "about a minute" in msg
         post = await s.get(Post, unapproved.id)
         assert post.status == "scheduled" and post.scheduled_at > datetime.now(UTC)
-        with pytest.raises(ValueError, match="Pick a new time"):
-            await actions.approve_by_id(s, too_late.id, user)
-        new_time = datetime.now(UTC) + timedelta(days=1)
-        await actions.approve_by_id(s, too_late.id, user, scheduled_at=new_time)
-        assert (await s.get(Post, too_late.id)).scheduled_at == new_time
         await s.commit()
+
+
+async def test_catch_up_spacing_occasions_and_downtime_summary(client, fake):
+    from app.models import DowntimePeriod
+    from app.core.db import platform_session
+
+    o = await new_org(client)
+    a1 = await mk_account(o["id"])
+    a2 = await mk_account(o["id"], platform="bluesky", name="Sky")
+    now = datetime.now(UTC)
+    async with platform_session() as s:
+        s.add(DowntimePeriod(started_at=now - timedelta(hours=30), ended_at=now - timedelta(minutes=2), reason="asleep"))
+        org = await s.get(Organization, o["id"])
+        org.publishing = {"catch_up_gap_minutes": 30}
+        await s.commit()
+    p1 = await mk_post(o["id"], a1, status="scheduled", text="one", scheduled_at=now - timedelta(hours=26))
+    p2 = await mk_post(o["id"], a1, status="approved", text="two", scheduled_at=now - timedelta(hours=3))
+    p3 = await mk_post(o["id"], a2, status="scheduled", text="three", scheduled_at=now - timedelta(hours=2))
+    greet = await mk_post(o["id"], a2, status="scheduled", text="Happy festival", scheduled_at=now - timedelta(days=2),
+                          meta={"occasion_id": "diwali-2026"})
+    res = await scheduler.run_org(o["id"], now)
+    assert res["queued"] == 3 and res["held"] == 1
+    jobs = {k: await scalar(o["id"], select(Job).where(Job.dedupe_key == f"pub:{k}")) for k in (p1.id, p2.id, p3.id)}
+    assert abs((jobs[p2.id].run_after - jobs[p1.id].run_after).total_seconds() - 1800) < 5  # same account: 30 min apart
+    assert abs((jobs[p3.id].run_after - jobs[p1.id].run_after).total_seconds()) < 5          # other account: right away
+    g = await get_post(o["id"], greet.id)
+    assert g.status == "in_review" and g.meta["held_reason"] == "occasion_passed"
+    body = await scalar(o["id"], select(Notification.body).where(
+        Notification.user_id == o["user_id"], Notification.title == "Welcome back: catching up"))
+    assert "asleep" in body and "Happy festival" in body and "one" in body
+
+    # A post that falls due while the others wait its turn goes after them.
+    p4 = await mk_post(o["id"], a1, status="scheduled", text="four", scheduled_at=now + timedelta(minutes=1))
+    await scheduler.run_org(o["id"], now + timedelta(minutes=2))
+    j4 = await scalar(o["id"], select(Job).where(Job.dedupe_key == f"pub:{p4.id}"))
+    assert abs((j4.run_after - jobs[p2.id].run_after).total_seconds() - 1800) < 5
 
 
 # ================================================================== publishing hand-off

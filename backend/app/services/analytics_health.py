@@ -94,11 +94,11 @@ async def compute(session: AsyncSession, org: Organization) -> dict:
     # consistency
     expected, basis = await expected_posts(session, org, start, now)
     published = len(rows)
-    missed = (await session.scalars(select(Post.id).where(Post.status.in_(["failed", "missed"]), Post.updated_at >= start))).all()
+    missed = (await session.scalars(select(Post.id).where(Post.status == "failed", Post.updated_at >= start))).all()
     if expected:
         parts.append(_part("consistency", min(1.0, published / expected) * 100, f"{published} of {expected} posts" if published <= expected else f"{published} posts ({expected} planned)",
                            f"Posts published in the last {WINDOW} days ÷ posts expected from {basis}.",
-                           f"{len(missed)} post(s) failed or were missed." if missed else None))
+                           f"{len(missed)} post(s) failed to publish." if missed else None))
     else:
         parts.append(_part("consistency", None, "No accounts yet", "Connect an account or set up a posting schedule."))
 

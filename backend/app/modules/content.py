@@ -18,7 +18,9 @@ from app.services import scheduler
 from app.services.jobs import (
     JobContext,
     PermanentError,
+    WaitForNetwork,
     enqueue,
+    offline_now,
     handler,
     org_ids_active,
     periodic,
@@ -64,6 +66,15 @@ async def _fail_generation(ctx: JobContext, post_id: uuid.UUID, message: str) ->
     await s.commit()
 
 
+async def _wait_generation(ctx: JobContext, post_id: uuid.UUID) -> None:
+    s = ctx.session
+    await s.rollback()
+    post = await s.get(Post, post_id)
+    if post is not None:
+        post.status, post.error = "planned", None
+        await s.commit()
+
+
 @handler("post.generate")
 async def generate(ctx: JobContext) -> dict | None:
     s = ctx.session
@@ -77,13 +88,19 @@ async def generate(ctx: JobContext) -> dict | None:
     await s.commit()
     try:
         result = await svc.generate_post(s, post)
-    except NoProviderError:
+    except NoProviderError as e:
+        if await offline_now():
+            await _wait_generation(ctx, post_id)
+            raise WaitForNetwork() from e
         await _fail_generation(ctx, post_id, NO_MODEL_MSG)
         raise PermanentError(NO_MODEL_MSG) from None
     except svc.GenerationError as e:
         await _fail_generation(ctx, post_id, str(e))
         raise PermanentError(str(e)) from None
     except Exception as e:
+        if await offline_now(e):
+            await _wait_generation(ctx, post_id)
+            raise WaitForNetwork() from e
         msg = f"Couldn't write this post: {e}"
         if ctx.attempt >= MAX_ATTEMPTS:
             await _fail_generation(ctx, post_id, msg)
@@ -182,6 +199,13 @@ async def publish(ctx: JobContext) -> dict | None:
                           f"Publishing failed because the connection expired: {msg}\nReconnect it in Social accounts, "
                           "then press Publish now on the post.", link="/settings/accounts", permission="integration.manage")
             return {"status": "failed", "reconnect": True}
+        if retryable and await offline_now(e if not is_pub_err else None):
+            # No internet: wait (status stays 'publishing', owned by this job) and post once it's back.
+            svc.add_activity(s, post, "publish_waiting", "No internet connection. It will post as soon as the "
+                                                         "connection is back.")
+            post.error = None
+            await s.commit()
+            raise WaitForNetwork() from e
         if retryable and ctx.attempt < MAX_ATTEMPTS:
             svc.add_activity(s, post, "publish_retry", f"Attempt {ctx.attempt} failed: {msg}")
             await s.commit()  # status stays 'publishing' while the job retries
@@ -314,7 +338,7 @@ async def daily_digest_for(org_id: uuid.UUID, now: datetime | None = None, *, fo
             "published_yesterday": await count(Post.status == "published", Post.published_at >= start_yday,
                                                Post.published_at < start_today),
             "waiting_for_approval": await count(Post.status == "in_review"),
-            "failed": await count(Post.status.in_(["failed", "missed"]), Post.updated_at >= now - timedelta(days=1)),
+            "failed": await count(Post.status == "failed", Post.updated_at >= now - timedelta(days=1)),
             "manual_pending": await count(Post.status == "manual_pending"),
             "upcoming_today": await count(Post.status.in_(["scheduled", "in_review", "approved"]),
                                           Post.scheduled_at >= now, Post.scheduled_at < end_today),
@@ -329,7 +353,7 @@ async def daily_digest_for(org_id: uuid.UUID, now: datetime | None = None, *, fo
 
         body = (f"Published yesterday: {counts['published_yesterday']}\n"
                 f"Waiting for approval: {counts['waiting_for_approval']}\n"
-                f"Failed or missed (last 24 h): {counts['failed']}\n"
+                f"Failed (last 24 h): {counts['failed']}\n"
                 f"Ready to post by hand: {counts['manual_pending']}\n"
                 f"Still to go out today: {counts['upcoming_today']}")
         try:

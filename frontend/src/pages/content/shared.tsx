@@ -138,8 +138,10 @@ export const ACTION_LABELS: Record<string, string> = {
   planned: "Planned", generated: "Written by AI", approved: "Approved", rejected: "Rejected",
   regenerate_requested: "New version requested", edited: "Edited", created: "Created", published: "Published",
   publish_failed: "Publishing failed", publish_retry: "Publishing will retry", publish_now: "Publish now pressed",
-  manual_pending: "Ready to post by hand", marked_published: "Marked as published", missed: "Missed its slot",
+  manual_pending: "Ready to post by hand", marked_published: "Marked as published", missed: "Late",
   auto_approved: "Approved automatically", generation_failed: "Writing failed", deleted: "Deleted",
+  catching_up: "Catching up (app was off)", held_for_review: "Waiting for you (its day passed)",
+  publish_waiting: "Waiting for the internet",
 };
 
 // ------------------------------------------------------------------ small components
@@ -150,7 +152,7 @@ export function PlatformTag({ label }: { label: string }) {
 export const STATUS_LABELS: Record<string, string> = {
   planned: "Planned", generating: "Writing", draft: "Draft", in_review: "Waiting for approval", approved: "Approved",
   scheduled: "Scheduled", publishing: "Publishing", published: "Published", manual_pending: "Post by hand",
-  failed: "Failed", rejected: "Rejected", missed: "Missed", skipped: "Skipped", removed: "Deleted on the platform",
+  failed: "Failed", rejected: "Rejected", missed: "Waiting", skipped: "Skipped", removed: "Deleted on the platform",
 };
 const STATUS_TONE: Record<string, "neutral" | "brand" | "accent" | "danger"> = {
   published: "brand", scheduled: "brand", approved: "brand", in_review: "accent", generating: "accent", planned: "neutral",

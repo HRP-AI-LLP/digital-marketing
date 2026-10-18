@@ -200,9 +200,6 @@ function ScheduleForm({ existing, accounts, onClose }: { existing?: Schedule; ac
           <Field label="Write posts ahead (hours)" hint="How early each post is written.">
             <Input type="number" min={1} max={168} value={f.lead_hours} onChange={(e) => setF({ ...f, lead_hours: Number(e.target.value) })} />
           </Field>
-          <Field label="Late posting limit (hours)" hint="If the laptop was off, still post this late. After that the post is marked missed.">
-            <Input type="number" min={0} max={48} value={f.catch_up_grace_hours} onChange={(e) => setF({ ...f, catch_up_grace_hours: Number(e.target.value) })} />
-          </Field>
         </div>
 
         <div className="space-y-2">

@@ -6,12 +6,15 @@
   Every run:  starts the API and the web app (ports API_PORT / WEB_PORT in .env; defaults 8600 / 5180).
 
   Usage:  powershell -ExecutionPolicy Bypass -File .\start.ps1
+          -NoBrowser   don't open the browser (used when it starts by itself at sign-in; see install-autostart.ps1)
 #>
+param([switch]$NoBrowser)
 $ErrorActionPreference = "Continue"  # native tools (podman, pip) write to stderr; exit codes are checked instead
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 $Logs = Join-Path $Root "storage\logs"
 New-Item -ItemType Directory -Force -Path $Logs | Out-Null
+if ($NoBrowser) { try { Start-Transcript -Path (Join-Path $Logs "autostart.log") -Force | Out-Null } catch {} }
 
 function Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Fail($msg) { Write-Host "`n[x] $msg" -ForegroundColor Red; exit 1 }
@@ -208,4 +211,5 @@ if ($FirstRun) {
   Write-Host "  Password: $($env:PLATFORM_ADMIN_PASSWORD)"
   Write-Host "  You'll be asked to choose your own password. The temporary one is also in .env (PLATFORM_ADMIN_PASSWORD)."
 }
-Start-Process "http://localhost:$($env:WEB_PORT)"
+Write-Host "  Late posts: anything that fell due while the laptop was off goes out now, one at a time per account."
+if (-not $NoBrowser) { Start-Process "http://localhost:$($env:WEB_PORT)" }

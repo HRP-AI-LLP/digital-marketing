@@ -30,7 +30,7 @@ async def dashboard(ctx: Context = Depends(get_context)):
         "in_review": await count(Post.status == "in_review"),
         "scheduled_7d": await count(Post.status == "scheduled", Post.scheduled_at <= now + timedelta(days=7)),
         "published_7d": await count(Post.status == "published", Post.published_at >= now - timedelta(days=7)),
-        "failed": await count(Post.status.in_(["failed", "missed"]), Post.updated_at >= now - timedelta(days=14)),
+        "failed": await count(Post.status == "failed", Post.updated_at >= now - timedelta(days=14)),
         "manual_pending": await count(Post.status == "manual_pending"),
     }
     upcoming_rows = (await s.execute(

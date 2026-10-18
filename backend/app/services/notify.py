@@ -29,6 +29,7 @@ EVENTS: dict[str, str] = {
     "post_review": "Posts waiting for approval",
     "post_published": "Post published",
     "post_failed": "Post failed to publish",
+    "catch_up": "Catching up after the laptop was off, asleep or offline",
     "manual_publish": "Post ready to publish by hand",
     "account_issue": "Social account needs reconnecting",
     "intel_ready": "Company intelligence finished",
@@ -48,7 +49,7 @@ EVENTS: dict[str, str] = {
     "siteaudit_ready": "Site audit finished",
     "siteaudit_drop": "Website health dropped",
 }
-DEFAULT_EXTERNAL = ["post_review", "post_failed", "account_issue", "manual_publish", "job_failed", "ai_issue",
+DEFAULT_EXTERNAL = ["post_review", "post_failed", "catch_up", "account_issue", "manual_publish", "job_failed", "ai_issue",
                     "inbox_urgent", "listening_spike", "listening_digest", "siteaudit_drop"]
 URGENT = {"post_failed", "account_issue", "job_failed"}
 

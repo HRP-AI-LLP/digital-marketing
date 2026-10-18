@@ -74,3 +74,4 @@ from app.models.keywords import (  # noqa: E402
 from app.models.networks import DesignConnection, LinkPage, LinkPageStat  # noqa: E402
 
 TENANT_TABLES_NETWORKS = ["link_pages", "link_page_stats", "design_connections"]
+from app.models.system import DowntimePeriod, SystemState  # noqa: E402,F401

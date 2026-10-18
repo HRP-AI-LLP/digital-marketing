@@ -13,5 +13,7 @@ if (Test-Path $pidFile) {
 }
 if (-not $AppOnly) {
   podman stop hrp-dm-postgres hrp-dm-redis 2>$null | Out-Null
+  # No app running: don't wake the laptop for posts it can't send.
+  Unregister-ScheduledTask -TaskName "HRP Digital Marketing - wake for posts" -Confirm:$false -ErrorAction SilentlyContinue
   Write-Host "Stopped the app and the database containers."
 }

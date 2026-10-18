@@ -53,8 +53,11 @@ def handler(kind: str):
     return deco
 
 
-def periodic(seconds: int, name: str | None = None):
+def periodic(seconds: int, name: str | None = None, *, offline_ok: bool = False):
+    """Run `fn` every `seconds` (by the wall clock, so a sleeping laptop catches up on waking).
+    Tasks pause while there's no internet unless offline_ok=True."""
     def deco(fn):
+        fn._offline_ok = offline_ok
         PERIODIC.append((name or fn.__name__, seconds, fn))
         return fn
     return deco
@@ -62,6 +65,20 @@ def periodic(seconds: int, name: str | None = None):
 
 class PermanentError(Exception):
     """Raise from a handler to fail the job without retrying."""
+
+
+class WaitForNetwork(Exception):
+    """Raise from a handler when the internet is down: the job waits and runs again once the connection is
+    back, without using up an attempt."""
+
+
+async def offline_now(e: BaseException | None = None) -> bool:
+    """In the worker: True when `e` (if given) is a network failure and the internet is confirmed down."""
+    from app.services import uptime
+
+    if uptime.WATCHDOG is None or (e is not None and not uptime.is_network_error(e)):
+        return False
+    return await uptime.WATCHDOG.network_failed()
 
 
 async def enqueue(
@@ -108,6 +125,9 @@ async def org_ids_active() -> list[uuid.UUID]:
 
 class Worker:
     def __init__(self, concurrency: int = 3, poll_seconds: float = 2.0):
+        from app.services import uptime
+
+        self.watchdog = uptime.Watchdog()  # becomes uptime.WATCHDOG once run() starts
         self.concurrency = concurrency
         self.poll_seconds = poll_seconds
         self.name = f"{socket.gethostname()}:{os.getpid()}"
@@ -186,7 +206,16 @@ class Worker:
                 result = await fn(ctx)
                 await session.commit()
             await self._finish(job.id, status="done", result=result or {}, error=None, finished_at=datetime.now(UTC), progress=None)
+        except WaitForNetwork:
+            await self._finish(job.id, status="queued", attempts=max(0, job.attempts - 1), locked_at=None,
+                               locked_by=None, run_after=datetime.now(UTC) + timedelta(seconds=60),
+                               progress="Waiting for the internet connection")
         except Exception as e:  # noqa: BLE001
+            if not isinstance(e, PermanentError) and await offline_now(e):
+                await self._finish(job.id, status="queued", attempts=max(0, job.attempts - 1), locked_at=None,
+                                   locked_by=None, run_after=datetime.now(UTC) + timedelta(seconds=60),
+                                   progress="Waiting for the internet connection")
+                return
             permanent = isinstance(e, PermanentError) or job.attempts >= job.max_attempts
             err = f"{type(e).__name__}: {e}"
             log.warning("job %s %s failed (attempt %s): %s", job.kind, job.id, job.attempts, err)
@@ -199,15 +228,55 @@ class Worker:
                 await self._finish(job.id, status="queued", error=err[:4000], run_after=datetime.now(UTC) + backoff,
                                    locked_at=None, locked_by=None)
 
-    async def _periodic_loop(self, name: str, seconds: int, fn) -> None:
-        await asyncio.sleep(3)
+    async def _wait(self, timeout: float) -> None:
+        """Sleep up to `timeout` s; returns early on stop or when the watchdog reports a wake-up."""
+        stop = asyncio.create_task(self._stop.wait())
+        woken = asyncio.create_task(self.watchdog.wait_woken(timeout))
+        try:
+            await asyncio.wait({stop, woken}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for t in (stop, woken):
+                t.cancel()
+
+    async def _periodic_loop(self, name: str, seconds: int, fn, index: int = 0) -> None:
+        """Runs by the wall clock in short naps, so a task that fell due while the laptop slept runs on waking.
+        After any downtime every task runs at once (spread a couple of seconds apart, to be gentle)."""
+        await asyncio.sleep(3 + index * 0.3)
+        offline_ok = getattr(fn, "_offline_ok", False)
+        seq = self.watchdog.wake_seq
+        next_due = datetime.now(UTC)
         while not self._stop.is_set():
             try:
-                await fn()
+                await self.watchdog.ensure_fresh()
             except Exception:  # noqa: BLE001
-                log.exception("periodic task %s failed", name)
+                log.exception("watchdog check failed")
+            if self.watchdog.wake_seq != seq:
+                seq = self.watchdog.wake_seq
+                next_due = min(next_due, datetime.now(UTC) + timedelta(seconds=index * 2))
+            now = datetime.now(UTC)
+            if now >= next_due and (offline_ok or not self.watchdog.paused):
+                try:
+                    await fn()
+                except Exception:  # noqa: BLE001
+                    log.exception("periodic task %s failed", name)
+                next_due = datetime.now(UTC) + timedelta(seconds=seconds)
+            remaining = (next_due - datetime.now(UTC)).total_seconds()
+            await self._wait(max(1.0, min(30.0, remaining)))
+
+    async def _watchdog_loop(self) -> None:
+        from app.services.uptime import TICK_SECONDS
+
+        n = 0
+        while not self._stop.is_set():
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=seconds)
+                await self.watchdog.tick()
+                if n % 3 == 0:
+                    await self.watchdog.manage_power()
+            except Exception:  # noqa: BLE001
+                log.exception("watchdog tick failed")
+            n += 1
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=TICK_SECONDS)
             except TimeoutError:
                 pass
 
@@ -223,13 +292,30 @@ class Worker:
                 log.exception("stale job recovery failed")
 
     async def run(self) -> None:
+        from app.services import uptime
+
+        uptime.WATCHDOG = self.watchdog
         await self._recover_stale(startup=True)
+        try:
+            await self.watchdog.startup()
+        except Exception:  # noqa: BLE001
+            log.exception("watchdog start-up failed")
+            self.watchdog.online = True
         self._tasks.add(asyncio.create_task(self._recovery_loop()))
+        self._tasks.add(asyncio.create_task(self._watchdog_loop()))
         log.info("worker %s started with %d handlers, %d periodic tasks", self.name, len(HANDLERS), len(PERIODIC))
-        for name, seconds, fn in PERIODIC:
-            self._tasks.add(asyncio.create_task(self._periodic_loop(name, seconds, fn)))
+        for i, (name, seconds, fn) in enumerate(PERIODIC):
+            self._tasks.add(asyncio.create_task(self._periodic_loop(name, seconds, fn, i)))
         while not self._stop.is_set():
             await self._sem.acquire()
+            try:
+                await self.watchdog.ensure_fresh()
+            except Exception:  # noqa: BLE001
+                log.exception("watchdog check failed")
+            if self.watchdog.paused:  # no internet: claim nothing, so nothing fails or wastes a retry
+                self._sem.release()
+                await self._wait(self.poll_seconds * 5)
+                continue
             try:
                 job = await self._claim()
             except Exception:  # noqa: BLE001

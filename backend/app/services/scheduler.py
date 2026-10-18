@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import SessionLocal, set_tenant
 from app.models import BrandProfile, Organization, Post, Schedule, SocialAccount
 from app.services.content import (
-    DEFAULT_GRACE_HOURS,
     MANUAL_PLATFORMS,
     add_activity,
     now_utc,
@@ -216,15 +215,6 @@ async def next_free_slot(session: AsyncSession, schedule: Schedule, tz: ZoneInfo
 
 
 # ------------------------------------------------------------------ promotion, dispatch, catch-up
-async def _grace_hours(session: AsyncSession, post: Post, cache: dict) -> int:
-    if not post.schedule_id:
-        return DEFAULT_GRACE_HOURS
-    if post.schedule_id not in cache:
-        s = await session.get(Schedule, post.schedule_id)
-        cache[post.schedule_id] = s.catch_up_grace_hours if s and s.catch_up_grace_hours is not None else DEFAULT_GRACE_HOURS
-    return cache[post.schedule_id]
-
-
 async def promote_windows(session: AsyncSession, now: datetime | None = None) -> list[Post]:
     """auto_with_window posts whose review window ended without a rejection become scheduled."""
     now = now or now_utc()
@@ -238,60 +228,131 @@ async def promote_windows(session: AsyncSession, now: datetime | None = None) ->
     return list(rows)
 
 
+CATCH_UP_AFTER = timedelta(minutes=10)  # a post this late (or later) is "catching up"
+
+
+async def _queued_until(session: AsyncSession, now: datetime) -> dict:
+    """account id -> the latest time a publish job is already queued for (posts waiting their turn)."""
+    from app.models import Job
+
+    rows = (await session.execute(select(Job.payload, Job.run_after).where(
+        Job.kind == "post.publish", Job.status == "queued", Job.run_after > now))).all()
+    ids = {str((pl or {}).get("post_id")): at for pl, at in rows if (pl or {}).get("post_id")}
+    if not ids:
+        return {}
+    out: dict = {}
+    for pid, acc in (await session.execute(select(Post.id, Post.social_account_id).where(
+            Post.id.in_([uuid.UUID(i) for i in ids])))).all():
+        at = ids.get(str(pid))
+        if acc is not None and at is not None and (acc not in out or at > out[acc]):
+            out[acc] = at
+    return out
+
+
+async def _active_publish(session: AsyncSession) -> set[str]:
+    from app.models import Job
+
+    keys = (await session.scalars(select(Job.dedupe_key).where(
+        Job.kind == "post.publish", Job.status.in_(["queued", "running"]), Job.dedupe_key.is_not(None)))).all()
+    return {k[4:] for k in keys if k and k.startswith("pub:")}
+
+
 async def dispatch_and_catch_up(session: AsyncSession, tz: ZoneInfo, pending: Pending,
-                                now: datetime | None = None) -> dict:
-    """Queue publishing for due posts; mark posts that are too late as missed."""
+                                now: datetime | None = None, org: Organization | None = None) -> dict:
+    """Queue publishing for every due post. Nothing is ever dropped: posts that fell due while the laptop was
+    off, asleep or offline go out now, one at a time per account (`catch_up_gap_minutes` apart, default 20), and
+    one friendly summary says what is going out when. Greetings for a day that has already passed go back to
+    review instead of posting late on their own."""
+    from app.services import uptime
+
     now = now or now_utc()
-    cache: dict = {}
-    queued = missed = 0
+    gap = timedelta(minutes=uptime.publishing_settings(org)["catch_up_gap_minutes"])
+    queued = held = 0
+    late: list[tuple[Post, datetime]] = []
+    kept: list[Post] = []
 
     due = (await session.scalars(select(Post).where(
         Post.status.in_(["scheduled", "approved"]), Post.scheduled_at.is_not(None), Post.scheduled_at <= now,
-    ))).all()
-    for p in due:
-        grace = await _grace_hours(session, p, cache)
-        if now - p.scheduled_at <= timedelta(hours=grace):
-            await enqueue(session, "post.publish", p.organization_id, {"post_id": str(p.id)}, dedupe_key=f"pub:{p.id}",
-                          priority=2)
+    ).order_by(Post.scheduled_at))).all()
+    if due:
+        active = await _active_publish(session)
+        busy = await _queued_until(session, now)
+        next_free: dict = {}
+        for p in due:
+            if str(p.id) in active:
+                continue  # already queued (perhaps waiting its turn)
+            meta = dict(p.meta or {})
+            if meta.get("occasion_id") and p.scheduled_at.astimezone(tz).date() < now.astimezone(tz).date():
+                p.status, p.error = "in_review", None
+                p.meta = {**meta, "held_reason": "occasion_passed"}
+                add_activity(session, p, "held_for_review",
+                             f"Its day ({_local(p.scheduled_at, tz)}) passed while the app was off, so it waits for you "
+                             "instead of posting late on its own.")
+                kept.append(p)
+                held += 1
+                continue
+            acc = p.social_account_id
+            if acc not in next_free:
+                next_free[acc] = (busy[acc] + gap) if acc in busy else now
+            at = max(now, next_free[acc])
+            next_free[acc] = at + gap
+            await enqueue(session, "post.publish", p.organization_id, {"post_id": str(p.id)},
+                          dedupe_key=f"pub:{p.id}", priority=2, run_after=at)
             queued += 1
-        else:
-            _mark_missed(session, p, f"The app wasn't running within {grace} h of the posting time.")
-            pending.add("post_failed", f"Missed a {platform_of(p.platform).label} post",
-                        f"“{_snippet(p)}” was due {_local(p.scheduled_at, tz)} and is more than {grace} h late. "
-                        "Pick a new time and approve it to post it.", link=f"/posts/{p.id}")
-            missed += 1
+            if at > now or now - p.scheduled_at >= CATCH_UP_AFTER:
+                p.meta = {**meta, "catch_up_at": at.isoformat()}
+                add_activity(session, p, "catching_up",
+                             f"Was due {_local(p.scheduled_at, tz)}; posting {'now' if at <= now else 'at ' + _local(at, tz)}.")
+                late.append((p, at))
 
-    # approve-first posts nobody approved before the slot
+    # approve-first posts still waiting for approval after their time: they simply wait (one gentle reminder)
     waiting = (await session.scalars(select(Post).where(
         Post.status == "in_review", Post.mode == "approve_first", Post.scheduled_at.is_not(None),
         Post.scheduled_at <= now,
     ))).all()
     for p in waiting:
-        _mark_missed(session, p, "Nobody approved it before its posting time.")
-        grace = await _grace_hours(session, p, cache)
-        pending.add("post_review", f"A {platform_of(p.platform).label} post missed its slot",
-                    f"“{_snippet(p)}” wasn't approved before {_local(p.scheduled_at, tz)}. "
-                    f"Approve it within {grace} h to post it now, or pick a new time.",
+        meta = dict(p.meta or {})
+        if meta.get("overdue_reminded") or meta.get("held_reason"):
+            continue
+        p.meta = {**meta, "overdue_reminded": True}
+        pending.add("post_review", f"A {platform_of(p.platform).label} post is waiting for your approval",
+                    f"“{_snippet(p)}” was planned for {_local(p.scheduled_at, tz)}. Approve it and it goes out "
+                    "straight away, or pick a new time.",
                     link=f"/posts/{p.id}", permission="content.approve",
                     actions=[{"label": "Approve", "data": f"ap:{p.id}"}, {"label": "Reject", "data": f"rj:{p.id}"}])
-        missed += 1
 
-    # posts that never finished generating
-    stuck = (await session.scalars(select(Post).where(
-        Post.status.in_(["planned", "generating"]), Post.scheduled_at.is_not(None), Post.scheduled_at <= now,
-    ))).all()
-    for p in stuck:
-        grace = await _grace_hours(session, p, cache)
-        if now - p.scheduled_at > timedelta(hours=grace):
-            _mark_missed(session, p, "The post wasn't ready before its posting time.")
-            missed += 1
-    return {"queued": queued, "missed": missed}
+    if late or kept:
+        await _catch_up_summary(pending, tz, now, late, kept)
+    return {"queued": queued, "catching_up": len(late), "held": held}
 
 
-def _mark_missed(session: AsyncSession, p: Post, why: str) -> None:
-    p.status = "missed"
-    p.error = why
-    add_activity(session, p, "missed", why)
+async def _catch_up_summary(pending: Pending, tz: ZoneInfo, now: datetime, late: list[tuple[Post, datetime]],
+                            kept: list[Post]) -> None:
+    from app.services import uptime
+
+    since = min([p.scheduled_at for p, _ in late] + [p.scheduled_at for p in kept])
+    try:
+        periods = await uptime.recent_downtime(since - timedelta(hours=1))
+    except Exception:  # noqa: BLE001
+        periods = []
+    lines = []
+    if periods:
+        lines.append("The app was " + uptime.describe(periods, lambda d: _local(d, tz)) + ".")
+    if late:
+        last = max(at for _, at in late)
+        lines.append(f"Posting {len(late)} late post{'s' if len(late) != 1 else ''} gently, one at a time per account"
+                     + (f" (all out by {_local(last, tz)})" if last > now else "") + ":")
+        for p, at in late[:15]:
+            lines.append(f"• {platform_of(p.platform).label}: “{_snippet(p, 70)}” "
+                         f"{'now' if at <= now else 'at ' + _local(at, tz)}")
+        if len(late) > 15:
+            lines.append(f"• …and {len(late) - 15} more")
+    if kept:
+        lines.append("Waiting for you (their day has passed, so they won't post on their own):")
+        for p in kept[:10]:
+            lines.append(f"• {platform_of(p.platform).label}: “{_snippet(p, 70)}”. Approve to post it anyway, or edit it.")
+    title = "Welcome back: catching up" if periods else "Catching up on late posts"
+    pending.add("catch_up", title, "\n".join(lines), link="/posts")
 
 
 def _snippet(p: Post, n: int = 90) -> str:
@@ -315,7 +376,7 @@ async def run_org(org_id: uuid.UUID, now: datetime | None = None) -> dict:
         tz = org_tz(org)
         created = await plan_all(s, org, now)
         promoted = await promote_windows(s, now)
-        result = await dispatch_and_catch_up(s, tz, pending, now)
+        result = await dispatch_and_catch_up(s, tz, pending, now, org)
         await s.commit()
     await pending.send(org_id)
     return {"planned": len(created), "promoted": len(promoted), **result}

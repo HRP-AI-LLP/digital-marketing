@@ -46,6 +46,29 @@ Code conventions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Three processes run: the API, the **worker** (`python -m app.worker`: planning, writing, rendering, publishing,
 crawling, token refresh, metrics) and the web app. `start.ps1` starts all three; `stop.ps1` stops them.
 
+## When the laptop is off, asleep or offline
+
+Nothing scheduled is ever dropped or marked as missed.
+
+- **Laptop off or app closed.** On the next start, every post whose time has passed goes out: oldest first, one at a
+  time per account (20 minutes apart by default; Settings → Organization). You get one "Welcome back" summary
+  listing what goes out when. To skip running `start.ps1` after a restart, run `.\install-autostart.ps1` once.
+  The studio then starts by itself a minute after you sign in to Windows. `-Remove` turns it off.
+- **Asleep or hibernating.** The worker sees the jump in the clock when the laptop wakes and catches up the same way.
+  Every periodic task (planning, metrics, research…) runs straight away instead of waiting for its next turn.
+  Optional: Settings → Organization → "Wake this laptop…" sets a Windows wake timer about 3 minutes before the next
+  post. It works only when the laptop is plugged in, and it can't wake a laptop that is shut down. While a post is
+  due, the laptop is kept awake.
+- **No internet.** The worker checks the connection. While it's down, it pauses: nothing is claimed, no retries are
+  used up and no post fails. A post interrupted by a dropped connection waits too. A banner shows the pause. When
+  the connection returns, everything resumes on its own.
+- **Approve-first posts** still waiting for approval after their time simply wait. You get one reminder, and once
+  you approve one it goes out straight away. Festival greetings whose day has passed come back to review instead of
+  posting late on their own.
+
+Downtime is recorded in `downtime_periods`, and the worker heartbeat is in `system_state`. `GET /api/v1/system/status`
+powers the banner.
+
 ## Layout
 
 ```

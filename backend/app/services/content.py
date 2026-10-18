@@ -4,7 +4,7 @@
 
 - full_auto         → scheduled (publishes at its slot)
 - auto_with_window  → in_review with an approval deadline; promoted to scheduled when it passes
-- approve_first     → in_review (missed if nobody approves before the slot)
+- approve_first     → in_review (waits for approval; if approved after the slot it goes out straight away)
 - manual            → draft (never published automatically)
 
 Posts that fail QA or uniqueness after the automatic fixes are always held for a human
@@ -53,7 +53,7 @@ MODES: dict[str, str] = {
 STATUSES: dict[str, str] = {
     "planned": "Planned", "generating": "Writing", "draft": "Draft", "in_review": "Waiting for approval",
     "approved": "Approved", "scheduled": "Scheduled", "publishing": "Publishing", "published": "Published",
-    "manual_pending": "Ready to post by hand", "failed": "Failed", "rejected": "Rejected", "missed": "Missed",
+    "manual_pending": "Ready to post by hand", "failed": "Failed", "rejected": "Rejected", "missed": "Waiting for approval",
     "skipped": "Skipped", "removed": "Deleted on the platform",
 }
 NEEDS_MEDIA = {"image", "carousel", "gif", "video", "animation", "document"}

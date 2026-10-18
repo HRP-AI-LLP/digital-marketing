@@ -22,6 +22,7 @@ from app.api import siteaudit as siteaudit_api  # noqa: E402
 from app.api import keywords as keywords_api  # noqa: E402
 from app.api import canva as canva_api  # noqa: E402
 from app.api import linkinbio  # noqa: E402
+from app.api import system as system_api  # noqa: E402
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.modules import load_all
@@ -87,7 +88,7 @@ async def tunnel_guard(request: Request, call_next):
 for r in (auth.router, users.router, roles.router, organization.router, platform.router, integrations.router,
           notifications.router, jobs.router, intelligence.router, content.router, social.router, media.router,
           seo.router, analytics.router, analytics_growth.router, dashboard.router, inbox_api.router,
-          research.router, brand_ai.router, seo_site.router, presence_api.router, aivis_api.router, listening_api.router, siteaudit_api.router, keywords_api.router, linkinbio.router, canva_api.router):
+          research.router, brand_ai.router, seo_site.router, presence_api.router, aivis_api.router, listening_api.router, siteaudit_api.router, keywords_api.router, linkinbio.router, canva_api.router, system_api.router):
     app.include_router(r, prefix=API_PREFIX)
 app.include_router(linkinbio.public)  # /l/<slug>: public link-in-bio pages (no sign-in)
 
