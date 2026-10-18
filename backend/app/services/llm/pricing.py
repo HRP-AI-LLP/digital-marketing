@@ -46,7 +46,7 @@ PREFIX = {
     "openai": "", "openai_images": "", "openai_tts": "", "anthropic": "", "custom_openai": "",
     "gemini": "gemini/", "gemini_images": "gemini/", "xai": "xai/", "xai_images": "xai/", "groq": "groq/",
     "mistral": "mistral/", "deepseek": "deepseek/", "together": "together_ai/", "together_images": "together_ai/",
-    "cerebras": "cerebras/", "openrouter": "openrouter/", "huggingface": "huggingface/", "hf_images": "huggingface/",
+    "cerebras": "cerebras/", "perplexity": "perplexity/", "openrouter": "openrouter/", "huggingface": "huggingface/", "hf_images": "huggingface/",
     "stability": "stability/", "replicate_video": "replicate/",
 }
 FREE_PROVIDERS = {"edge_tts"}  # always free, no key

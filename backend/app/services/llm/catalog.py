@@ -1,7 +1,7 @@
 """Catalog of every external service the Integrations page can configure.
 
 Fields per provider:
-  kind      llm | image | video | tts | stock | search | media_host | social_app | google | smtp | telegram
+  kind      llm | image | video | tts | stock | search | seo_data | media_host | social_app | google | social_data | website | smtp | telegram
   style     how we talk to it (openai = OpenAI-compatible REST, anthropic, gemini_image, hf_image, ...)
   base_url  default endpoint (editable)
   key       whether an API key is required
@@ -43,6 +43,8 @@ CATALOG: list[ProviderSpec] = [
     P("anthropic", "llm", "Anthropic Claude", "anthropic", "https://api.anthropic.com", free="Paid",
       docs="https://console.anthropic.com/settings/keys"),
     P("xai", "llm", "xAI Grok", "openai", "https://api.x.ai/v1", free="Paid", docs="https://console.x.ai"),
+    P("perplexity", "llm", "Perplexity (Sonar, answers with web search)", "openai", "https://api.perplexity.ai", free="Paid",
+      docs="https://www.perplexity.ai/account/api/keys", examples=("sonar", "sonar-pro")),
     P("groq", "llm", "Groq", "openai", "https://api.groq.com/openai/v1", free="Free tier with rate limits",
       docs="https://console.groq.com/keys", examples=("llama-3.3-70b-versatile", "llama-3.1-8b-instant")),
     P("openrouter", "llm", "OpenRouter", "openai", "https://openrouter.ai/api/v1",
@@ -97,6 +99,12 @@ CATALOG: list[ProviderSpec] = [
     P("serper", "search", "Serper (Google results)", "serper", "https://google.serper.dev", free="Free trial credits",
       docs="https://serper.dev"),
 
+    # ---------------------------------------------------------------- keyword data (volumes, difficulty, rankings)
+    P("dataforseo", "seo_data", "DataForSEO (keyword volumes, gaps and rankings)", "dataforseo", "https://api.dataforseo.com/v3",
+      key=False, free="Optional, pay as you go (about $0.002 per ranking check, $0.01–0.05 per report). Keyword tools work free without it.",
+      docs="https://app.dataforseo.com/api-access",
+      fields=(("login", "API login (email)", False), ("password", "API password", True))),
+
     # ---------------------------------------------------------------- public media hosting (Instagram, Threads, GBP need a URL)
     P("cloudinary", "media_host", "Cloudinary", "cloudinary", key=True, free="Free plan",
       docs="https://console.cloudinary.com",
@@ -118,10 +126,39 @@ CATALOG: list[ProviderSpec] = [
     P("pinterest_app", "social_app", "Pinterest app", "oauth", key=False, free="Free",
       docs="https://developers.pinterest.com/apps/",
       fields=(("client_id", "App ID", False), ("client_secret", "App secret key", True))),
-    P("google_app", "google", "Google Cloud OAuth client (Business Profile, Analytics, Search Console, YouTube)", "oauth",
+    P("x_app", "social_app", "X (Twitter) app", "oauth", key=False, free="Free tier is write-limited; paid plans for more",
+      docs="https://developer.x.com/en/portal/dashboard",
+      fields=(("client_id", "OAuth 2.0 Client ID", False), ("client_secret", "OAuth 2.0 Client secret", True))),
+    P("tiktok_app", "social_app", "TikTok app (Content Posting API)", "oauth", key=False, free="Free",
+      docs="https://developers.tiktok.com/apps/",
+      fields=(("client_id", "Client key", False), ("client_secret", "Client secret", True))),
+    P("canva_app", "social_app", "Canva integration (Connect API, design import)", "oauth", key=False, free="Free",
+      docs="https://www.canva.com/developers/integrations/connect-api",
+      fields=(("client_id", "Client ID", False), ("client_secret", "Client secret", True))),
+    P("google_app", "google","Google Cloud OAuth client (Business Profile, Analytics, Search Console, YouTube)", "oauth",
       key=False, free="Free", docs="https://console.cloud.google.com/apis/credentials",
       fields=(("client_id", "Client ID", False), ("client_secret", "Client secret", True),
               ("pagespeed_key", "PageSpeed Insights API key (optional)", True))),
+
+    # ---------------------------------------------------------------- company website (publish SEO articles)
+    P("wordpress", "website", "WordPress site", "wordpress", key=False, free="Free (built into WordPress 5.6+)",
+      docs="https://wordpress.org/documentation/article/application-passwords/",
+      fields=(("site_url", "Site address, e.g. https://www.example.com", False), ("username", "WordPress username", False),
+              ("app_password", "Application password (Users → Profile → Application passwords)", True),
+              ("indexnow_key", "IndexNow key (optional, see the article's Publish panel)", False))),
+    P("website_webhook", "website", "Custom website (signed webhook)", "webhook", key=False, free="Free",
+      fields=(("webhook_url", "Webhook address that receives articles (https://…)", False),
+              ("signing_secret", "Signing secret (used for the X-HRP-Signature header)", True),
+              ("article_url", "Article address pattern, e.g. https://www.example.com/blog/{slug}", False),
+              ("indexnow_key", "IndexNow key (optional, see the article's Publish panel)", False))),
+    # ---------------------------------------------------------------- public social data (Social presence and Listening)
+    P("youtube_data", "social_data", "YouTube Data API key (social presence and listening)", "youtube_data",
+      "https://www.googleapis.com/youtube/v3", free="Free (10,000 units a day)",
+      docs="https://console.cloud.google.com/apis/library/youtube.googleapis.com"),
+    P("github_api", "social_data", "GitHub token (optional, higher limits)", "github_api", "https://api.github.com",
+      free="Free; works without a token at lower limits", docs="https://github.com/settings/tokens"),
+    P("x_api", "social_data", "X (Twitter) API bearer token (social presence and listening; paid, optional)", "x_api",
+      "https://api.x.com/2", free="Paid X API plan; without it X uses limited public data and listening skips X", docs="https://developer.x.com/en/portal/dashboard"),
 
     # ---------------------------------------------------------------- notifications
     P("smtp", "smtp", "Email (SMTP)", "smtp", key=False, free="Free with Gmail app password",

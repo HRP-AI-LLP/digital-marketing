@@ -272,6 +272,8 @@ class Schedule(IdMixin, TenantMixin, TimestampMixin, Base):
     include_link: Mapped[bool] = mapped_column(Boolean, default=False)
     link_url: Mapped[str | None] = mapped_column(Text)
     instructions: Mapped[str | None] = mapped_column(Text)
+    interval_days: Mapped[int] = mapped_column(Integer, default=1, server_default="1")  # 2 = every other day
+    interval_start: Mapped[str | None] = mapped_column(String(10))  # local date the repeat counts from
 
 
 class Post(IdMixin, TenantMixin, TimestampMixin, Base):

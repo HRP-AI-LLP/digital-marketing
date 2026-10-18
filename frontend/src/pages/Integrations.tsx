@@ -29,13 +29,14 @@ const AI_KINDS = ["llm", "image", "tts", "video"];
 const GROUPS: { id: string; label: string; kinds: string[]; blurb: string }[] = [
   { id: "ai", label: "Text models", kinds: ["llm"], blurb: "Models that plan, write and review posts and articles, and make embeddings. Add a local model, a free cloud tier, or a paid API. Model lists refresh automatically every 6 hours; Task routing decides which model does what and what to fall back to." },
   { id: "media", label: "Images, video, voice", kinds: ["image", "video", "tts", "stock"], blurb: "Where images, AI video clips, voice-overs and stock photos come from. Add several and order them in Task routing; if one runs out of credits or hits a limit, the next is used." },
-  { id: "web", label: "Search, hosting", kinds: ["search", "media_host"], blurb: "Web search finds competitors. Instagram, Threads and Google Business Profile fetch images from a public URL, so a media host is needed for them." },
+  { id: "web", label: "Search, data, hosting", kinds: ["search", "seo_data", "social_data", "media_host"], blurb: "Web search finds competitors and powers listening and the free keyword tools (DuckDuckGo works free without a key). All other keys here are optional: DataForSEO (paid) adds search volumes, keyword difficulty and exact Google rankings; a free YouTube Data API key and an X API token (paid) add detail to Social presence and Listening. Instagram, Threads and Google Business Profile fetch images from a public URL, so a media host is needed for them." },
   { id: "apps", label: "Social apps", kinds: ["social_app", "google"], blurb: "Your developer app credentials. They let you connect accounts on the Social accounts page." },
+  { id: "website", label: "Website", kinds: ["website"], blurb: "Your company website, so SEO articles can be published from the article page. WordPress needs only a free application password (Users → Profile → Application passwords). Free Yoast SEO, Rank Math and Redirection plugins are used when present, never required. For a custom site (React, Next.js…), give a webhook address that receives a signed JSON copy of each article; or use “Download for website” instead." },
   { id: "notify", label: "Email, Telegram", kinds: ["smtp", "telegram"], blurb: "How notifications leave the app. Each person chooses what they receive in Notifications." },
 ];
 const KIND_LABEL: Record<string, string> = {
   llm: "Text model", image: "Images", video: "AI video", tts: "Voice-over", stock: "Stock media", search: "Web search",
-  media_host: "Media hosting", social_app: "Social app", google: "Google", smtp: "Email", telegram: "Telegram",
+  media_host: "Media hosting", social_data: "Public social data", social_app: "Social app", google: "Google", smtp: "Email", telegram: "Telegram", website: "Website", seo_data: "Keyword data (optional)",
 };
 const TYPE_LABEL: Record<string, string> = {
   chat: "Text", embed: "Embeddings", image: "Image", voice: "Voice", tts_model: "Speech model", video: "Video", other: "Other",

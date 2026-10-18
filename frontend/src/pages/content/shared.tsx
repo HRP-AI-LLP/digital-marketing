@@ -150,7 +150,7 @@ export function PlatformTag({ label }: { label: string }) {
 export const STATUS_LABELS: Record<string, string> = {
   planned: "Planned", generating: "Writing", draft: "Draft", in_review: "Waiting for approval", approved: "Approved",
   scheduled: "Scheduled", publishing: "Publishing", published: "Published", manual_pending: "Post by hand",
-  failed: "Failed", rejected: "Rejected", missed: "Missed", skipped: "Skipped",
+  failed: "Failed", rejected: "Rejected", missed: "Missed", skipped: "Skipped", removed: "Deleted on the platform",
 };
 const STATUS_TONE: Record<string, "neutral" | "brand" | "accent" | "danger"> = {
   published: "brand", scheduled: "brand", approved: "brand", in_review: "accent", generating: "accent", planned: "neutral",

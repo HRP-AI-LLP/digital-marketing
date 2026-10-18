@@ -14,6 +14,14 @@ from app.api import (
 )
 from app.api import inbox as inbox_api
 from app.api import brand_ai, research  # noqa: E402
+from app.api import seo_site  # noqa: E402
+from app.api import presence as presence_api  # noqa: E402
+from app.api import aivis as aivis_api  # noqa: E402
+from app.api import listening as listening_api  # noqa: E402
+from app.api import siteaudit as siteaudit_api  # noqa: E402
+from app.api import keywords as keywords_api  # noqa: E402
+from app.api import canva as canva_api  # noqa: E402
+from app.api import linkinbio  # noqa: E402
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.modules import load_all
@@ -55,8 +63,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Requests that arrive through the public HTTPS tunnel may only reach sign-in callbacks and signed media links.
-TUNNEL_ALLOWED = re.compile(r"^/api/v1/(social/oauth/[a-z_]+/callback|media/public/[0-9a-fA-F-]{36}/[^/]+|health)$")
+# Requests that arrive through the public HTTPS tunnel may only reach sign-in callbacks, signed media links and
+# the public link-in-bio pages (page, click redirect, and the images the page shows).
+TUNNEL_ALLOWED = re.compile(
+    r"^(/api/v1/(social/oauth/[a-z_]+/callback|media/public/[0-9a-fA-F-]{36}/[^/]+|health)"
+    r"|/l/[a-z0-9-]+(/go/([0-9a-f-]{36}|s-[a-z]+)|/img/[0-9a-f-]{36})?)$")
 
 
 def _public_host() -> str:
@@ -76,8 +87,9 @@ async def tunnel_guard(request: Request, call_next):
 for r in (auth.router, users.router, roles.router, organization.router, platform.router, integrations.router,
           notifications.router, jobs.router, intelligence.router, content.router, social.router, media.router,
           seo.router, analytics.router, analytics_growth.router, dashboard.router, inbox_api.router,
-          research.router, brand_ai.router):
+          research.router, brand_ai.router, seo_site.router, presence_api.router, aivis_api.router, listening_api.router, siteaudit_api.router, keywords_api.router, linkinbio.router, canva_api.router):
     app.include_router(r, prefix=API_PREFIX)
+app.include_router(linkinbio.public)  # /l/<slug>: public link-in-bio pages (no sign-in)
 
 
 @app.get(f"{API_PREFIX}/health", tags=["health"])

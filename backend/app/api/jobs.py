@@ -8,9 +8,9 @@ from app.core.deps import Context, get_context, require
 
 # Permission needed to see or retry each family of background task.
 AREA_PERMS = {"post.": "content.view", "media.": "media.manage", "intel.": "intel.view", "seo.": "seo.view",
-              "account.": "integration.view"}
+              "account.": "integration.view", "keywords.": "keywords.view"}
 RETRY_PERMS = {"post.": "content.publish", "media.": "media.manage", "intel.": "intel.manage", "seo.": "seo.manage",
-               "account.": "integration.manage"}
+               "account.": "integration.manage", "keywords.": "keywords.manage"}
 
 
 def _allowed(ctx: Context, kind: str, table: dict) -> bool:

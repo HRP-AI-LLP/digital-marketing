@@ -72,11 +72,21 @@ def slot_times(schedule: Schedule, tz: ZoneInfo, start: datetime, end: datetime,
     if not days or not times or end <= start:
         return []
     blackout = blackout or set()
+    every = max(1, int(getattr(schedule, "interval_days", 1) or 1))
+    anchor: date | None = None
+    if every > 1:
+        try:
+            anchor = date.fromisoformat(schedule.interval_start) if schedule.interval_start else None
+        except ValueError:
+            anchor = None
+        if anchor is None:
+            anchor = (schedule.created_at or start).astimezone(tz).date()
     out: list[datetime] = []
     d: date = start.astimezone(tz).date() - timedelta(days=1)
     last = end.astimezone(tz).date() + timedelta(days=1)
     while d <= last:
-        if d.weekday() in days and d.isoformat() not in blackout:
+        on_cycle = anchor is None or (d - anchor).days % every == 0
+        if on_cycle and d.weekday() in days and d.isoformat() not in blackout:
             for t in times:
                 local = datetime.combine(d, t, tzinfo=tz)
                 utc = local.astimezone(UTC)
@@ -115,6 +125,36 @@ def new_slot_post(schedule: Schedule, account: SocialAccount, at: datetime) -> P
     )
 
 
+def monthly_limit(account: SocialAccount) -> int:
+    try:
+        return max(0, int((account.settings or {}).get("monthly_post_limit") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def month_bounds(at: datetime, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    local = at.astimezone(tz)
+    start = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    end = (start + timedelta(days=32)).replace(day=1)
+    return start.astimezone(UTC), end.astimezone(UTC)
+
+
+async def posts_in_month(session: AsyncSession, account: SocialAccount, at: datetime, tz: ZoneInfo,
+                         published_only: bool = False) -> int:
+    """Posts for this account in the calendar month of `at` (org time): published, or planned to go out."""
+    from sqlalchemy import func, or_
+
+    start, end = month_bounds(at, tz)
+    q = select(func.count()).select_from(Post).where(Post.social_account_id == account.id)
+    if published_only:
+        q = q.where(Post.status == "published", Post.published_at >= start, Post.published_at < end)
+    else:
+        q = q.where(Post.status.notin_(("skipped", "rejected", "failed", "missed", "removed")),
+                    or_(Post.published_at.is_(None) & (Post.scheduled_at >= start) & (Post.scheduled_at < end),
+                        (Post.published_at >= start) & (Post.published_at < end)))
+    return int(await session.scalar(q) or 0)
+
+
 async def plan_schedule(session: AsyncSession, schedule: Schedule, account: SocialAccount, tz: ZoneInfo,
                         now: datetime, blackout: set[str]) -> list[Post]:
     """Create planned posts for the schedule's slots within its lead time (idempotent)."""
@@ -131,9 +171,12 @@ async def plan_schedule(session: AsyncSession, schedule: Schedule, account: Soci
         select(Post.meta["slot_at"].as_string()).where(Post.schedule_id == schedule.id, Post.meta["slot_at"].as_string().in_(keys))
     )).all())
     created = []
+    limit = monthly_limit(account)
     for at in slots:
         if at in taken_times or slot_key(at) in taken_keys:
             continue
+        if limit and await posts_in_month(session, account, at, tz) >= limit:
+            continue  # the account's monthly post limit (e.g. to cap X API spend) is already used up
         post = new_slot_post(schedule, account, at)
         session.add(post)
         await session.flush()

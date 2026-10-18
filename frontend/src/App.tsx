@@ -17,6 +17,7 @@ import Calendar from "./pages/Calendar";
 import Approvals from "./pages/Approvals";
 import Posts from "./pages/Posts";
 import MediaStudio from "./pages/MediaStudio";
+import LinkInBio from "./pages/LinkInBio";
 import Seo from "./pages/Seo";
 import Intelligence from "./pages/Intelligence";
 import Analytics from "./pages/Analytics";
@@ -25,6 +26,11 @@ import Schedules from "./pages/Schedules";
 import SocialAccounts from "./pages/SocialAccounts";
 import Inbox from "./pages/inbox/Inbox";
 import Research from "./pages/Research";
+import Presence from "./pages/Presence";
+import AiVisibility from "./pages/AiVisibility";
+import Listening from "./pages/listening/Listening";
+import SiteAudit from "./pages/SiteAudit";
+import Keywords from "./pages/Keywords";
 
 function Guard({ perm, platform, children }: { perm?: string; platform?: boolean; children: JSX.Element }) {
   const { can, session } = useAuth();
@@ -58,11 +64,15 @@ export default function App() {
         <Route path="approvals" element={<Guard perm="content.approve"><Approvals /></Guard>} />
         <Route path="posts/*" element={<Guard perm="content.view"><Posts /></Guard>} />
         <Route path="media" element={<Guard perm="media.manage"><MediaStudio /></Guard>} />
+        <Route path="link-in-bio" element={<Guard perm="linkinbio.manage"><LinkInBio /></Guard>} />
         <Route path="seo/*" element={<Guard perm="seo.view"><Seo /></Guard>} />
         <Route path="intelligence" element={<Guard perm="intel.view"><Intelligence /></Guard>} />
         <Route path="research" element={<Guard perm="research.view"><Research /></Guard>} />
+        <Route path="ai-visibility" element={<Guard perm="aivis.view"><AiVisibility /></Guard>} />, <Route path="site-audit" element={<Guard perm="siteaudit.view"><SiteAudit /></Guard>} />, <Route path="keywords" element={<Guard perm="keywords.view"><Keywords /></Guard>} />
         <Route path="analytics" element={<Guard perm="analytics.view"><Analytics /></Guard>} />
+        <Route path="presence" element={<Guard perm="presence.view"><Presence /></Guard>} />
         <Route path="inbox" element={<Guard perm="inbox.view"><Inbox /></Guard>} />
+        <Route path="listening" element={<Guard perm="listening.view"><Listening /></Guard>} />
         <Route path="account/password" element={<ChangePassword />} />
         <Route path="*" element={<ComingSoon />} />
       </Route>

@@ -6,7 +6,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { Alert, Button, Field, Modal, Spinner, Toggle } from "../../components/ui";
 import { ago, type Listening, type SourceStatus } from "./shared";
 
-function TagInput({ id, values, onChange, placeholder, max }: { id: string; values: string[]; onChange: (v: string[]) => void; placeholder: string; max?: number }) {
+export function TagInput({ id, values, onChange, placeholder, max }: { id: string; values: string[]; onChange: (v: string[]) => void; placeholder: string; max?: number }) {
   const [draft, setDraft] = useState("");
   const add = (raw: string) => {
     const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);

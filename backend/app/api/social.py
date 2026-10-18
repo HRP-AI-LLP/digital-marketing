@@ -21,7 +21,7 @@ from sqlalchemy import delete, select, update
 from app.core.config import ROOT_DIR, get_settings
 from app.core.db import SessionLocal, platform_session, set_tenant
 from app.core.deps import Context, require
-from app.models import OAuthState, ProviderConfig, Schedule, SocialAccount, User
+from app.models import OAuthState, Post, ProviderConfig, Schedule, SocialAccount, User
 from app.services import audit, publishing
 from app.services.llm.catalog import BY_ID
 from app.services.platforms import PLATFORMS
@@ -45,12 +45,18 @@ CONNECTORS: list[dict] = [
      "blurb": "Create image, carousel and video pins on a board you choose."},
     {"id": "google", "label": "Google Business Profile and YouTube", "method": "oauth", "platforms": ["gbp", "youtube"],
      "blurb": "One Google connection for Business Profile posts, YouTube Shorts, Google Analytics and Search Console."},
+    {"id": "x", "label": "X (Twitter)", "method": "oauth", "platforms": ["x"],
+     "blurb": "Post text, images, GIFs, videos and threads. X's free API tier allows only a few posts a day; "
+              "paid plans allow more."},
+    {"id": "tiktok", "label": "TikTok", "method": "oauth", "platforms": ["tiktok"],
+     "blurb": "Post videos and photo carousels. Until TikTok audits your app, posts are visible only to you."},
     {"id": "bluesky", "label": "Bluesky", "method": "app_password", "platforms": ["bluesky"],
      "blurb": "Sign in with your handle and an app password."},
     {"id": "mastodon", "label": "Mastodon", "method": "token", "platforms": ["mastodon"],
      "blurb": "Use an access token from your Mastodon server."},
-    {"id": "manual", "label": "X and other platforms", "method": "manual", "platforms": ["x", "manual"],
-     "blurb": "No API connection: posts are prepared for you to publish by hand. X is on hold because its API is paid."},
+    {"id": "manual", "label": "Other platforms (publish by hand)", "method": "manual", "platforms": ["manual"],
+     "blurb": "No API connection: posts are prepared for you to publish by hand. You can also add X this way if "
+              "you don't use the X API."},
 ]
 PLATFORM_CONNECTOR = {p: c["id"] for c in CONNECTORS for p in c["platforms"]}
 
@@ -94,6 +100,7 @@ def _out(a: SocialAccount) -> dict:
         "status": a.status, "status_message": a.status_message, "token_expires_at": a.token_expires_at,
         "settings": {k: v for k, v in s.items() if not k.startswith("_")},
         "last_checked_at": s.get("_last_checked_at"), "created_at": a.created_at,
+        "can_delete_posts": publishing.can_delete(a),
     }
 
 
@@ -190,10 +197,19 @@ class ConnectIn(BaseModel):
 
 @router.post("/connect/{provider}")
 async def connect(provider: str, body: ConnectIn | None = None, ctx: Context = Depends(require("integration.manage"))):
+    if provider == "canva":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Connect Canva from Media studio → From Canva.")
+    return await start_oauth(ctx, provider, (body or ConnectIn()).model_dump())
+
+
+_RETURN_PATH = re.compile(r"^/[A-Za-z0-9/_-]{0,200}$")
+
+
+async def start_oauth(ctx: Context, provider: str, options: dict, return_to: str | None = None) -> dict:
+    """Store a single-use state (with the PKCE verifier) and build the provider's sign-in URL."""
     spec = OAUTH_PROVIDERS.get(provider)
     if spec is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown provider: {provider}")
-    options = (body or ConnectIn()).model_dump()
     variant = "pages" if provider == "linkedin" and options.get("company_pages") else None
     creds = await common.app_credentials(ctx.session, provider, variant)
     if not creds:
@@ -202,19 +218,24 @@ async def connect(provider: str, body: ConnectIn | None = None, ctx: Context = D
                             f"Add the {label} credentials under Settings → Integrations first.")
     options["app_variant"] = creds.get("variant")
     state = common.new_state()
-    verifier, challenge = common.pkce_pair() if provider == "google" else (None, None)
+    mod = common.adapter(spec["module"])
+    verifier, challenge = common.pkce_pair() if provider in common.PKCE_PROVIDERS else (None, None)
+    if verifier and hasattr(mod, "pkce_challenge"):
+        challenge = mod.pkce_challenge(verifier)
     redirect = common.redirect_uri(provider)
+    data = {"options": options, "redirect_uri": redirect, "code_verifier": verifier}
+    if return_to and _RETURN_PATH.match(return_to) and not return_to.startswith("//"):
+        data["return_to"] = return_to
     async with platform_session() as ps:
         await ps.execute(delete(OAuthState).where(OAuthState.created_at < datetime.now(UTC) - timedelta(hours=2)))
-        ps.add(OAuthState(state=state, organization_id=ctx.org_id, user_id=ctx.user.id, platform=provider,
-                          data={"options": options, "redirect_uri": redirect, "code_verifier": verifier}))
+        ps.add(OAuthState(state=state, organization_id=ctx.org_id, user_id=ctx.user.id, platform=provider, data=data))
         await ps.commit()
-    mod = common.adapter(spec["module"])
     return {"authorize_url": mod.authorize_url(creds, redirect, state, options, challenge), "redirect_uri": redirect}
 
 
-def _back(**params) -> RedirectResponse:
-    url = f"{get_settings().web_base_url}/settings/accounts?{urlencode({k: v for k, v in params.items() if v is not None})}"
+def _back(path: str | None = None, **params) -> RedirectResponse:
+    path = path if path and _RETURN_PATH.match(path) and not path.startswith("//") else "/settings/accounts"
+    url = f"{get_settings().web_base_url}{path}?{urlencode({k: v for k, v in params.items() if v is not None})}"
     return RedirectResponse(url, status_code=status.HTTP_302_FOUND)
 
 
@@ -233,44 +254,48 @@ async def oauth_callback(provider: str, code: str | None = None, state: str | No
             await ps.commit()
     if st is None or st.platform != provider:
         return _back(error="This sign-in has expired or was already used. Press Connect again.")
+    back_to = (st.data or {}).get("return_to")
     created = st.created_at if st.created_at.tzinfo else st.created_at.replace(tzinfo=UTC)
     if datetime.now(UTC) - created > STATE_TTL:
-        return _back(error="The sign-in took too long. Press Connect again.")
+        return _back(back_to, error="The sign-in took too long. Press Connect again.")
     if error:
         msg = None
         if provider == "linkedin":
             from app.services.social.linkedin import oauth_error_message
 
             msg = oauth_error_message(error, error_description)
-        return _back(error=msg or f"{spec['label']} sign-in was cancelled or refused: {error_description or error_reason or error}")
+        return _back(back_to, error=msg or f"{spec['label']} sign-in was cancelled or refused: "
+                     f"{error_description or error_reason or error}")
     if not code:
-        return _back(error="The sign-in response had no authorization code. Press Connect again.")
+        return _back(back_to, error="The sign-in response had no authorization code. Press Connect again.")
 
     data = st.data or {}
     async with SessionLocal() as s:
         set_tenant(s, st.organization_id)
         creds = await common.app_credentials(s, provider, (data.get("options") or {}).get("app_variant"))
         if not creds:
-            return _back(error="The app credentials were removed from Integrations. Add them and connect again.")
+            return _back(back_to, error="The app credentials were removed from Integrations. Add them and connect again.")
         try:
             accounts = await common.adapter(spec["module"]).complete(
                 s, st.organization_id, st.user_id, creds, data.get("redirect_uri") or common.redirect_uri(provider),
                 code, data)
         except PublishError as e:
             await s.rollback()
-            return _back(error=e.message)
+            return _back(back_to, error=e.message)
         except httpx.HTTPError as e:
             await s.rollback()
-            return _back(error=f"Couldn't reach {spec['label']} ({type(e).__name__}). Try again.")
+            return _back(back_to, error=f"Couldn't reach {spec['label']} ({type(e).__name__}). Try again.")
         user = await s.get(User, st.user_id)
         visible = [a for a in accounts if a.platform not in HIDDEN_PLATFORMS]
+        summary = s.info.pop("connect_summary", None)
         audit.record(s, action="social.connected", organization_id=st.organization_id, actor=user,
-                     entity_type="social_account", summary=f"Connected {spec['label']}: "
+                     entity_type="social_account" if accounts or not summary else "design_connection",
+                     summary=summary or f"Connected {spec['label']}: "
                      + (", ".join(a.name for a in accounts)[:400] or "no accounts"),
                      details={"provider": provider, "accounts": [str(a.id) for a in accounts]})
         await s.commit()
         warning = s.info.pop("connect_warning", None)
-    return _back(connected=provider, count=str(len(visible)), warning=warning)
+    return _back(back_to, connected=provider, count=str(len(visible)), warning=warning)
 
 
 # ------------------------------------------------------------------ non-OAuth accounts
@@ -334,7 +359,7 @@ async def add_mastodon(body: MastodonIn, ctx: Context = Depends(require("integra
 
 @router.post("/accounts/manual", status_code=201)
 async def add_manual(body: ManualIn, ctx: Context = Depends(require("integration.manage"))):
-    if body.platform not in ("manual", "x"):
+    if body.platform not in ("manual", "x"):  # X by hand when the X API isn't used
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Manual accounts can be X or Other.")
     acc = SocialAccount(organization_id=ctx.org_id, platform=body.platform, external_id=f"manual:{uuid.uuid4()}",
                         name=body.name.strip(), handle=(body.handle or "").strip() or None,
@@ -348,6 +373,9 @@ async def add_manual(body: ManualIn, ctx: Context = Depends(require("integration
 
 
 # ------------------------------------------------------------------ account management
+TIKTOK_PRIVACY = ("PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY")
+
+
 class AccountPatch(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=200)
     settings: dict | None = None
@@ -365,6 +393,20 @@ async def update_account(aid: uuid.UUID, body: AccountPatch, ctx: Context = Depe
                 continue
             if k == "privacy" and v not in ("public", "unlisted", "private"):
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Privacy must be public, unlisted or private.")
+            if k == "privacy_level" and v is not None and v not in TIKTOK_PRIVACY:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose Everyone, Friends, Followers or Only me.")
+            if k == "monthly_post_limit":
+                try:
+                    v = max(0, min(1000, int(v or 0)))
+                except (TypeError, ValueError):
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST, "The monthly post limit must be a whole number.")
+            if k == "allow_links":
+                v = bool(v)
+            if k == "video_source" and v not in ("upload", "url"):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Video source must be upload or url.")
+            if k in ("audited", "long_posts", "collect_metrics", "disable_comment", "disable_duet", "disable_stitch",
+                     "is_aigc", "sandbox") and v is not None:
+                v = bool(v)
             if v is None:
                 new.pop(k, None)
             else:
@@ -416,6 +458,35 @@ async def remove_account(aid: uuid.UUID, ctx: Context = Depends(require("integra
             .values(status="expired", status_message="Google was disconnected. Connect Google again."))
     _audit(ctx, "social.removed", acc, f"Removed {acc.name} ({acc.platform})")
     await ctx.session.commit()
+
+
+# ------------------------------------------------------------------ deleting a published post on the platform
+@router.post("/posts/{pid}/delete-remote")
+async def delete_remote(pid: uuid.UUID, ctx: Context = Depends(require("content.publish"))):
+    """Delete a published post on X or Pinterest. The post stays in the app with status 'removed'."""
+    from app.services import content as content_svc
+
+    post = await ctx.session.scalar(select(Post).where(Post.id == pid))
+    if post is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Post not found.")
+    if post.status != "published":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only published posts can be deleted on the platform.")
+    acc = await ctx.session.get(SocialAccount, post.social_account_id) if post.social_account_id else None
+    if acc is None or acc.status == "removed":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The account for this post was removed. Delete it on the platform.")
+    try:
+        await publishing.delete_remote(ctx.session, post, acc)
+    except PublishError as e:
+        await ctx.session.commit()  # keep rotated tokens
+        raise _err(e)
+    old_url = post.external_url
+    post.status = "removed"
+    post.meta = {**(post.meta or {}), "removed_at": datetime.now(UTC).isoformat(), "removed_url": old_url}
+    content_svc.add_activity(ctx.session, post, "removed_remote", f"Deleted on {acc.name}", user=ctx.user)
+    audit.record(ctx.session, action="post.deleted_remote", organization_id=ctx.org_id, actor=ctx.user, entity_type="post",
+                 entity_id=post.id, summary=f"Deleted a {post.platform} post on the platform", ip=ctx.ip)
+    await ctx.session.commit()
+    return {"status": post.status}
 
 
 # ------------------------------------------------------------------ Google helpers

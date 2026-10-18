@@ -17,7 +17,7 @@ log = logging.getLogger("publishing")
 
 REFRESH_EVERY_SECONDS = 6 * 3600
 EXPIRY_WINDOW = timedelta(days=7)
-SKIP = {"manual", "x"}
+SKIP = {"manual"}  # manual X accounts are skipped by refresh_account (status "manual")
 
 
 @handler("account.refresh")
@@ -89,7 +89,8 @@ async def schedule_account_refresh() -> None:
 
 # ------------------------------------------------------------------ OAuth app tester
 APP_TO_PROVIDERS = {"meta_app": ["meta", "threads"], "linkedin_app": ["linkedin"],
-                    "pinterest_app": ["pinterest"], "google_app": ["google"]}
+                    "pinterest_app": ["pinterest"], "google_app": ["google"], "x_app": ["x"],
+                    "tiktok_app": ["tiktok"], "canva_app": ["canva"]}
 
 
 @tester("oauth")

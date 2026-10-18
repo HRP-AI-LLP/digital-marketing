@@ -10,6 +10,7 @@ import {
 } from "../../components/ui";
 import { Markdown } from "./Markdown";
 import { JobProgress } from "./NewArticle";
+import { WebsitePanel } from "./WebsitePanel";
 import { scoreTone, type Article, type Faq, type SocialAccount } from "./types";
 
 type Draft = { title: string; body_md: string; meta_title: string; meta_description: string; slug: string; canonical_url: string; faq: Faq[] };
@@ -280,6 +281,7 @@ export function ArticleEditor() {
         </div>
 
         <aside className="space-y-4">
+          <WebsitePanel article={article} dirty={dirty} />
           <ScorePanel article={article} dirty={dirty} />
           {manage && !dirty && <Button variant="ghost" className="w-full" onClick={() => rescore.mutate()} disabled={rescore.isPending}>Check score again</Button>}
 

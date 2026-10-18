@@ -14,6 +14,7 @@ type Schedule = {
   post_types: Record<string, number>; pillar_ids: string[]; mode: string; approval_window_hours: number;
   lead_hours: number; catch_up_grace_hours: number; include_link: boolean; link_url: string | null;
   instructions: string | null; account: (AccountBrief & { platform_label: string }) | null; ready: boolean;
+  interval_days: number; interval_start: string | null;
 };
 type Slot = { at: string; local: string; date: string; blackout: boolean; within_lead: boolean; post_id: string | null; status: string | null };
 
@@ -26,7 +27,7 @@ type Form = Omit<Schedule, "id" | "account" | "ready">;
 const blank = (accountId = ""): Form => ({
   social_account_id: accountId, name: "", active: true, days_of_week: [0, 1, 2, 3, 4], times: ["10:00"],
   post_types: { text: 1, image: 2 }, pillar_ids: [], mode: "approve_first", approval_window_hours: 4, lead_hours: 24,
-  catch_up_grace_hours: 3, include_link: false, link_url: "", instructions: "",
+  catch_up_grace_hours: 3, include_link: false, link_url: "", instructions: "", interval_days: 1, interval_start: null,
 });
 
 function Preview({ id }: { id: string }) {
@@ -100,6 +101,19 @@ function ScheduleForm({ existing, accounts, onClose }: { existing?: Schedule; ac
           <Field label="Schedule name"><Input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="LinkedIn weekdays" /></Field>
         </div>
 
+        <Field label="Repeat" hint={f.interval_days > 1 ? `Posts on every ${f.interval_days === 2 ? "second" : `${f.interval_days}th`} day, counted from ${f.interval_start || "today"}, on the days ticked below.` : "Posts on every day ticked below."}>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={String(f.interval_days || 1)} className="w-48"
+              onChange={(e) => { const n = Number(e.target.value); setF({ ...f, interval_days: n, interval_start: n > 1 ? (f.interval_start || new Date().toISOString().slice(0, 10)) : null, days_of_week: n > 1 ? [0, 1, 2, 3, 4, 5, 6] : f.days_of_week }); }}>
+              <option value="1">On the days below</option>
+              <option value="2">Every 2 days</option>
+              <option value="3">Every 3 days</option>
+              <option value="7">Once a week</option>
+            </Select>
+            {f.interval_days > 1 && <Input type="date" aria-label="Starting from" className="w-44" value={f.interval_start ?? ""} onChange={(e) => setF({ ...f, interval_start: e.target.value || null })} />}
+          </div>
+        </Field>
+
         <fieldset>
           <legend className="mb-1.5 text-sm font-medium">Days</legend>
           <div className="flex flex-wrap gap-1.5">
@@ -125,7 +139,7 @@ function ScheduleForm({ existing, accounts, onClose }: { existing?: Schedule; ac
             ))}
             <Button type="button" variant="secondary" onClick={() => setF({ ...f, times: [...f.times, "17:30"] })}><Plus size={15} /> Add time</Button>
           </div>
-          <p className="mt-1 text-xs text-muted">{f.times.length * f.days_of_week.length} posts a week.</p>
+          <p className="mt-1 text-xs text-muted">{f.interval_days > 1 ? `About ${Math.round(f.times.length * f.days_of_week.length / f.interval_days * 30 / 7)} posts a month.` : `${f.times.length * f.days_of_week.length} posts a week.`}</p>
         </fieldset>
 
         <fieldset>
@@ -229,7 +243,7 @@ function ScheduleCard({ s, canManage, canRun, onEdit }: { s: Schedule; canManage
     onSuccess: (r) => nav(`/posts/${r.post_id}`),
   });
   const remove = useMutation({ mutationFn: () => api(`/content/schedules/${s.id}`, { method: "DELETE" }), onSuccess: refresh });
-  const days = s.days_of_week.length === 7 ? "Every day" : s.days_of_week.length === 5 && !s.days_of_week.includes(5) && !s.days_of_week.includes(6) ? "Weekdays" : s.days_of_week.map((d) => DAY_NAMES[d]).join(", ");
+  const days = (s.interval_days ?? 1) > 1 ? `Every ${s.interval_days} days` : s.days_of_week.length === 7 ? "Every day" : s.days_of_week.length === 5 && !s.days_of_week.includes(5) && !s.days_of_week.includes(6) ? "Weekdays" : s.days_of_week.map((d) => DAY_NAMES[d]).join(", ");
   const types = Object.entries(s.post_types).filter(([, w]) => w > 0).map(([t]) => meta.data?.post_types[t] ?? t).join(", ");
   const err = toggle.error || run.error || remove.error;
   return (

@@ -27,8 +27,9 @@ const STATES = [
 const SOCIAL: [string, string, string][] = [
   ["linkedin", "LinkedIn", "https://www.linkedin.com/company/…"], ["facebook", "Facebook", "https://www.facebook.com/…"],
   ["instagram", "Instagram", "https://www.instagram.com/…"], ["x", "X (Twitter)", "https://x.com/…"],
-  ["youtube", "YouTube", "https://www.youtube.com/@…"], ["threads", "Threads", "https://www.threads.net/@…"],
+  ["youtube", "YouTube", "https://www.youtube.com/@…"], ["tiktok", "TikTok", "https://www.tiktok.com/@…"], ["threads", "Threads", "https://www.threads.net/@…"],
   ["pinterest", "Pinterest", "https://www.pinterest.com/…"], ["github", "GitHub", "https://github.com/…"],
+  ["other", "Other profile (Bluesky, Mastodon, TikTok…)", "https://bsky.app/profile/…"],
 ];
 
 type Form = {

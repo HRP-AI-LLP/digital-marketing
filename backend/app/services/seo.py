@@ -158,6 +158,8 @@ def canonical_url(article, org: Organization | None) -> str:
     meta = article_meta(article)
     if meta.get("canonical_url"):
         return meta["canonical_url"]
+    if meta.get("live_url"):  # where the article was last published (site_publish)
+        return meta["live_url"]
     base = website_base(org)
     slug = _get(article, "slug") or "article"
     return f"{base}/blog/{slug}" if base else f"/blog/{slug}"
@@ -1009,6 +1011,7 @@ HTML_TEMPLATE = """<!doctype html>
 <meta property="og:title" content="{title}">
 <meta property="og:description" content="{description}">
 {og_image}
+{extra_head}
 <script type="application/ld+json">{schema}</script>
 <style>
   :root {{ --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --brand:#075492; --brand-600:#086fb8; --accent:#06a6c7; --tint:#f0f7ff; }}
@@ -1045,6 +1048,29 @@ HTML_TEMPLATE = """<!doctype html>
 </body>
 </html>
 """
+
+
+def head_extras(article, org: Organization | None, canon: str, image_url: str | None = None) -> str:
+    """og:url / site name / article dates / Twitter card tags shared by the export and the website bundle."""
+    e = html.escape
+    created = _get(article, "created_at") or datetime.now(UTC)
+    updated = _get(article, "updated_at") or created
+    title = _get(article, "meta_title") or _get(article, "title") or ""
+    desc = _get(article, "meta_description") or ""
+    tags = [
+        f'<meta property="og:url" content="{e(canon)}">',
+        '<meta name="robots" content="index, follow, max-image-preview:large">',
+        f'<meta property="article:published_time" content="{e(created.isoformat())}">',
+        f'<meta property="article:modified_time" content="{e(updated.isoformat())}">',
+        f'<meta name="twitter:card" content="{"summary_large_image" if image_url else "summary"}">',
+        f'<meta name="twitter:title" content="{e(title)}">',
+        f'<meta name="twitter:description" content="{e(desc)}">',
+    ]
+    if org and org.name:
+        tags.insert(1, f'<meta property="og:site_name" content="{e(org.name)}">')
+    if image_url:
+        tags.append(f'<meta name="twitter:image" content="{e(image_url)}">')
+    return "\n".join(tags)
 
 
 # ============================================================ export
@@ -1101,6 +1127,7 @@ async def export_article(session: AsyncSession, article: SeoArticle) -> Path:
         title=html.escape(article.meta_title or article.title), description=html.escape(article.meta_description or ""),
         canonical=html.escape(canon), schema=json.dumps(schema, ensure_ascii=False).replace("</", "<\\/"),
         og_image=f'<meta property="og:image" content="./{html.escape(cover_name)}">' if cover_name else "",
+        extra_head=head_extras(article, org, canon),
         cover=cover_html, org=html.escape(org.name if org else ""), date=date, body=md_to_html(body),
     )
     (folder / "article.html").write_text(page, encoding="utf-8")

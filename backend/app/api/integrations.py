@@ -277,10 +277,10 @@ async def reset_model_status(body: RouteStep, ctx: Context = Depends(require("in
 
 async def _test_llm(cfg: ProviderConfig) -> str:
     c = conn_from(cfg)
-    models = await llm.list_models(c)
+    models = [] if cfg.provider == "perplexity" else await llm.list_models(c)  # Perplexity has no model list
     st = cfg.settings or {}
     model, emb = st.get("default_model"), st.get("embed_model")
-    parts = [f"Connected. {len(models)} models available."]
+    parts = [f"Connected. {len(models)} models available." if models else "Connected."]
     if model:
         try:
             r = await llm.chat(c, model, [{"role": "user", "content": "Reply with the single word: ready"}], max_tokens=10, temperature=0)

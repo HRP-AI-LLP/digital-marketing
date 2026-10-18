@@ -48,6 +48,25 @@ def save_tokens(account: SocialAccount, tokens: dict, expires_at: datetime | Non
     account.token_expires_at = expires_at
 
 
+async def persist_tokens(account: SocialAccount, tokens: dict, expires_at: datetime | None) -> None:
+    """Save rotated tokens (X, TikTok, Canva refresh tokens are single-use) in their own committed transaction,
+    so a later rollback of the caller's session can't lose them. Also updates the in-memory account."""
+    from sqlalchemy import text, update
+
+    from app.core.db import SessionLocal, set_tenant
+
+    save_tokens(account, tokens, expires_at)
+    try:
+        async with SessionLocal() as s:
+            set_tenant(s, account.organization_id)
+            await s.execute(text("SET LOCAL lock_timeout = '5s'"))
+            await s.execute(update(SocialAccount).where(SocialAccount.id == account.id)
+                            .values(tokens_enc=account.tokens_enc, token_expires_at=expires_at))
+            await s.commit()
+    except Exception as e:  # noqa: BLE001 - the caller's session still carries the new tokens
+        log.warning("couldn't save rotated tokens for account %s separately: %s", account.id, type(e).__name__)
+
+
 def expires_from(seconds) -> datetime | None:
     try:
         s = int(seconds)
@@ -122,18 +141,28 @@ OAUTH_PROVIDERS: dict[str, dict] = {
     "linkedin": {"label": "LinkedIn", "app": "linkedin_app", "module": "linkedin"},
     "pinterest": {"label": "Pinterest", "app": "pinterest_app", "module": "pinterest"},
     "google": {"label": "Google", "app": "google_app", "module": "google"},
+    "x": {"label": "X", "app": "x_app", "module": "x", "pkce": True},
+    "tiktok": {"label": "TikTok", "app": "tiktok_app", "module": "tiktok", "pkce": True},
+    "canva": {"label": "Canva", "app": "canva_app", "module": "canva", "pkce": True},
 }
+PKCE_PROVIDERS = {"google"} | {k for k, v in OAUTH_PROVIDERS.items() if v.get("pkce")}
+
 
 PLATFORM_MODULE: dict[str, str] = {
     "facebook_page": "meta", "instagram": "meta", "threads": "threads",
     "linkedin_person": "linkedin", "linkedin_org": "linkedin", "pinterest": "pinterest",
     "gbp": "google", "youtube": "google", "google": "google",
-    "bluesky": "bluesky", "mastodon": "mastodon", "x": "manual", "manual": "manual",
+    "bluesky": "bluesky", "mastodon": "mastodon", "x": "x", "tiktok": "tiktok", "manual": "manual",
 }
 
 
 def adapter(module: str):
     return importlib.import_module(f"app.services.social.{module}")
+
+
+def is_manual(account: SocialAccount) -> bool:
+    """Accounts published by hand: 'Other', and X accounts added without an API connection."""
+    return account.platform == "manual" or account.status == "manual" or (account.external_id or "").startswith("manual:")
 
 
 def adapter_for_platform(platform: str):

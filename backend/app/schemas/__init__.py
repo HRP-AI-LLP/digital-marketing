@@ -59,7 +59,7 @@ class OrganizationOut(ORM):
 
 ADDRESS_KEYS = ("line1", "line2", "city", "state", "postal_code")
 REGISTRATION_KEYS = ("gstin", "cin", "pan", "udyam", "other")
-SOCIAL_KEYS = ("linkedin", "facebook", "instagram", "x", "youtube", "threads", "pinterest", "github", "other")
+SOCIAL_KEYS = ("linkedin", "facebook", "instagram", "x", "youtube", "tiktok", "threads", "pinterest", "github", "other")
 COMPANY_SIZES = ("1", "2-10", "11-50", "51-200", "201-500", "501-1000", "1001-5000", "5000+")
 GSTIN_RE = re.compile(r"^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$")
 

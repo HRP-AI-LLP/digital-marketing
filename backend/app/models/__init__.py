@@ -53,3 +53,24 @@ __all__ = [
 from app.models.research import IdeaBrief, ResearchRun, ResearchSettings, ResearchSource  # noqa: E402
 
 TENANT_TABLES_RESEARCH = ["research_settings", "research_runs", "research_sources", "idea_briefs"]
+
+from app.models.site import SitePublication, SiteRedirect  # noqa: E402
+
+TENANT_TABLES_SITE = ["site_publications", "site_redirects"]
+from app.models.presence import TENANT_TABLES_PRESENCE, PresenceRun, PresenceSuggestion  # noqa: E402
+from app.models.aivis import AivisAnswer, AivisPrompt, AivisRun, AivisSettings  # noqa: E402
+
+TENANT_TABLES_AIVIS = ["aivis_settings", "aivis_prompts", "aivis_runs", "aivis_answers"]
+from app.models.listening import (  # noqa: E402
+    TENANT_TABLES_LISTENING, ListeningMention, ListeningQuery, ListeningSettings,
+)
+from app.models.siteaudit import SiteAuditIssue, SiteAuditPage, SiteAuditRun, SiteAuditSettings  # noqa: E402
+
+TENANT_TABLES_SITEAUDIT = ["site_audit_settings", "site_audit_runs", "site_audit_pages", "site_audit_issues"]
+from app.models.keywords import (  # noqa: E402
+    TENANT_TABLES_KEYWORDS, KeywordCache, KeywordList, KeywordReport, KeywordSettings, ProviderSpend, RankCheck,
+    TrackedKeyword,
+)
+from app.models.networks import DesignConnection, LinkPage, LinkPageStat  # noqa: E402
+
+TENANT_TABLES_NETWORKS = ["link_pages", "link_page_stats", "design_connections"]

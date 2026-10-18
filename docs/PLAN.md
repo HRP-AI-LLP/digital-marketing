@@ -18,7 +18,7 @@ Phase 1 is single-tenant (HRP AI LLP only). It is designed so that it can become
 | D1 | Start with HRP AI LLP only; scale to multi-tenant SaaS after real usage |
 | D2 | Support both **fully automatic** and **approve-first** publishing, configurable per platform/schedule |
 | D3 | Pluggable **multi-provider LLM layer**: Ollama (local), Gemini, OpenAI, Anthropic, xAI Grok, Hugging Face, Groq, OpenRouter, and others (free and paid). Configured in the Admin → Integrations panel |
-| D4 | **X/Twitter on hold** (free tier closed Feb 2026; pay-per-use only). The adapter slot stays in the design |
+| D4 | **X/Twitter**: API adapter available (OAuth 2.0, threads, media), but X's API is pay-per-use (free tier closed Feb 2026), so it's opt-in; X can still be added as a manual account |
 | D5 | Media: images, GIFs, short videos, animations |
 | D6 | Database: **PostgreSQL** (+ `pgvector` for uniqueness checks and brand RAG) |
 | D7 | Runs locally on Prashant's laptop. Free-tier platform APIs only |

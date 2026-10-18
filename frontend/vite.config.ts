@@ -10,6 +10,7 @@ export default defineConfig({
   server: {
     port: webPort,
     strictPort: true,
-    proxy: { "/api": `http://127.0.0.1:${apiPort}` },
+    // /l/<name> is the public link-in-bio page, served by the API.
+    proxy: { "/api": `http://127.0.0.1:${apiPort}`, "/l/": `http://127.0.0.1:${apiPort}` },
   },
 });

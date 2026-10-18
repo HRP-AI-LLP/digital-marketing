@@ -159,7 +159,11 @@ async def update_article(aid: uuid.UUID, body: ArticlePatch, ctx: Context = Depe
     if data.get("slug"):
         new = seo.slugify(data["slug"])
         if new != a.slug:
+            old_slug = a.slug
             a.slug = await seo.unique_slug(ctx.session, new, exclude=a.id)
+            from app.services import site_publish
+
+            await site_publish.record_slug_change(ctx.session, a, old_slug, a.slug)  # redirects for live copies
     if "canonical_url" in data:
         seo.set_article_meta(a, canonical_url=(data["canonical_url"] or "").strip() or None)
     if data.get("status"):

@@ -26,6 +26,9 @@ type Location = { name: string; account_name: string | null; title: string | nul
 type Board = { id: string; name: string; privacy: string | null };
 
 const KEY = ["social-accounts"];
+const TIKTOK_PRIVACY: Record<string, string> = {
+  PUBLIC_TO_EVERYONE: "Everyone", MUTUAL_FOLLOW_FRIENDS: "Friends", FOLLOWER_OF_CREATOR: "Followers", SELF_ONLY: "Only me",
+};
 const SOON_MS = 7 * 24 * 3600 * 1000;
 
 function useAccounts() {
@@ -92,6 +95,12 @@ function SettingsModal({ acc, onClose }: { acc: SocialAccount; onClose: () => vo
       <form className="space-y-4" onSubmit={(e: FormEvent) => { e.preventDefault(); save.mutate(); }}>
         {save.error && <Alert>{(save.error as Error).message}</Alert>}
         <Field label="Display name" hint="Only used inside this app."><Input required value={name} onChange={(e) => setName(e.target.value)} /></Field>
+        {acc.status !== "manual" && (
+          <Field label="Monthly post limit" hint={acc.platform === "x" ? "Caps paid X API posts. When reached, the schedule stops planning posts and publishing stops until next month. 0 = no limit." : "Optional. 0 = no limit."}>
+            <Input type="number" min={0} max={1000} className="w-32" value={settings.monthly_post_limit ?? 0}
+              onChange={(e) => set("monthly_post_limit", Number(e.target.value || 0))} />
+          </Field>
+        )}
         {acc.platform === "pinterest" && (
           <>
             <Field label="Default board" hint="New pins go to this board.">
@@ -122,6 +131,42 @@ function SettingsModal({ acc, onClose }: { acc: SocialAccount; onClose: () => vo
           <Field label="Post language" hint="Language code for Business Profile posts, for example en or hi.">
             <Input value={settings.language ?? "en"} onChange={(e) => set("language", e.target.value)} maxLength={10} />
           </Field>
+        )}
+        {acc.platform === "x" && (
+          <>
+            <Toggle checked={!!settings.allow_links} onChange={(v) => set("allow_links", v)}
+              label="Allow links in posts (X charges about 13× more for a post with a link; when off, links become “Link in bio”)" />
+            <Toggle checked={!!settings.long_posts} onChange={(v) => set("long_posts", v)}
+              label="Post long text as one post (only for X Premium accounts; otherwise long text becomes a thread)" />
+            <Toggle checked={!!settings.collect_metrics} onChange={(v) => set("collect_metrics", v)}
+              label="Collect post numbers (views, likes). Only if your X plan includes reading posts: it uses credits." />
+          </>
+        )}
+        {acc.platform === "tiktok" && (
+          <>
+            <Toggle checked={!!settings.audited} onChange={(v) => set("audited", v)}
+              label="My TikTok app passed TikTok's audit (until then, posts are visible only to you)" />
+            <Field label="Who can see new posts" hint={settings.audited ? "TikTok decides which choices this account has; the app checks before each post." : "Unaudited apps can only post as Only me."}>
+              <Select value={settings.audited ? (settings.privacy_level ?? "") : "SELF_ONLY"} disabled={!settings.audited}
+                onChange={(e) => set("privacy_level", e.target.value || null)}>
+                <option value="" disabled>Choose who can see posts</option>
+                {Object.entries(TIKTOK_PRIVACY)
+                  .filter(([k]) => !(settings.privacy_options?.length) || settings.privacy_options.includes(k))
+                  .map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+              </Select>
+            </Field>
+            <Field label="How videos reach TikTok" hint="Sending a link needs your media address verified under URL properties in the TikTok developer portal.">
+              <Select value={settings.video_source ?? "upload"} onChange={(e) => set("video_source", e.target.value)}>
+                <option value="upload">Upload the file (works without extra setup)</option>
+                <option value="url">Send a public link</option>
+              </Select>
+            </Field>
+            <Toggle checked={!!settings.disable_comment} onChange={(v) => set("disable_comment", v)} label="Turn off comments" />
+            <Toggle checked={!!settings.disable_duet} onChange={(v) => set("disable_duet", v)} label="Turn off Duet" />
+            <Toggle checked={!!settings.disable_stitch} onChange={(v) => set("disable_stitch", v)} label="Turn off Stitch" />
+            <Toggle checked={!!settings.is_aigc} onChange={(v) => set("is_aigc", v)} label="Label videos as AI-generated" />
+            <p className="text-xs text-muted">By posting to TikTok you agree to TikTok's Music Usage Confirmation.</p>
+          </>
         )}
         {acc.platform === "mastodon" && (
           <Field label="Post visibility">
@@ -191,6 +236,7 @@ function AccountRow({ acc, canManage }: { acc: SocialAccount; canManage: boolean
           {acc.handle && <>{acc.handle} · </>}{acc.platform_label}
           {acc.platform === "pinterest" && (acc.settings.board_name ? <> · Board: {acc.settings.board_name}</> : <> · <span className="text-danger">No board chosen</span></>)}
           {acc.platform === "youtube" && <> · New Shorts: {acc.settings.privacy ?? "public"}</>}
+          {acc.platform === "tiktok" && <> · New posts: {acc.settings.audited ? (TIKTOK_PRIVACY[acc.settings.privacy_level] ?? "choose in settings") : "Only me"}</>}
         </div>
         {acc.status_message && (
           <p className={`mt-1 text-sm ${acc.status === "expired" || acc.status === "error" ? "text-danger" : "text-muted"}`}>{acc.status_message}</p>
@@ -334,7 +380,7 @@ function MastodonModal({ onClose }: { onClose: () => void }) {
 
 function ManualModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
-  const [platform, setPlatform] = useState("x");
+  const [platform, setPlatform] = useState("manual");
   const [name, setName] = useState("");
   const [handle, setHandle] = useState("");
   const [profileUrl, setProfileUrl] = useState("");
@@ -349,8 +395,8 @@ function ManualModal({ onClose }: { onClose: () => void }) {
         <p className="text-sm text-muted">Posts for this account are prepared as usual and wait in Manual publish, ready to copy and post by hand.</p>
         <Field label="Platform">
           <Select value={platform} onChange={(e) => setPlatform(e.target.value)}>
-            <option value="x">X (Twitter)</option>
             <option value="manual">Other</option>
+            <option value="x">X (Twitter), without the X API</option>
           </Select>
         </Field>
         <Field label="Name"><Input required value={name} onChange={(e) => setName(e.target.value)} placeholder={platform === "x" ? "HRP AI on X" : "HRP AI on Quora"} /></Field>
@@ -374,6 +420,10 @@ const APP_FIELDS: Record<string, { id: string; secret: string; idLabel: string; 
     where: "linkedin.com/developers/apps → your app → Auth" },
   pinterest_app: { id: "client_id", secret: "client_secret", idLabel: "App ID", secretLabel: "App secret key",
     where: "developers.pinterest.com/apps → your app" },
+  x_app: { id: "client_id", secret: "client_secret", idLabel: "OAuth 2.0 Client ID", secretLabel: "OAuth 2.0 Client secret",
+    where: "developer.x.com → Projects & Apps → your app → Keys and tokens → OAuth 2.0 Client ID and Client Secret" },
+  tiktok_app: { id: "client_id", secret: "client_secret", idLabel: "Client key", secretLabel: "Client secret",
+    where: "developers.tiktok.com → Manage apps → your app → App details" },
   google_app: { id: "client_id", secret: "client_secret", idLabel: "Client ID", secretLabel: "Client secret",
     where: "console.cloud.google.com → APIs & Services → Credentials → OAuth 2.0 Client IDs (type: Web application)" },
 };
@@ -564,7 +614,7 @@ function ConnectForm({ c, canManage, mediaReady, mediaGuide, onBack, preset = {}
       )}
       {c.needs_public_media && !mediaReady && (
         <p className="mt-2 text-sm text-amber-800">
-          Instagram, Threads and Business Profile fetch media from a public link. Set up Cloudinary or a public URL in{" "}
+          Instagram, Threads, TikTok photos and Business Profile fetch media from a public link. Set up Cloudinary or a public URL in{" "}
           <Link to="/settings/integrations" className="font-medium underline">Integrations</Link> before publishing.
         </p>
       )}
@@ -605,7 +655,7 @@ export default function SocialAccounts() {
     else if (warning) { setBanner({ tone: "warn", text: warning }); qc.invalidateQueries({ queryKey: KEY }); }
     else {
       const n = Number(params.get("count") ?? "0");
-      const label = { meta: "Facebook and Instagram", threads: "Threads", linkedin: "LinkedIn", pinterest: "Pinterest", google: "Google" }[connected!] ?? connected;
+      const label = { meta: "Facebook and Instagram", threads: "Threads", linkedin: "LinkedIn", pinterest: "Pinterest", google: "Google", x: "X", tiktok: "TikTok" }[connected!] ?? connected;
       setBanner({
         tone: "info",
         text: connected === "google"

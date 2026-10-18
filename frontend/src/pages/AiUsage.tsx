@@ -28,7 +28,7 @@ type Status = { provider_id: string; model: string; state: string; label: string
 export const KIND_SHORT: Record<string, string> = { chat: "Text", embed: "Embeddings", image: "Images", tts: "Voice", video: "Video" };
 const TASK_LABEL: Record<string, string> = {
   write: "writing", plan: "planning", qa: "reviews", extract: "reading", longform: "articles", image_prompt: "image prompts",
-  embed: "embeddings", image: "images", tts: "voice-over", video: "video", carousel: "carousels", research: "research",
+  embed: "embeddings", image: "images", tts: "voice-over", video: "video", carousel: "carousels", research: "research", aivis: "AI visibility",
 };
 const SOURCE: Record<string, { label: string; hint: string }> = {
   custom: { label: "Your price", hint: "Uses the price you set on this integration." },

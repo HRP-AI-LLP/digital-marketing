@@ -54,7 +54,7 @@ STATUSES: dict[str, str] = {
     "planned": "Planned", "generating": "Writing", "draft": "Draft", "in_review": "Waiting for approval",
     "approved": "Approved", "scheduled": "Scheduled", "publishing": "Publishing", "published": "Published",
     "manual_pending": "Ready to post by hand", "failed": "Failed", "rejected": "Rejected", "missed": "Missed",
-    "skipped": "Skipped",
+    "skipped": "Skipped", "removed": "Deleted on the platform",
 }
 NEEDS_MEDIA = {"image", "carousel", "gif", "video", "animation", "document"}
 SLIDE_TYPES = {"carousel", "document"}
@@ -83,7 +83,7 @@ def _visual(raw: Any) -> dict | None:
         if items:
             out["bullets"] = items
     return out or None
-MANUAL_PLATFORMS = {"manual", "x"}
+MANUAL_PLATFORMS = {"manual"}  # X accounts added by hand have status "manual"
 
 SIMILARITY_THRESHOLD = 0.88  # cosine similarity on embeddings
 JACCARD_THRESHOLD = 0.6  # word 3-shingle Jaccard (fallback without embeddings; stricter measure)
@@ -516,6 +516,8 @@ def build_system_prompt(brand: BrandProfile, platform: str, post_type: str, cfg:
         "mention a client only if its name appears in the company facts. No percentages or numbers unless they "
         "appear in the facts. Write plain text: no markdown (no **bold**, *italics*, # headings or [text](link)); "
         "write links as plain URLs.",
+        *(["X charges much more for posts that contain a link, so do not put any URL in the text; if a link would "
+           "help, say 'Link in bio' instead."] if platform == "x" else []),
         f"Platform: {p.label}. Style: {p.style or 'clear and professional'}",
         f"Format: {POST_TYPES.get(post_type, post_type)}.",
         f"Hard limits: the text plus hashtags must fit in {p.max_chars} characters; at most {p.max_hashtags} hashtags."

@@ -12,6 +12,7 @@ type Dash = {
   accounts: { id: string; platform: string; platform_label: string; name: string; status: string }[];
   setup: { key: string; title: string; body: string; done: boolean; to: string }[];
   audit_score: number | null;
+  social_presence: { score: number | null; grade: string; change: number | null; at: string } | null;
   failing_jobs: number;
 };
 
@@ -20,7 +21,7 @@ const PLATFORM_BADGE: Record<string, { code: string; bg: string }> = {
   facebook_page: { code: "f", bg: "#1877F2" }, instagram: { code: "IG", bg: "#D62976" }, threads: { code: "@", bg: "#111827" },
   linkedin_person: { code: "in", bg: "#0A66C2" }, linkedin_org: { code: "in", bg: "#0A66C2" }, youtube: { code: "YT", bg: "#FF0000" },
   gbp: { code: "G", bg: "#34A853" }, google: { code: "G", bg: "#4285F4" }, pinterest: { code: "P", bg: "#E60023" },
-  bluesky: { code: "B", bg: "#1185FE" }, mastodon: { code: "M", bg: "#6364FF" }, x: { code: "X", bg: "#111827" },
+  bluesky: { code: "B", bg: "#1185FE" }, mastodon: { code: "M", bg: "#6364FF" }, x: { code: "X", bg: "#111827" }, tiktok: { code: "TT", bg: "#010101" },
 };
 
 function PlatformBadge({ platform }: { platform: string }) {
@@ -198,6 +199,18 @@ export default function Dashboard() {
                 ) : <p className="mt-1 text-sm">None yet. <Link className="text-primary-700 underline" to="/settings/accounts">Connect one</Link>.</p>}
               </Card>
               {can("analytics.view") && <HealthCard />}
+              {can("presence.view") && (
+                <Card>
+                  <div className="text-sm text-muted">Social presence score</div>
+                  <div className="mt-1 text-3xl font-bold tabular-nums">{d.social_presence?.score ?? "—"}<span className="text-base font-normal text-muted">{d.social_presence?.score != null ? " / 100" : ""}</span></div>
+                  {d.social_presence?.change != null && d.social_presence.change !== 0 && (
+                    <div className={`text-xs tabular-nums ${d.social_presence.change > 0 ? "text-emerald-700" : "text-danger"}`}>
+                      {d.social_presence.change > 0 ? "▲" : "▼"} {Math.abs(d.social_presence.change)} points since the previous check
+                    </div>
+                  )}
+                  <Link className="text-sm text-primary-700 hover:underline" to="/presence">{d.social_presence ? "See suggestions" : "Check your social profiles"}</Link>
+                </Card>
+              )}
               <Card>
                 <div className="text-sm text-muted">Digital presence score</div>
                 <div className="mt-1 text-3xl font-bold tabular-nums">{d.audit_score ?? "—"}<span className="text-base font-normal text-muted">{d.audit_score !== null ? " / 100" : ""}</span></div>

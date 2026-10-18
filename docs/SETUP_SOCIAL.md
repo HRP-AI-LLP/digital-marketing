@@ -17,7 +17,7 @@ The redirect URI has this shape:
 {PUBLIC_BASE_URL or http://localhost:8600}/api/v1/social/oauth/{provider}/callback
 ```
 
-where `{provider}` is `meta`, `threads`, `linkedin`, `pinterest` or `google`. If you set
+where `{provider}` is `meta`, `threads`, `linkedin`, `pinterest`, `google`, `x`, `tiktok` or `canva`. If you set
 `PUBLIC_BASE_URL` in `.env` (for example a Cloudflare Tunnel address), the redirect URI changes,
 so register the new one in each developer app too.
 
@@ -173,6 +173,11 @@ Trial vs Standard access:
 
 Tokens last 30 days and are refreshed automatically with the refresh token.
 
+What gets posted: one image (JPG or PNG; WebP and GIF images are sent as a JPG copy), a carousel of 2–5 images,
+or a video (animations use their MP4 version; an attached image becomes the video cover). The post's title, text
+and link become the pin's title, description and destination link. Published pins can be deleted from the post's
+page in this app. Pinterest's API is free; nothing here needs a paid plan.
+
 <!-- guide:google -->
 ## Google: Business Profile, YouTube, Analytics and Search Console
 
@@ -236,12 +241,110 @@ Goal: an access token for your account on your Mastodon server.
 4. On **Social accounts**, choose **Add Mastodon**, enter the server address (for example `https://mastodon.social`)
    and the token.
 
-<!-- guide:manual -->
-## X (Twitter) and other platforms
+<!-- guide:x -->
+## X (Twitter)
 
-X is on hold: its API is pay-per-use, so this app doesn't post to it. Add X (or any other platform) as a
-**manual account**. Posts for manual accounts are prepared as usual and wait in **Manual publish** with
-"copy text", "download media" and "open platform" actions. Publish them by hand and mark them published.
+Connecting X is **optional**. Without it you can still add X as a manual account (below) and post by hand.
+
+Goal: an X developer app with OAuth 2.0 that can post for your account.
+
+About cost: X's API is sold in plans. The free tier (where X still offers it) allows only a small number of posts
+a day and no reading of post numbers; pay-per-use plans charge credits per request and stop when credits run out.
+This app never needs a paid plan: when X refuses something because of your plan, the post or account shows a plain
+explanation instead of an error, and nothing else in the app depends on X.
+
+1. Sign in at [developer.x.com](https://developer.x.com/en/portal/dashboard) with the X account you post from and
+   create a **Project** and an **App** inside it (free sign-up).
+2. Open the app → **User authentication settings → Set up**:
+   - App permissions: **Read and write**.
+   - Type of App: **Web App, Automated App or Bot** (a confidential client).
+   - Callback URI / Redirect URL: the redirect URI shown on the X card in this app (provider `x`). X refuses
+     `localhost` addresses, so set up the HTTPS address (Cloudflare Tunnel, below) first.
+   - Website URL: your company website.
+3. Save, then open **Keys and tokens → OAuth 2.0 Client ID and Client Secret** and copy both.
+4. In this app press **Set up app** on the X card (or **Integrations → X (Twitter) app**), paste them and save.
+5. Press **Connect X (Twitter)** and approve. The app asks for `tweet.read tweet.write users.read offline.access
+   media.write`; access renews itself automatically.
+
+What gets posted: text, up to 4 images, or one GIF or video. Text longer than 280 characters (links count as 23)
+is split into a numbered thread at paragraph and sentence breaks, with the media on the first post. If your
+account has X Premium, switch on **Post long text as one post** in the account's settings.
+
+Post numbers (views, likes, replies, reposts) are **off by default** because reading them costs credits or isn't
+allowed on the free tier. Turn on **Collect post numbers** in the account's settings if your plan includes it; if
+X refuses, collection switches itself off and the account shows why.
+
+Published X posts (and every part of a thread) can be deleted from the post's page in this app.
+
+<!-- guide:tiktok -->
+## TikTok
+
+Connecting TikTok is optional and free. Goal: a TikTok developer app with Login Kit and the Content Posting API
+(Direct Post) that can publish videos and photo posts to your account.
+
+1. Sign in at [developers.tiktok.com](https://developers.tiktok.com/apps/) and **Create an app** (free).
+2. Fill in the app details (icon, name, category, description, terms and privacy policy links on your website).
+3. Add products: **Login Kit** and **Content Posting API**. In Content Posting API switch on **Direct Post**.
+4. Scopes: `user.info.basic`, `video.publish`, `video.upload`.
+5. Login Kit → **Redirect URI**: the one shown on the TikTok card in this app (provider `tiktok`). TikTok only
+   accepts HTTPS, so set up the HTTPS address (Cloudflare Tunnel, below) first.
+6. Photo posts (and videos sent by link) are fetched by TikTok from your public media address. Under **URL
+   properties**, add and verify the domain of that address (for example `studio.hrpai.in`, or your Cloudinary
+   domain). Videos are uploaded directly by default, which needs no verification.
+7. Copy the **Client key** and **Client secret**. In this app press **Set up app** on the TikTok card, paste them
+   and save, then press **Connect TikTok**.
+
+**Unaudited apps post privately.** Until TikTok audits your app, every post is published with privacy
+**Only me**: you see it on your profile, nobody else does. This is TikTok's rule, not an error. To post publicly,
+submit the app for review in the developer portal (TikTok asks for a demo video of connecting and posting).
+Once approved, open the account's **Settings** here, switch on **My TikTok app passed the audit** and choose who can
+see new posts (Everyone, Friends, Followers or Only me). The app checks TikTok's allowed choices and the
+maximum video length for your account before each post.
+
+What gets posted: one vertical video (animations use their MP4 version) with the caption (up to 2,200
+characters including hashtags), or a photo post of up to 35 images (sent as JPG). TikTok processes the post
+for a little while; the app waits and links to it when it's live. Post numbers aren't collected for TikTok.
+TikTok's API doesn't allow deleting posts, so delete them in the TikTok app.
+
+<!-- guide:canva -->
+## Canva (design import)
+
+Connecting Canva is optional and free (any Canva plan, including Canva Free). Goal: a Canva Connect API
+integration so you can pick designs in **Media studio → From Canva** (and in a post's **Create media → From Canva**)
+and import them into the media library.
+
+1. Sign in at [canva.com/developers](https://www.canva.com/developers/integrations/connect-api) and choose
+   **Create an integration** (public or private; private is fine for your own team).
+2. Configuration → **Scopes**: `design:meta:read`, `design:content:read`, `asset:read`, `profile:read`.
+3. Authentication → **Authorized redirects**: add the redirect URI shown in this app (provider `canva`). Canva
+   doesn't accept `localhost`, so use the HTTPS address (Cloudflare Tunnel, below).
+4. Copy the **Client ID** and generate a **Client secret**.
+5. In this app: **Integrations → Canva integration**, paste them and save.
+6. Open **Media studio → From Canva → Connect Canva** and approve.
+
+Then search your designs, pick the pages you want and a format (PNG, JPG, PDF, MP4 or GIF). Canva exports them
+and the files land in the media library, ready to attach to posts.
+
+<!-- guide:manual -->
+## Other platforms (publish by hand), and X without the API
+
+Add any platform (or X, if you don't want to use the X API) as a **manual account**. Posts for manual accounts are
+prepared as usual and wait in **Manual publish** with "copy text", "download media" and "open platform" actions.
+Publish them by hand and mark them published.
+
+<!-- guide:linkinbio -->
+## Link-in-bio page
+
+**Link in bio** (in the Content menu) builds a free, mobile-friendly page with your logo, name, tagline, social
+icons, buttons and (optionally) your latest posts, in your brand colours. Put its address in your Instagram,
+TikTok and X bios.
+
+- Address: `PUBLIC_BASE_URL/l/<your-page-name>` (for example `https://studio.hrpai.in/l/hrp-ai`), and on this laptop
+  `http://localhost:8600/l/<your-page-name>`.
+- Only published pages are shown. Unpublish it any time.
+- Clicks are counted per button per day. No names, IP addresses or cookies are stored.
+- Through the tunnel only the page itself, its button redirects (`/l/<name>/go/...`) and its images
+  (`/l/<name>/img/...`) are reachable, and only for reading.
 
 <!-- guide:media -->
 ## Public media hosting (Instagram, Threads, Business Profile)
@@ -269,8 +372,8 @@ Goal: a stable address such as `https://studio.hrpai.in` that forwards to this a
 Pinterest can return to the app after sign-in and Instagram/Threads can fetch your media. It costs nothing and
 needs no open ports on your router.
 
-**What is exposed:** only the sign-in return addresses (`/api/v1/social/oauth/.../callback`) and signed media links
-(`/api/v1/media/public/...`). The app itself refuses every other request that comes through the tunnel, even with a
+**What is exposed:** only the sign-in return addresses (`/api/v1/social/oauth/.../callback`), signed media links
+(`/api/v1/media/public/...`) and published link-in-bio pages (`/l/...`). The app itself refuses every other request that comes through the tunnel, even with a
 valid login, so the web app, API and admin screens stay reachable only from this laptop.
 
 1. Sign in to [dash.cloudflare.com](https://dash.cloudflare.com) (the account that manages `hrpai.in`) and open
@@ -280,7 +383,7 @@ valid login, so the web app, API and admin screens stay reachable only from this
    `--token`. Copy **only that token**. You don't need to run the command; `start.ps1` does it.
 4. Press **Next** and add a **public hostname**:
    - Subdomain: `studio`  · Domain: `hrpai.in`
-   - Path: `^/api/v1/(social/oauth/|media/public/|health$)`
+   - Path: `^/(api/v1/(social/oauth/|media/public/|health$)|l/)` (the `l/` part serves the link-in-bio page)
    - Service: Type **HTTP**, URL `localhost:8600`
 
    Save the tunnel.
@@ -292,7 +395,8 @@ valid login, so the web app, API and admin screens stay reachable only from this
    ```
 6. Run `.\stop.ps1` then `.\start.ps1`. The first start downloads `cloudflared` into `tools\`. The summary shows
    `HTTPS: https://studio.hrpai.in`, and Cloudflare shows the tunnel as **Healthy**.
-7. The Social accounts page now shows HTTPS redirect URIs for Facebook and Instagram, Threads and Pinterest, for
+7. The Social accounts page now shows HTTPS redirect URIs for Facebook and Instagram, Threads, Pinterest, X, TikTok
+   and Canva, for
    example `https://studio.hrpai.in/api/v1/social/oauth/meta/callback`. Put that exact URI in each developer app
    (Meta: **Facebook Login for Business → Settings → Valid OAuth Redirect URIs**; Threads: use case settings;
    Pinterest: app redirect URIs). Google and LinkedIn keep their `http://localhost` URIs, which they accept.

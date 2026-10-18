@@ -10,11 +10,13 @@ MODULES = [
     "app.modules.publishing",
     "app.modules.media",
     "app.modules.seo",
+    "app.modules.site_publish",
     "app.modules.analytics",
     "app.modules.analytics_growth",
     "app.modules.ai_models",
     "app.modules.inbox",
     "app.modules.research",
+    "app.modules.presence", "app.modules.aivis", "app.modules.listening", "app.modules.siteaudit", "app.modules.keywords", "app.modules.networks",
 ]
 
 

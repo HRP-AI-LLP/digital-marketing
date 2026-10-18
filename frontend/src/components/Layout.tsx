@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   CalendarDays, CheckCheck, ChevronsUpDown, FileText, Gauge, History, Image, KeyRound,
   LineChart, LogOut, Menu, Plug, Coins, Radar, Settings, ShieldCheck, Bell, Users as UsersIcon, X, Globe2, ListChecks,
-  Palette, Clock, Share2, Inbox as InboxIcon, Lightbulb,
+  Palette, Clock, Share2, Inbox as InboxIcon, Lightbulb, Megaphone, Bot, Ear, ScanSearch, KeySquare, Link2,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import NotificationBell from "./NotificationBell";
@@ -21,19 +21,27 @@ export const NAV: Group[] = [
       { to: "/approvals", label: "Approvals", icon: CheckCheck, perm: "content.approve" },
       { to: "/posts", label: "All posts", icon: ListChecks, perm: "content.view" },
       { to: "/media", label: "Media studio", icon: Image, perm: "media.manage" },
+      { to: "/link-in-bio", label: "Link in bio", icon: Link2, perm: "linkinbio.manage" },
       { to: "/seo", label: "SEO articles", icon: FileText, perm: "seo.view" },
     ],
   },
   {
     label: "Engage",
-    items: [{ to: "/inbox", label: "Inbox", icon: InboxIcon, perm: "inbox.view", badge: "inbox" }],
+    items: [
+      { to: "/inbox", label: "Inbox", icon: InboxIcon, perm: "inbox.view", badge: "inbox" },
+      { to: "/listening", label: "Listening", icon: Ear, perm: "listening.view" },
+    ],
   },
   {
     label: "Understand",
     items: [
       { to: "/intelligence", label: "Company intelligence", icon: Radar, perm: "intel.view" },
       { to: "/research", label: "Research & ideas", icon: Lightbulb, perm: "research.view" },
+      { to: "/keywords", label: "Keywords & rankings", icon: KeySquare, perm: "keywords.view" },
+      { to: "/site-audit", label: "Site audit", icon: ScanSearch, perm: "siteaudit.view" },
+      { to: "/ai-visibility", label: "AI visibility", icon: Bot, perm: "aivis.view" },
       { to: "/analytics", label: "Analytics", icon: LineChart, perm: "analytics.view" },
+      { to: "/presence", label: "Social presence", icon: Megaphone, perm: "presence.view" },
     ],
   },
   {

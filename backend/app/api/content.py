@@ -425,6 +425,13 @@ class ScheduleIn(BaseModel):
     include_link: bool = False
     link_url: str | None = Field(None, max_length=2000)
     instructions: str | None = Field(None, max_length=4000)
+    interval_days: int = Field(1, ge=1, le=14)
+    interval_start: str | None = None
+
+    @field_validator("interval_start")
+    @classmethod
+    def _istart(cls, v: str | None) -> str | None:
+        return _valid_date(v)
 
     @field_validator("days_of_week")
     @classmethod
@@ -457,6 +464,13 @@ class SchedulePatch(BaseModel):
     include_link: bool | None = None
     link_url: str | None = Field(None, max_length=2000)
     instructions: str | None = Field(None, max_length=4000)
+    interval_days: int | None = Field(None, ge=1, le=14)
+    interval_start: str | None = None
+
+    @field_validator("interval_start")
+    @classmethod
+    def _istart(cls, v: str | None) -> str | None:
+        return _valid_date(v)
 
     @field_validator("days_of_week")
     @classmethod
@@ -481,7 +495,8 @@ def schedule_out(s: Schedule, account: SocialAccount | None) -> dict:
         "pillar_ids": [str(p) for p in (s.pillar_ids or [])], "mode": s.mode,
         "approval_window_hours": s.approval_window_hours, "lead_hours": s.lead_hours,
         "catch_up_grace_hours": s.catch_up_grace_hours, "include_link": s.include_link, "link_url": s.link_url,
-        "instructions": s.instructions, "created_at": s.created_at, "updated_at": s.updated_at,
+        "instructions": s.instructions, "interval_days": s.interval_days or 1, "interval_start": s.interval_start,
+        "created_at": s.created_at, "updated_at": s.updated_at,
         "account": _account_brief(account),
         "ready": scheduler.account_ready(account),
     }
@@ -578,7 +593,7 @@ async def update_schedule(sid: uuid.UUID, body: SchedulePatch, ctx: Context = De
     if "mode" in data:
         _check_mode_permission(ctx, data["mode"])
     for k, v in data.items():
-        if v is None and k not in ("link_url", "instructions"):
+        if v is None and k not in ("link_url", "instructions", "interval_start"):
             continue
         if k == "pillar_ids":
             v = [str(p) for p in v]

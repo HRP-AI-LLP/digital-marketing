@@ -42,7 +42,8 @@ METRIC_FIELDS = ("followers", "following", "posts_count", "reach", "impressions"
 UNSUPPORTED: dict[str, str] = {
     "linkedin_person": "LinkedIn doesn't share follower counts for personal profiles through its API.",
     "gbp": "Google Business Profile has no followers; profile views aren't collected yet.",
-    "x": "X (Twitter) is on hold, so its numbers aren't collected.",
+    "x": "X charges for (or, on the free tier, blocks) reading account numbers, so they aren't collected.",
+    "tiktok": "TikTok follower numbers need an extra permission (user.info.stats) that this connection doesn't ask for.",
     "manual": "Accounts you post to by hand don't report numbers.",
 }
 SKIP_PLATFORMS = {"google"}  # the hidden Google connection holder

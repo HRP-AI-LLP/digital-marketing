@@ -1,4 +1,4 @@
-"""Accounts without an API connection: X (on hold, the API is paid) and 'Other'. The content engine
+"""Accounts without an API connection: 'Other', and X accounts added by hand (when the paid X API isn't used). The content engine
 routes their posts to 'manual publish' before calling publish; this is the safety net."""
 
 from app.models import MediaAsset, Post, SocialAccount

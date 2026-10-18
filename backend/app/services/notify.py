@@ -40,9 +40,16 @@ EVENTS: dict[str, str] = {
     "analytics_report": "Marketing report ready",
     "inbox_new": "New comments and mentions (summary)",
     "inbox_urgent": "Urgent or negative comments and mentions",
+    "presence_change": "Social presence score changed",
+    "aivis_drop": "AI visibility dropped",
+    "listening_spike": "Listening: sudden rise in mentions or negative mentions",
+    "listening_digest": "Listening: daily or weekly summary",
+    "rank_change": "Keyword ranking changes (big drops, new top 3 / top 10)",
+    "siteaudit_ready": "Site audit finished",
+    "siteaudit_drop": "Website health dropped",
 }
 DEFAULT_EXTERNAL = ["post_review", "post_failed", "account_issue", "manual_publish", "job_failed", "ai_issue",
-                    "inbox_urgent"]
+                    "inbox_urgent", "listening_spike", "listening_digest", "siteaudit_drop"]
 URGENT = {"post_failed", "account_issue", "job_failed"}
 
 

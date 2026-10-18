@@ -43,7 +43,7 @@ export type Person = { id: string; name: string; email: string };
 /** Short platform marks (no third-party logos): two letters on a neutral chip. */
 const MARKS: Record<string, string> = {
   facebook_page: "Fb", instagram: "Ig", threads: "Th", youtube: "Yt", bluesky: "Bs", mastodon: "Ma",
-  linkedin_org: "in", linkedin_person: "in", pinterest: "Pi", gbp: "G", web: "", news: "",
+  linkedin_org: "in", linkedin_person: "in", pinterest: "Pi", gbp: "G", x: "X", tiktok: "Tt", web: "", news: "",
 };
 
 export function PlatformMark({ platform, label, size = "sm" }: { platform: string; label: string; size?: "sm" | "xs" }) {

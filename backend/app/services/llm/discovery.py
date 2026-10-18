@@ -233,6 +233,8 @@ async def _discover_raw(cfg: ProviderConfig) -> list[tuple[str, dict]] | None:
     spec = BY_ID.get(cfg.provider)
     style = spec.style if spec else "openai"
     if cfg.kind == "llm":
+        if cfg.provider == "perplexity":
+            return None  # no model-list API: use the catalog's suggestions
         if style == "anthropic":
             return await _anthropic(cfg)
         if cfg.provider == "gemini":

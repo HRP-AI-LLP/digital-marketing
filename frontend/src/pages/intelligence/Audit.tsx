@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { Check, ClipboardCheck, Minus, X } from "lucide-react";
 import { api } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
@@ -118,7 +119,11 @@ export default function AuditTab({ overview }: { overview: Overview }) {
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-2xl text-sm text-muted">Checks your website's SEO basics, mobile speed, social profiles and how fresh your content is, then lists what to fix first.</p>
+        <p className="max-w-2xl text-sm text-muted">
+          Checks your website's SEO basics, mobile speed, social profiles and how fresh your content is, then lists what to fix first.
+          {can("siteaudit.view") && <> For a page-by-page technical check (150+ checks, Core Web Vitals, AI crawler access), open the{" "}
+            <Link to="/site-audit" className="text-primary-700 hover:underline">Site audit</Link>.</>}
+        </p>
         {can("intel.manage") && (
           <Button onClick={() => run.mutate()} disabled={run.isPending || !crawled} title={crawled ? undefined : "Crawl your website first"}>
             <ClipboardCheck size={15} /> {a ? "Run the audit again" : "Run audit"}

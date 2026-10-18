@@ -13,6 +13,9 @@ import {
   parseTags, toLocalInput, tzLabel, until, useContentAccounts, useMeta, useTz, type PostDetail as Post,
 } from "./shared";
 
+/** Platforms whose API lets the app delete a published post (X deletes every part of a thread). */
+const REMOTE_DELETE = new Set(["x", "pinterest"]);
+
 type Draft = { text: string; title: string; tags: string; link_url: string; first_comment: string; when: string; media_ids: string[] };
 
 const toDraft = (p: Post, tz: string): Draft => ({
@@ -155,6 +158,10 @@ export default function PostDetail() {
   const regen = useMutation({ mutationFn: (note: string) => act("regenerate", { note }), onSuccess: (r) => { setDialog(null); onAct(r); } });
   const publishNow = useMutation({ mutationFn: () => act("publish-now"), onSuccess: onAct });
   const remove = useMutation({ mutationFn: () => api(`/content/posts/${id}`, { method: "DELETE" }), onSuccess: () => { refresh(); nav("/posts"); } });
+  const removeRemote = useMutation({
+    mutationFn: () => api(`/social/posts/${id}/delete-remote`, { method: "POST" }),
+    onSuccess: () => { setNotice(`Deleted on ${p?.platform_label ?? "the platform"}. The post stays here for your records.`); refresh(); },
+  });
 
   if (q.isLoading) return <Spinner label="Loading post…" />;
   if (q.error || !p || !d) return <Alert>{q.error ? (q.error as Error).message : "Post not found."}</Alert>;
@@ -167,7 +174,8 @@ export default function PostDetail() {
   const count = caption(d.text, tags).length;
   const preview = { ...p, text: d.text, title: d.title || null, hashtags: tags, link_url: d.link_url || null, media: p.media.filter((m) => d.media_ids.includes(m.id)) };
   const approvable = ["in_review", "draft", "missed", "rejected"].includes(p.status);
-  const err = save.error || approve.error || regen.error || publishNow.error || remove.error;
+  const err = save.error || approve.error || regen.error || publishNow.error || remove.error || removeRemote.error;
+  const remoteDeletable = p.status === "published" && REMOTE_DELETE.has(p.platform) && can("content.publish");
   const copyText = async () => {
     const full = [d.title, caption(d.text, tags), d.link_url && !d.text.includes(d.link_url) ? d.link_url : ""].filter(Boolean).join("\n\n");
     try { await navigator.clipboard.writeText(full); setNotice("Text copied."); } catch { setNotice("Couldn't copy. Select the text and copy it yourself."); }
@@ -192,6 +200,12 @@ export default function PostDetail() {
         </div>
         <div className="flex flex-wrap gap-2">
           {p.external_url && <a href={p.external_url} target="_blank" rel="noreferrer"><Button variant="secondary"><ExternalLink size={15} /> View on {p.platform_label}</Button></a>}
+          {remoteDeletable && (
+            <Button variant="danger" disabled={removeRemote.isPending}
+              onClick={() => { if (confirm(`Delete this post on ${p.platform_label}? This can't be undone.`)) removeRemote.mutate(); }}>
+              <Trash2 size={15} /> {removeRemote.isPending ? "Deleting…" : `Delete on ${p.platform_label}`}
+            </Button>
+          )}
           {approvable && can("content.approve") && <Button onClick={() => approve.mutate()} disabled={approve.isPending || dirty}><Check size={16} /> Approve</Button>}
           {["in_review", "draft", "scheduled", "approved", "missed"].includes(p.status) && can("content.approve") && (
             <Button variant="danger" onClick={() => setDialog("reject")}><X size={15} /> Reject</Button>

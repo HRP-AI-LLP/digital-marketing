@@ -71,7 +71,8 @@ async def list_boards(account: SocialAccount) -> list[dict]:
 async def complete(session, org_id, user_id, creds: dict, redirect_uri: str, code: str, data: dict) -> list[SocialAccount]:
     async with net.client() as c:
         t = ok_json(await c.post(f"{API}/oauth/token", headers=_basic(creds), data={
-            "grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri}), "Pinterest sign-in")
+            "grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
+            "continuous_refresh": "true"}), "Pinterest sign-in")  # refresh tokens that renew (Pinterest's 2025 change)
         tok = t["access_token"]
         u = ok_json(await c.get(f"{API}/user_account", headers=_bearer(tok)), "Pinterest profile")
         boards = ok_json(await c.get(f"{API}/boards", params={"page_size": 100}, headers=_bearer(tok)),
@@ -104,14 +105,39 @@ async def refresh(session, account: SocialAccount) -> None:
 
 
 def _b64(asset: MediaAsset) -> dict:
-    mime = asset.mime if asset.mime in ("image/jpeg", "image/png") else "image/png"
-    return {"content_type": mime, "data": base64.b64encode(common.read_bytes(asset)).decode()}
+    """Pinterest takes base64 JPEG or PNG only: WebP and GIF images are sent as a JPEG copy."""
+    data = common.read_bytes(asset)
+    if asset.mime in ("image/jpeg", "image/png"):
+        return {"content_type": asset.mime, "data": base64.b64encode(data).decode()}
+    from app.services.media import _to_jpeg
+
+    try:
+        data = _to_jpeg(data)
+    except Exception as e:  # noqa: BLE001
+        raise PublishError(f"Pinterest needs JPG or PNG images and this file couldn't be converted ({type(e).__name__}).")
+    return {"content_type": "image/jpeg", "data": base64.b64encode(data).decode()}
+
+
+def _video_file(asset: MediaAsset) -> tuple[bytes, str]:
+    if common.is_video(asset):
+        return common.read_bytes(asset), asset.mime or "video/mp4"
+    from app.services.media import asset_file  # animations and GIF loops carry an MP4 twin
+
+    path, mime = asset_file(asset, "mp4")
+    if path is None:
+        raise PublishError("The MP4 version of this animation is missing. Render it again.")
+    return path.read_bytes(), mime
+
+
+def _is_motion(asset: MediaAsset) -> bool:
+    return common.is_video(asset) or bool((asset.meta or {}).get("mp4_path"))
 
 
 async def _upload_video(c: httpx.AsyncClient, base: str, tok: str, asset: MediaAsset) -> str:
     reg = ok_json(await c.post(f"{base}/media", headers=_bearer(tok), json={"media_type": "video"}),
                   "Pinterest video upload")
-    files = {"file": (common.filename(asset), common.read_bytes(asset), asset.mime or "video/mp4")}
+    data, mime = _video_file(asset)
+    files = {"file": (common.filename(asset).rsplit(".", 1)[0] + ".mp4", data, mime)}
     r = await c.post(reg["upload_url"], data=reg.get("upload_parameters") or {}, files=files)
     common.raise_for(r, "Pinterest video upload")
     mid = str(reg["media_id"])
@@ -142,8 +168,11 @@ async def publish(session, post: Post, account: SocialAccount, media: list[Media
     if media[0].alt_text:
         body["alt_text"] = media[0].alt_text[:500]
     async with net.client(net.UPLOAD_TIMEOUT) as c:
-        videos = [m for m in media if common.is_video(m)]
-        images = [m for m in media if not common.is_video(m) and not common.is_pdf(m)]
+        videos = [m for m in media if _is_motion(m)] if post.post_type in ("video", "animation") or \
+            all(_is_motion(m) for m in media) else [m for m in media if common.is_video(m)]
+        images = [m for m in media if m not in videos and not common.is_pdf(m)]
+        if not videos and not images:
+            raise PublishError("Pinterest pins need an image or a video; PDF documents can't be pinned.")
         if videos:
             mid = await _upload_video(c, base, tok, videos[0])
             src = {"source_type": "video_id", "media_id": mid}
@@ -161,6 +190,16 @@ async def publish(session, post: Post, account: SocialAccount, media: list[Media
         d = ok_json(await c.post(f"{base}/pins", headers=_bearer(tok), json=body), "Pinterest pin")
     pid = str(d["id"])
     return pid, f"https://www.pinterest.com/pin/{pid}/"
+
+
+async def delete(session, post: Post, account: SocialAccount) -> None:
+    tok = account_tokens(account).get("access_token")
+    if not tok:
+        raise PublishError("No access token stored. Connect the account again.", reconnect=True)
+    async with net.client() as c:
+        r = await c.delete(f"{api_base(account)}/pins/{post.external_id}", headers=_bearer(tok))
+    if r.status_code != 404:
+        common.raise_for(r, "Deleting the pin")
 
 
 async def fetch_metrics(session, post: Post, account: SocialAccount) -> dict | None:

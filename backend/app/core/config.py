@@ -44,8 +44,9 @@ class Settings(BaseSettings):
     # Only OAuth callbacks and signed media links are served through it; everything else is refused.
     public_base_url: str = ""
     # Sign-in callbacks that must use the public HTTPS address (Meta refuses http://localhost once an app is Live).
-    # Google and LinkedIn accept http://localhost, so they keep using it. Use "*" for all.
-    oauth_https_providers: str = "meta,threads,pinterest"
+    # Google and LinkedIn accept http://localhost, so they keep using it. TikTok needs HTTPS; X and Canva refuse
+    # "localhost" callbacks. Use "*" for all.
+    oauth_https_providers: str = "meta,threads,pinterest,x,tiktok,canva"
     storage_dir: str = str(ROOT_DIR / "storage")
     crawl_max_pages: int = 150
     worker_in_process: bool = False  # run the job worker inside the API process

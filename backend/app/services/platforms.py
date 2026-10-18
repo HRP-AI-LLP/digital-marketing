@@ -51,8 +51,18 @@ PLATFORMS: dict[str, Platform] = {p.id: p for p in [
              style="Short, direct, human. Fits in 300 characters including hashtags."),
     Platform("mastodon", "Mastodon", 500, ("text", "link", "image", "gif", "video"), max_hashtags=4, max_images=4,
              style="Plain, informative, CamelCase hashtags for accessibility."),
-    Platform("x", "X (Twitter)", 280, ("text", "link", "image", "gif", "video"), max_hashtags=2, image_size=(1200, 675), max_images=4,
-             notes="On hold: publish by hand (the API is paid).", style="Concise, punchy, under 280 characters."),
+    Platform("x", "X (Twitter)", 280, ("text", "link", "image", "carousel", "gif", "video", "animation"), max_hashtags=2,
+             image_size=(1200, 675), video_size=(1080, 1920), max_images=4, oauth_app="x_app",
+             notes="Longer text is posted as a thread. Up to 4 images, or one GIF or video. The free X API tier allows "
+                   "only a few posts a day.",
+             style="Concise, punchy, under 280 characters including hashtags and links (a link counts as 23). "
+                   "One clear idea, 1–2 hashtags at most."),
+    Platform("tiktok", "TikTok", 2200, ("video", "animation", "image", "carousel"), max_hashtags=5,
+             image_size=(1080, 1920), video_size=(1080, 1920), max_images=35, needs_public_media=True,
+             oauth_app="tiktok_app",
+             notes="Vertical video (or a photo carousel). Until TikTok audits your app, posts are visible only to you.",
+             style="Caption for a short vertical video: a hook in the first line, one or two short lines of context, "
+                   "a call to action, then 3–5 relevant hashtags. Casual, energetic, no corporate jargon."),
     Platform("manual", "Other (publish by hand)", 3000, ("text", "link", "image", "carousel", "gif", "video", "animation", "document"),
              max_hashtags=5, max_images=10, notes="The app prepares the post; you copy and post it yourself."),
 ]}

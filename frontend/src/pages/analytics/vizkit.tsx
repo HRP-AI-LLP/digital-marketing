@@ -222,7 +222,7 @@ const PLATFORM_BADGE: Record<string, { code: string; bg: string }> = {
   facebook_page: { code: "f", bg: "#1877F2" }, instagram: { code: "IG", bg: "#D62976" }, threads: { code: "@", bg: "#111827" },
   linkedin_person: { code: "in", bg: "#0A66C2" }, linkedin_org: { code: "in", bg: "#0A66C2" }, youtube: { code: "YT", bg: "#FF0000" },
   gbp: { code: "G", bg: "#34A853" }, pinterest: { code: "P", bg: "#E60023" }, bluesky: { code: "B", bg: "#1185FE" },
-  mastodon: { code: "M", bg: "#6364FF" }, x: { code: "X", bg: "#111827" }, website: { code: "W", bg: "#475569" },
+  mastodon: { code: "M", bg: "#6364FF" }, x: { code: "X", bg: "#111827" }, tiktok: { code: "TT", bg: "#010101" }, website: { code: "W", bg: "#475569" },
 };
 export function PlatformBadge({ platform, size = 24 }: { platform: string; size?: number }) {
   const b = PLATFORM_BADGE[platform] ?? { code: platform.slice(0, 2).toUpperCase(), bg: "#64748B" };

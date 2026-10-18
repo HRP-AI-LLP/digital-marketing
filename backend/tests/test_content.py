@@ -515,7 +515,8 @@ async def test_window_promotion_dispatch_and_catch_up(client, fake):
 async def test_manual_platform_goes_to_manual_pending(client, fake):
     o = await new_org(client)
     acc = await mk_account(o["id"], platform="manual", status="manual")
-    xacc = await mk_account(o["id"], platform="x", status="connected", name="X")
+    # X has an API connection now; an X account added by hand (status "manual") still goes to manual publish.
+    xacc = await mk_account(o["id"], platform="x", status="manual", name="X")
     p = await mk_post(o["id"], acc, status="scheduled", text="By hand", scheduled_at=datetime.now(UTC))
     px = await mk_post(o["id"], xacc, status="scheduled", text="On X", scheduled_at=datetime.now(UTC))
     assert (await run_inline("post.publish", o["id"], {"post_id": str(p.id)}))["status"] == "manual_pending"
@@ -790,3 +791,32 @@ async def test_generated_text_has_no_markdown():
                         "instagram", "carousel")
     assert d["text"] == "Hi there"
     assert d["slides"][0] == {"heading": "*Clear* pay", "body": "Built for *teams*"}  # template accent kept
+
+
+async def test_every_n_days_and_monthly_limit(client, fake):
+    sched = Schedule(days_of_week=[0, 1, 2, 3, 4, 5, 6], times=["12:00"], interval_days=2, interval_start="2026-10-19")
+    start = datetime(2026, 10, 18, 20, 0, tzinfo=UTC)
+    slots = scheduler.slot_times(sched, IST, start, start + timedelta(days=7))
+    assert [s.astimezone(IST).strftime("%d") for s in slots] == ["19", "21", "23", "25"]
+
+    o = await new_org(client)
+    acc = await add(o["id"], SocialAccount(id=uuid.uuid4(), organization_id=o["id"], platform="linkedin_org",
+                                           name="Capped", status="connected", settings={"monthly_post_limit": 2}))
+    await mk_schedule(o["id"], acc.id, times=["10:00"], lead_hours=24 * 6)
+    # one post already published this month counts towards the limit
+    await mk_post(o["id"], acc, status="published", published_at=datetime(2026, 10, 5, 6, 0, tzinfo=UTC),
+                  scheduled_at=datetime(2026, 10, 5, 6, 0, tzinfo=UTC))
+    async with SessionLocal() as s:
+        set_tenant(s, o["id"])
+        org = await s.get(Organization, o["id"])
+        planned = await scheduler.plan_all(s, org, datetime(2026, 10, 18, 22, 0, tzinfo=UTC))
+        await s.commit()
+    assert len(planned) == 1  # 6 daily slots available, but only one more fits under the limit of 2
+
+
+async def test_x_posts_leave_links_out():
+    from app.services.social.x import strip_links
+
+    assert strip_links("Our HRMS is live. Explore: https://hrpai.in/products\n\n#HRTech") == \
+        "Our HRMS is live.\n\n#HRTech\n\nLink in bio."
+    assert strip_links("No links here #AI") == "No links here #AI"

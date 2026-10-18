@@ -4,11 +4,12 @@ import { Box, Check, Image as ImageIcon, Library as LibraryIcon, Sparkles, Wand2
 import { api } from "../../api/client";
 import { useJob, type Job } from "../../api/hooks";
 import { Alert, Button, EmptyState, Field, Modal, Select, Spinner, Tabs, Textarea, Toggle } from "../../components/ui";
+import { CanvaPicker } from "../media/Canva";
 import { TemplatePicker } from "../media/Gallery";
 import { AssetPreview, PREVIEW_SIZE_LABEL, useCaps, useTemplates, type Asset, type AssetPage } from "../media/shared";
 import { useMeta, type PostDetail as Post } from "./shared";
 
-type Tab = "design" | "ai" | "3d" | "library";
+type Tab = "design" | "ai" | "3d" | "library" | "canva";
 const KIND_NAMES: Record<string, string> = {
   image: "Image", carousel: "Carousel", gif: "GIF loop", animation: "Animation (MP4)", video: "Short video with voice-over", document: "PDF document",
 };
@@ -61,7 +62,7 @@ export function PostMediaDialog({ post, onClose, onAttached }: { post: Post; onC
   return (
     <Modal title="Create media for this post" onClose={onClose} wide>
       <Tabs value={tab} onChange={(t) => { setTab(t); setOptions(null); setError(null); }} items={[
-        { id: "design", label: "Branded design" }, { id: "ai", label: "AI image" }, { id: "3d", label: "3D scene" }, { id: "library", label: "From library" },
+        { id: "design", label: "Branded design" }, { id: "ai", label: "AI image" }, { id: "3d", label: "3D scene" }, { id: "library", label: "From library" }, { id: "canva", label: "From Canva" },
       ]} />
       {error && <div className="mb-3"><Alert>{error}</Alert></div>}
       {busy && <div className="mb-3"><Alert tone="info"><Spinner label={job?.progress || "Working on it… this can take a minute for videos."} /></Alert></div>}
@@ -81,6 +82,8 @@ export function PostMediaDialog({ post, onClose, onAttached }: { post: Post; onC
             allowGif={kinds.includes("gif")}
             onGo={(scene, output, size) => start("/media/3d", { scene, output, size, platform: post.platform, fields: { headline: post.title || post.topic || "" } })} />}
           {tab === "library" && <LibraryTab busy={attach.isPending} onPick={(ids) => attach.mutate(ids)} />}
+          {tab === "canva" && <CanvaPicker returnTo={`/posts/${post.id}`} actionLabel="Import and use in this post"
+            onImported={(ids) => { if (ids.length) attach.mutate(ids.slice(0, 10)); }} />}
           <div className="mt-5 border-t border-line pt-4">
             <Toggle checked={replace} onChange={setReplace} label={replace ? "Replace the post's current media" : "Add to the post's current media"} />
           </div>

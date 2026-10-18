@@ -52,6 +52,9 @@ async def dashboard(ctx: Context = Depends(get_context)):
     schedules = await s.scalar(select(func.count()).select_from(Schedule).where(Schedule.active.is_(True))) or 0
     members = await s.scalar(select(func.count()).select_from(Membership).where(Membership.is_active.is_(True))) or 0
     audit = await s.scalar(select(PresenceAudit).order_by(PresenceAudit.created_at.desc()).limit(1))
+    from app.models import PresenceRun
+
+    social_runs = (await s.scalars(select(PresenceRun).order_by(PresenceRun.created_at.desc()).limit(2))).all()
     failing_jobs = await s.scalar(select(func.count()).select_from(Job).where(
         Job.status == "failed", Job.finished_at >= now - timedelta(days=2))) or 0
 
@@ -86,5 +89,9 @@ async def dashboard(ctx: Context = Depends(get_context)):
                      for a in accounts],
         "setup": setup,
         "audit_score": audit.score if audit else None,
+        "social_presence": ({"score": social_runs[0].score, "grade": social_runs[0].grade,
+                             "change": (social_runs[0].score - social_runs[1].score)
+                             if len(social_runs) > 1 and social_runs[0].score is not None and social_runs[1].score is not None else None,
+                             "at": social_runs[0].created_at} if social_runs else None),
         "failing_jobs": failing_jobs,
     }
