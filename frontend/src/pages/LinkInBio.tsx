@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, Copy, ExternalLink, GripVertical, ImagePlus, Plus, 
 import { api } from "../api/client";
 import { Alert, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Stat, Toggle } from "../components/ui";
 import { AssetPreview, type AssetPage } from "./media/shared";
+import { HoverTip, SERIES, TipHead, TipRow, fmtDayLong, useTip } from "../components/viz";
 
 type LinkItem = {
   id: string; title: string; url: string; icon: string | null; thumbnail_asset_id: string | null; highlight: boolean; enabled: boolean;
@@ -109,6 +110,43 @@ function LinkRow({ link, index, count, thumbUrl, onChange, onRemove, onMove, dra
   );
 }
 
+/** Daily visits and clicks, side by side per day; hover or focus a day for the exact numbers and click rate. */
+function DailyBars({ days, max, period }: { days: Stats["by_day"]; max: number; period: number }) {
+  const t = useTip();
+  const [hover, setHover] = useState<string | null>(null);
+  const tipFor = (d: Stats["by_day"][number]) => (
+    <>
+      <TipHead>{fmtDayLong(d.day)}</TipHead>
+      <TipRow color="#b7dcff" label="Visits" value={d.views} />
+      <TipRow color={SERIES[0]} label="Clicks" value={d.clicks} />
+      <TipRow label="Click rate" value={d.views ? `${((d.clicks / d.views) * 100).toFixed(1)}%` : "—"} strong />
+    </>
+  );
+  const clear = () => { setHover(null); t.hide(); };
+  return (
+    <div>
+      <div ref={t.ref} className="relative">
+        <div className="flex h-24 items-end gap-[2px]" role="img" aria-label={`Daily visits and clicks over the last ${period} days`} onPointerLeave={clear}>
+          {days.map((d) => (
+            <div key={d.day} tabIndex={0} aria-label={`${d.day}: ${d.views} visits, ${d.clicks} clicks`}
+              className={`flex h-full flex-1 items-end gap-px rounded-t outline-none transition-opacity focus-visible:bg-slate-100 ${hover && hover !== d.day ? "opacity-40" : ""}`}
+              onPointerMove={(e) => { setHover(d.day); t.show(e, tipFor(d)); }}
+              onFocus={(e) => { setHover(d.day); t.show(e.currentTarget, tipFor(d)); }} onBlur={clear}>
+              <div className="flex-1 rounded-t bg-primary-200" style={{ height: `${(d.views / max) * 100}%` }} />
+              <div className="flex-1 rounded-t bg-primary-600" style={{ height: `${(d.clicks / max) * 100}%` }} />
+            </div>
+          ))}
+        </div>
+        {t.tip}
+      </div>
+      <div className="mt-1 flex gap-4 text-xs text-muted">
+        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-primary-200" />Visits</span>
+        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-primary-600" />Clicks</span>
+      </div>
+    </div>
+  );
+}
+
 function StatsPanel({ enabled }: { enabled: boolean }) {
   const [days, setDays] = useState(30);
   const q = useQuery({ queryKey: ["linkinbio-stats", days], queryFn: () => api<Stats>(`/linkinbio/stats?days=${days}`), enabled });
@@ -130,26 +168,23 @@ function StatsPanel({ enabled }: { enabled: boolean }) {
             <Stat label="Clicks" value={s.clicks} />
             <Stat label="Click rate" value={s.click_rate == null ? "–" : `${s.click_rate}%`} />
           </div>
-          <div>
-            <div className="flex h-24 items-end gap-[2px]" role="img" aria-label={`Daily visits and clicks over the last ${days} days`}>
-              {s.by_day.map((d) => (
-                <div key={d.day} className="flex h-full flex-1 items-end gap-px" title={`${d.day}: ${d.views} visits, ${d.clicks} clicks`}>
-                  <div className="flex-1 rounded-t bg-primary-200" style={{ height: `${(d.views / max) * 100}%` }} />
-                  <div className="flex-1 rounded-t bg-primary-600" style={{ height: `${(d.clicks / max) * 100}%` }} />
-                </div>
-              ))}
-            </div>
-            <div className="mt-1 flex gap-4 text-xs text-muted">
-              <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-primary-200" />Visits</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-primary-600" />Clicks</span>
-            </div>
-          </div>
+          <DailyBars days={s.by_day} max={max} period={days} />
           {s.by_target.length > 0 ? (
             <ul className="space-y-2">
               {s.by_target.slice(0, 10).map((t) => (
                 <li key={t.target} className="text-sm">
-                  <div className="flex justify-between gap-2"><span className="min-w-0 truncate">{t.label}</span><span className="tabular-nums text-muted">{t.clicks}</span></div>
-                  <div className="mt-1 h-1.5 rounded bg-slate-100"><div className="h-1.5 rounded bg-primary-600" style={{ width: `${(t.clicks / topMax) * 100}%` }} /></div>
+                  <HoverTip block className="group/bar" label={`${t.label}: ${t.clicks} clicks`} tip={
+                    <>
+                      <TipHead sub={t.kind}>{t.label}</TipHead>
+                      <TipRow color={SERIES[0]} label="Clicks" value={t.clicks} />
+                      <TipRow label="Share of all clicks" value={s.clicks ? `${((t.clicks / s.clicks) * 100).toFixed(1)}%` : "—"} />
+                      {s.views > 0 && <TipRow label="Clicks per page visit" value={`${((t.clicks / s.views) * 100).toFixed(1)}%`} />}
+                      {/^https?:/.test(t.target) && <div className="mt-1 truncate text-[11px] text-muted">{t.target}</div>}
+                    </>
+                  }>
+                    <div className="flex justify-between gap-2"><span className="min-w-0 truncate">{t.label}</span><span className="tabular-nums text-muted">{t.clicks}</span></div>
+                    <div className="mt-1 h-1.5 rounded bg-slate-100"><div className="h-1.5 rounded bg-primary-600 transition-opacity group-hover/bar:opacity-80" style={{ width: `${(t.clicks / topMax) * 100}%` }} /></div>
+                  </HoverTip>
                 </li>
               ))}
             </ul>
@@ -216,7 +251,7 @@ export default function LinkInBio() {
   return (
     <div>
       <PageHeader title="Link in bio"
-        description="One mobile-friendly page with all your important links, for your Instagram, TikTok and X bios. Free, no extra services needed."
+        description="One mobile-friendly page with all your important links, for your Instagram, X and Threads bios. Free, no extra services needed."
         action={
           <div className="flex flex-wrap gap-2">
             {info.exists && d.published && !dirty && (

@@ -2,7 +2,9 @@
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, String
+import uuid
+
+from sqlalchemy import JSON, BigInteger, DateTime, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, IdMixin, utcnow
@@ -27,4 +29,38 @@ class DowntimePeriod(IdMixin, Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     reason: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BackupRun(IdMixin, Base):
+    """One database backup attempt (platform level). kind: daily | manual. status: running | ok | failed."""
+
+    __tablename__ = "backup_runs"
+
+    kind: Mapped[str] = mapped_column(String(20), default="daily")
+    status: Mapped[str] = mapped_column(String(20), default="running", index=True)
+    method: Mapped[str | None] = mapped_column(String(20))  # podman | pg_dump
+    file_name: Mapped[str | None] = mapped_column(String(200))
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    media_file: Mapped[str | None] = mapped_column(String(200))
+    media_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    copied_to: Mapped[str | None] = mapped_column(String(500))
+    warning: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    triggered_by: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # file deleted by rotation
+
+
+class UiTranslation(IdMixin, Base):
+    """AI translation of one piece of interface text into one language (shared by everyone, never tenant data)."""
+
+    __tablename__ = "ui_translations"
+    __table_args__ = (UniqueConstraint("language", "source_hash", name="uq_ui_translations_lang_hash"),)
+
+    language: Mapped[str] = mapped_column(String(80))
+    source_hash: Mapped[str] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

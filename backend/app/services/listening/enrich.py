@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import CompanyProfile, Competitor, Organization
 from app.models.listening import MENTION_SENTIMENTS, ListeningMention, ListeningQuery
 from app.services.inbox.sentiment import heuristic as sentiment_heuristic
+from app.services.listening.text import weak_term
 from app.services.llm import router as llm_router
 
 log = logging.getLogger("listening")
@@ -94,6 +95,12 @@ def heuristic(m: ListeningMention, q: ListeningQuery | None) -> dict:
                 reason = "complaint"
             elif s == "question" or "?" in text:
                 reason = "question"
+    # A brand or competitor topic matched only by everyday words ("home") is almost never about the company.
+    weak_only = bool(m.matched_terms) and q is not None and q.kind in ("brand", "competitor") and \
+        all(weak_term(t) for t in m.matched_terms)
+    if weak_only:
+        return {"relevant": False, "relevance": 0.1, "sentiment": "neutral", "tags": [], "needs_response": False,
+                "reason": None, "about": "other"}
     return {
         "relevant": True, "relevance": 0.7 if m.matched_terms else 0.5,
         "sentiment": "neutral" if s == "question" else s, "tags": tags_for(text),

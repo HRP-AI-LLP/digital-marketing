@@ -385,8 +385,13 @@ async def render_pdf(html: str) -> bytes:
 
 
 # ------------------------------------------------------------------ email
-async def smtp_config(session: AsyncSession) -> ProviderConfig | None:
-    return await session.scalar(select(ProviderConfig).where(ProviderConfig.kind == "smtp", ProviderConfig.enabled.is_(True)))
+async def smtp_config(session: AsyncSession, org: Organization | None = None) -> ProviderConfig | None:
+    """The organization's default sender (Settings → Organization → Email), else the first enabled mailbox."""
+    from app.services.mailer import default_sender
+
+    if org is None and session.info.get("org_id"):
+        org = await session.get(Organization, session.info["org_id"])
+    return await default_sender(session, org)
 
 
 def email_html(d: dict) -> str:

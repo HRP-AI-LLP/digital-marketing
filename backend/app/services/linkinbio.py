@@ -21,7 +21,9 @@ from app.models import BrandProfile, LinkPage, LinkPageStat, MediaAsset, Organiz
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$")
 RESERVED = {"api", "admin", "l", "go", "img", "static", "assets", "www", "login"}
 MAX_LINKS = 40
-SOCIAL_ORDER = ("linkedin", "instagram", "facebook", "x", "youtube", "tiktok", "threads", "pinterest", "github", "other")
+# TikTok is banned in India, so it isn't shown even if an old link is still stored.
+SOCIAL_ORDER = ("linkedin", "instagram", "facebook", "x", "youtube", "whatsapp", "telegram", "threads", "pinterest",
+                "reddit", "discord", "github", "other")
 SOCIAL_META = {
     "linkedin": ("LinkedIn", "in", "https://www.linkedin.com/in/{}"),
     "instagram": ("Instagram", "IG", "https://www.instagram.com/{}"),
@@ -29,6 +31,10 @@ SOCIAL_META = {
     "x": ("X", "X", "https://x.com/{}"),
     "youtube": ("YouTube", "▶", "https://www.youtube.com/@{}"),
     "tiktok": ("TikTok", "♪", "https://www.tiktok.com/@{}"),
+    "whatsapp": ("WhatsApp", "WA", "https://whatsapp.com/channel/{}"),
+    "telegram": ("Telegram", "TG", "https://t.me/{}"),
+    "reddit": ("Reddit", "r/", "https://www.reddit.com/r/{}"),
+    "discord": ("Discord", "DC", "https://discord.gg/{}"),
     "threads": ("Threads", "@", "https://www.threads.net/@{}"),
     "pinterest": ("Pinterest", "P", "https://www.pinterest.com/{}"),
     "github": ("GitHub", "GH", "https://github.com/{}"),

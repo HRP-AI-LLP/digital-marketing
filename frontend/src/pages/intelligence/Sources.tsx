@@ -30,7 +30,7 @@ function CrawlForm({ defaultUrl }: { defaultUrl: string }) {
     <Card>
       <div className="flex items-center gap-2"><Globe size={17} className="text-primary-700" /><h3 className="font-semibold">Read a website</h3></div>
       <p className="mt-1 text-sm text-muted">Follows the sitemap and links on the same site and respects robots.txt. Your own website then updates the company profile.</p>
-      <form className="mt-4 grid gap-3 sm:grid-cols-[1fr_120px_auto] sm:items-end" onSubmit={(e: FormEvent) => { e.preventDefault(); crawl.mutate(); }}>
+      <form className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px_auto] sm:items-end" onSubmit={(e: FormEvent) => { e.preventDefault(); crawl.mutate(); }}>
         <Field label="Website address"><Input required value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.example.com" /></Field>
         <Field label="Page limit"><Input inputMode="numeric" value={maxPages} onChange={(e) => setMaxPages(e.target.value.replace(/\D/g, ""))} /></Field>
         <Button type="submit" disabled={crawl.isPending || !url.trim()}>{crawl.isPending ? "Starting…" : "Crawl website"}</Button>

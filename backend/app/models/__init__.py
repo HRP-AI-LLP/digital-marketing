@@ -74,4 +74,10 @@ from app.models.keywords import (  # noqa: E402
 from app.models.networks import DesignConnection, LinkPage, LinkPageStat  # noqa: E402
 
 TENANT_TABLES_NETWORKS = ["link_pages", "link_page_stats", "design_connections"]
-from app.models.system import DowntimePeriod, SystemState  # noqa: E402,F401
+from app.models.system import BackupRun, DowntimePeriod, SystemState, UiTranslation  # noqa: E402,F401
+from app.models.links import LinkClick, TrackedLink  # noqa: E402,F401
+
+TENANT_TABLES_LINKS = ["tracked_links", "link_clicks"]
+from app.models.connections import TENANT_TABLES_CONNECTIONS, ApiToken, Webhook, WebhookDelivery  # noqa: E402,F401
+from app.models.collab import TENANT_TABLES_COLLAB, PostComment, PostVersion, SavedReply  # noqa: E402,F401
+from app.models.experiments import TENANT_TABLES_EXPERIMENTS, Experiment, ExperimentPost  # noqa: E402,F401

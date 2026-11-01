@@ -1,12 +1,13 @@
-import { useMemo, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, Play, Plus, Trash2, X } from "lucide-react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import {
-  Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Textarea, Toggle,
+  Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, Tabs, Textarea, Toggle,
 } from "../components/ui";
+import { BestTimesPanel, EvergreenPanel } from "./SchedulesSmart";
 import { DAY_NAMES, PlatformTag, PostStatus, tzLabel, useMeta, usePillars, useTz, type AccountBrief } from "./content/shared";
 
 type Schedule = {
@@ -14,7 +15,7 @@ type Schedule = {
   post_types: Record<string, number>; pillar_ids: string[]; mode: string; approval_window_hours: number;
   lead_hours: number; catch_up_grace_hours: number; include_link: boolean; link_url: string | null;
   instructions: string | null; account: (AccountBrief & { platform_label: string }) | null; ready: boolean;
-  interval_days: number; interval_start: string | null;
+  interval_days: number; interval_start: string | null; time_mode: "fixed" | "best"; posts_per_day: number;
 };
 type Slot = { at: string; local: string; date: string; blackout: boolean; within_lead: boolean; post_id: string | null; status: string | null };
 
@@ -28,6 +29,7 @@ const blank = (accountId = ""): Form => ({
   social_account_id: accountId, name: "", active: true, days_of_week: [0, 1, 2, 3, 4], times: ["10:00"],
   post_types: { text: 1, image: 2 }, pillar_ids: [], mode: "approve_first", approval_window_hours: 4, lead_hours: 24,
   catch_up_grace_hours: 3, include_link: false, link_url: "", instructions: "", interval_days: 1, interval_start: null,
+  time_mode: "fixed", posts_per_day: 1,
 });
 
 function Preview({ id }: { id: string }) {
@@ -127,6 +129,26 @@ function ScheduleForm({ existing, accounts, onClose }: { existing?: Schedule; ac
         </fieldset>
 
         <fieldset>
+          <legend className="mb-1.5 text-sm font-medium">When to post</legend>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {([["fixed", "Times I choose", "Post at the exact times below."], ["best", "Best time", "Post when this account gets the most engagement, learned from your results (between 08:00 and 21:00)."]] as const).map(([k, t, hint]) => (
+              <label key={k} className={`cursor-pointer rounded-lg border px-3 py-2.5 ${f.time_mode === k ? "border-primary-600 bg-primary-50" : "border-line hover:border-brand/40"}`}>
+                <input type="radio" name="time_mode" className="sr-only" checked={f.time_mode === k} onChange={() => setF({ ...f, time_mode: k })} />
+                <span className="block text-sm font-medium">{t}</span>
+                <span className="block text-xs text-muted">{hint}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        {f.time_mode === "best" ? (
+          <Field label="Posts a day" hint={`Spread at least 3 hours apart. ${f.posts_per_day * f.days_of_week.length} posts a week${f.interval_days > 1 ? " on the repeat days" : ""}.`}>
+            <Select value={String(f.posts_per_day)} className="w-48" onChange={(e) => setF({ ...f, posts_per_day: Number(e.target.value) })}>
+              {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} a day</option>)}
+            </Select>
+          </Field>
+        ) : (
+        <fieldset>
           <legend className="mb-1.5 text-sm font-medium">Posting times ({tzLabel(tz)})</legend>
           <div className="flex flex-wrap items-center gap-2">
             {f.times.map((t, i) => (
@@ -141,6 +163,7 @@ function ScheduleForm({ existing, accounts, onClose }: { existing?: Schedule; ac
           </div>
           <p className="mt-1 text-xs text-muted">{f.interval_days > 1 ? `About ${Math.round(f.times.length * f.days_of_week.length / f.interval_days * 30 / 7)} posts a month.` : `${f.times.length * f.days_of_week.length} posts a week.`}</p>
         </fieldset>
+        )}
 
         <fieldset>
           <legend className="mb-1 text-sm font-medium">Post types and mix</legend>
@@ -254,7 +277,7 @@ function ScheduleCard({ s, canManage, canRun, onEdit }: { s: Schedule; canManage
             {s.active && !s.ready && <Badge tone="danger">Account not connected</Badge>}
           </div>
           <div className="mt-0.5 text-sm text-muted">
-            {days} at {s.times.join(", ")} {tzLabel(tz)} · {types}
+            {days} {s.time_mode === "best" ? `at the best time${(s.posts_per_day ?? 1) > 1 ? ` (${s.posts_per_day} a day)` : ""}` : `at ${s.times.join(", ")} ${tzLabel(tz)}`} · {types}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-1">
@@ -273,7 +296,31 @@ function ScheduleCard({ s, canManage, canRun, onEdit }: { s: Schedule; canManage
   );
 }
 
+const TABS = [
+  { id: "schedules", label: "Schedules", path: "/settings/schedules" },
+  { id: "best-times", label: "Best times", path: "/settings/schedules/best-times" },
+  { id: "evergreen", label: "Evergreen", path: "/settings/schedules/evergreen" },
+] as const;
+type TabId = (typeof TABS)[number]["id"];
+
 export default function Schedules() {
+  const { tab: raw } = useParams();
+  const nav = useNavigate();
+  const tab: TabId = raw === "best-times" || raw === "evergreen" ? raw : "schedules";
+  const tabs = <Tabs<TabId> value={tab} onChange={(t) => nav(TABS.find((x) => x.id === t)!.path)} items={TABS.map(({ id, label }) => ({ id, label }))} />;
+  if (tab !== "schedules") {
+    return (
+      <div>
+        <PageHeader title="Posting schedules" description={tab === "best-times" ? "When each account gets the most engagement, learned from your own results." : "Share your best timeless posts again, freshly worded."} />
+        {tabs}
+        {tab === "best-times" ? <BestTimesPanel /> : <EvergreenPanel />}
+      </div>
+    );
+  }
+  return <ScheduleList tabs={tabs} />;
+}
+
+function ScheduleList({ tabs }: { tabs: ReactNode }) {
   const { can } = useAuth();
   const canManage = can("schedule.manage");
   const canRun = canManage && can("content.create");
@@ -299,6 +346,7 @@ export default function Schedules() {
         description="When each account posts, what kinds of posts, and whether they need approval."
         action={canManage && <Button onClick={() => setEditing("new")} disabled={!accountList.length}><Plus size={16} /> New schedule</Button>}
       />
+      {tabs}
       {accounts.error && (
         <div className="mb-4"><Alert>Couldn't load social accounts: {(accounts.error as Error).message}</Alert></div>
       )}

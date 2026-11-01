@@ -6,11 +6,16 @@ from sqlalchemy import func, select
 from app.core.db import platform_session
 from app.core.deps import Context, require
 from app.core.security import generate_password, hash_password
+from app.services.welcome import send_access_email
 from app.models import Membership, MembershipRole, Role, User
 from app.schemas import MemberCreate, MemberCreated, MemberOut, MemberUpdate, PasswordReset, RoleRef
-from app.services import audit
+from app.services import audit, twofa
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _inviter(ctx: Context) -> str:
+    return ctx.user.full_name or ctx.user.email
 
 
 async def _roles_by_id(ctx: Context) -> dict[UUID, Role]:
@@ -26,6 +31,7 @@ def _out(m: Membership, roles: dict[UUID, Role]) -> MemberOut:
         roles=[RoleRef.model_validate(roles[r.role_id]) for r in m.roles if r.role_id in roles],
         last_login_at=m.user.last_login_at,
         joined_at=m.created_at,
+        two_factor_enabled=bool(m.user.totp_enabled),
     )
 
 
@@ -98,7 +104,10 @@ async def add_user(body: MemberCreate, ctx: Context = Depends(require("user.mana
                  summary=f"Added {email} as {', '.join(r.name for r in roles)}", ip=ctx.ip)
     await ctx.session.commit()
     m = await _get_membership(ctx, user.id)
-    return MemberCreated(member=_out(m, await _roles_by_id(ctx)), temporary_password=temp)
+    sent, note = (False, None)
+    if body.send_email:
+        sent, note = await send_access_email(ctx.session, ctx.org, user, temp, _inviter(ctx), "added")
+    return MemberCreated(member=_out(m, await _roles_by_id(ctx)), temporary_password=temp, email_sent=sent, email_note=note)
 
 
 @router.patch("/{user_id}", response_model=MemberOut)
@@ -153,4 +162,27 @@ async def reset_password(user_id: UUID, ctx: Context = Depends(require("user.man
     audit.record(ctx.session, action="user.password_reset", organization_id=ctx.org_id, actor=ctx.user,
                  entity_type="user", entity_id=user_id, summary=f"Reset password for {m.user.email}", ip=ctx.ip)
     await ctx.session.commit()
-    return PasswordReset(temporary_password=temp)
+    sent, note = await send_access_email(ctx.session, ctx.org, m.user, temp, _inviter(ctx), "reset")
+    return PasswordReset(temporary_password=temp, email_sent=sent, email_note=note)
+
+
+@router.post("/{user_id}/reset-2fa", response_model=MemberOut)
+async def reset_two_factor(user_id: UUID, ctx: Context = Depends(require("user.manage"))):
+    """For someone who lost their phone and recovery codes: turns two-step sign-in off so they can sign in with
+    their password and set it up again (their organization may require it at the next sign-in)."""
+    m = await _get_membership(ctx, user_id)
+    if not ctx.user.is_platform_admin and (m.user.is_platform_admin or not await _is_only_in_this_org(user_id, ctx.org_id)):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "This person also belongs to another organization, so ask a platform administrator to do this.")
+    if not m.user.totp_enabled and not m.user.totp_secret_enc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{m.user.full_name} doesn't use two-step sign-in.")
+    async with platform_session() as s:
+        u = await s.get(User, user_id)
+        twofa.clear(u)
+        await s.commit()
+    audit.record(ctx.session, action="user.2fa_reset", organization_id=ctx.org_id, actor=ctx.user,
+                 entity_type="user", entity_id=user_id, summary=f"Reset two-step sign-in for {m.user.email}", ip=ctx.ip)
+    await ctx.session.commit()
+    m = await _get_membership(ctx, user_id)
+    await ctx.session.refresh(m.user)
+    return _out(m, await _roles_by_id(ctx))

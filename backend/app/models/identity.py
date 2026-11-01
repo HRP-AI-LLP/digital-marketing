@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, IdMixin, TenantMixin, TimestampMixin, utcnow
@@ -52,6 +53,18 @@ class User(IdMixin, TimestampMixin, Base):
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Two-step sign-in (authenticator app, RFC 6238). The secret is encrypted like other credentials; while
+    # setting up, the new secret is stored with totp_enabled still false.
+    totp_secret_enc: Mapped[str | None] = mapped_column(Text)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    totp_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # JSONB (not JSON): queries use SELECT DISTINCT on users, which needs an equality operator.
+    recovery_codes: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")  # hashes of unused codes
+    totp_last_step: Mapped[int | None] = mapped_column(BigInteger)  # last accepted 30-second step (no replays)
+    totp_failed_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    totp_locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    known_devices: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")  # device names seen at sign-in
+    preferences: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")  # theme, font, language...
 
 
 class Permission(Base):
@@ -122,6 +135,11 @@ class RefreshToken(IdMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Carried over when the token is rotated, so a device's session shows when it first signed in.
+    signed_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    # "signed_out": ended on purpose (sign out other devices, password change); reusing it is not a theft signal.
+    revoked_reason: Mapped[str | None] = mapped_column(String(20))
 
 
 class AuditLog(IdMixin, Base):

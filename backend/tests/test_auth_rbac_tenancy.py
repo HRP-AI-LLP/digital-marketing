@@ -174,3 +174,22 @@ async def test_audit_log_is_tenant_scoped(client):
     items = (await client.get("/audit", headers=auth(a))).json()["items"]
     assert any(i["action"] == "user.added" for i in items)
     assert not any("Acme" in (i["summary"] or "") for i in items)
+
+
+async def test_audit_log_search_filter_sort(client):
+    a = await login(client, "admin@hrpai.in", ADMIN_PW)
+    h = auth(a)
+    facets = (await client.get("/audit/facets", headers=h)).json()
+    assert any(c["key"] == "user" for c in facets["categories"])
+    assert facets["actors"] and all("count" in x for x in facets["actors"])
+    r = (await client.get("/audit", params={"action": "user.", "sort": "action", "dir": "asc", "limit": 5}, headers=h)).json()
+    assert r["items"] and all(i["action"].startswith("user.") for i in r["items"])
+    assert [i["action"] for i in r["items"]] == sorted(i["action"] for i in r["items"])
+    assert "details" in r["items"][0]
+    s = (await client.get("/audit", params={"q": "user.ad"}, headers=h)).json()
+    assert s["total"] >= 1 and all("user.ad" in i["action"] or "user.ad" in (i["summary"] or "").lower() for i in s["items"])
+    none = (await client.get("/audit", params={"start": "2000-01-01", "end": "2000-01-02"}, headers=h)).json()
+    assert none["total"] == 0
+    who = facets["actors"][0]["key"]
+    w = (await client.get("/audit", params={"actor": who}, headers=h)).json()
+    assert w["total"] == facets["actors"][0]["count"]

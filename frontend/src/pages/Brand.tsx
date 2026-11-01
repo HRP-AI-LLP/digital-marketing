@@ -268,7 +268,7 @@ function Pillars({ canEdit }: { canEdit: boolean }) {
             {add.error && <Alert>{(add.error as Error).message}</Alert>}
             <Field label="Name"><Input required value={n.name} onChange={(e) => setN({ ...n, name: e.target.value })} placeholder="Product & features" /></Field>
             <Field label="What it covers"><Textarea rows={2} value={n.description} onChange={(e) => setN({ ...n, description: e.target.value })} /></Field>
-            <div className="grid grid-cols-[1fr_auto] gap-4">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4">
               <Field label={`Weight ${n.weight}`}>
                 <input type="range" min={0} max={100} step={5} value={n.weight} onChange={(e) => setN({ ...n, weight: Number(e.target.value) })} className="w-full accent-[rgb(var(--brand))]" />
               </Field>

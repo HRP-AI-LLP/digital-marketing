@@ -25,7 +25,7 @@ from app.services import audit
 from app.services import media as media_svc
 from app.services.jobs import enqueue
 from app.services.media_templates import TEMPLATES, registry
-from app.services.platforms import PLATFORMS, POST_TYPES
+from app.services.platforms import PLATFORMS, POST_TYPES, offered_platforms
 
 router = APIRouter(prefix="/media", tags=["media"])
 
@@ -202,12 +202,7 @@ async def delete_media(asset_id: uuid.UUID, ctx: Context = Depends(require("medi
                  entity_id=asset_id, summary=f"Deleted {a.kind}", ip=ctx.ip)
     await ctx.session.commit()
     for rel in rels:
-        try:
-            p = storage.abs_path(rel)
-            if p.is_file():
-                p.unlink()
-        except (ValueError, OSError):
-            pass
+        storage.delete(rel)
 
 
 # ============================================================================ templates & rendering
@@ -240,7 +235,7 @@ async def templates(size: str = "1080x1350", ctx: Context = Depends(require("con
         "platforms": [
             {"id": p.id, "label": p.label, "image_size": list(p.image_size), "video_size": list(p.video_size),
              "max_images": p.max_images, "post_types": list(p.post_types), "needs_public_media": p.needs_public_media}
-            for p in PLATFORMS.values()
+            for p in offered_platforms()
         ],
         "sizes": [
             {"id": "1080x1080", "label": "Square 1:1"}, {"id": "1080x1350", "label": "Portrait 4:5"},
@@ -457,8 +452,12 @@ async def attach(body: AttachIn, ctx: Context = Depends(require("media.manage"))
         if a.kind in ("audio", "model3d"):
             raise _bad("Audio files and 3D models can't be posted directly. Render the model as an image or video first.")
         ids.append(str(a.id))
+    from app.services import collab
+
+    before = collab.snapshot(post)
     post.media_ids = ids if body.replace else [*(post.media_ids or []), *[i for i in ids if i not in (post.media_ids or [])]]
     post.meta = {**(post.meta or {}), "keep_media": True}
+    await collab.record_change(ctx.session, post, before, "Changed media (from the library)", ctx.user)
     audit.record(ctx.session, action="media.attached", organization_id=ctx.org_id, actor=ctx.user, entity_type="post",
                  entity_id=post.id, summary=f"Attached {len(ids)} media file(s)", ip=ctx.ip)
     await ctx.session.commit()

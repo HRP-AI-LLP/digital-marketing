@@ -492,8 +492,11 @@ async def test_refresh_skips_without_google(client, admin, monkeypatch):
 
 # ------------------------------------------------------------------ social performance
 async def test_social_performance_and_best_times(client, admin):
-    st = await _setup(client, admin)
-    org_id = st["org_id"]
+    from tests.test_content import new_org  # its own organization: other tests publish in the shared one
+
+    o = await new_org(client)
+    org_id = o["id"]
+    st = {"admin": o["tokens"]}
     base = (datetime.now(UTC) - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
     async with SessionLocal() as s:
         set_tenant(s, org_id)

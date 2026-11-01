@@ -56,7 +56,9 @@ function TipCard({ r, canManage }: { r: Rec; canManage: boolean }) {
       {r.why && <p className="mt-1 text-sm text-muted"><span className="font-medium text-ink">Why: </span>{r.why}</p>}
       {r.action && <p className="mt-1 text-sm"><span className="font-medium">What to do: </span>{r.action}</p>}
       {(msg || r.result) && (
-        <div className="mt-2"><Alert tone="info">{msg?.text ?? r.result}{msg?.link && <> <Link className="underline" to={msg.link}>Open</Link></>}</Alert></div>
+        <div className="mt-2"><Alert tone="info">{msg?.text ?? r.result}{msg?.link && <> {/^https?:\/\//i.test(msg.link)
+          ? <a className="underline" href={msg.link} target="_blank" rel="noreferrer">Open</a>
+          : <Link className="underline" to={msg.link}>Open</Link>}</>}</Alert></div>
       )}
       {apply.error && <div className="mt-2"><Alert>{(apply.error as Error).message}</Alert></div>}
       <div className="mt-3 flex flex-wrap items-center gap-2">

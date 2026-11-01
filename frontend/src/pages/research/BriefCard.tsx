@@ -7,6 +7,7 @@ import {
 import { api } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { Button } from "../../components/ui";
+import { HoverTip, SERIES, TipHead, TipRow } from "../../components/viz";
 import { CONFIDENCE_LABEL, THEME_TONE, fmtDay, type Brief } from "./types";
 
 const SCORE_LABELS: [keyof Brief["scores"], string][] = [
@@ -14,20 +15,30 @@ const SCORE_LABELS: [keyof Brief["scores"], string][] = [
   ["business_value", "Business value"], ["evidence", "Evidence"],
 ];
 
-function ScoreRing({ value }: { value: number }) {
+function ScoreRing({ value, scores }: { value: number; scores: Brief["scores"] }) {
   const pct = Math.round(value * 100);
   const r = 17;
   const c = 2 * Math.PI * r;
+  const tip = (
+    <>
+      <TipHead sub="Overall brief score">{pct} / 100</TipHead>
+      {SCORE_LABELS.map(([k, label]) => scores[k] != null && (
+        <TipRow key={k} color={SERIES[0]} label={label} value={Math.round((scores[k] ?? 0) * 100)} />
+      ))}
+    </>
+  );
   return (
-    <div className="relative h-11 w-11 shrink-0" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={`Score ${pct} out of 100`}>
-      <svg viewBox="0 0 40 40" className="h-11 w-11 -rotate-90">
-        <circle cx="20" cy="20" r={r} fill="none" stroke="rgb(226 232 240)" strokeWidth="4" />
-        <circle cx="20" cy="20" r={r} fill="none" stroke="url(#ring)" strokeWidth="4" strokeLinecap="round"
-          strokeDasharray={`${(pct / 100) * c} ${c}`} />
-        <defs><linearGradient id="ring" x1="0" x2="1"><stop offset="0" stopColor="#075492" /><stop offset="1" stopColor="#22d3ee" /></linearGradient></defs>
-      </svg>
-      <span className="absolute inset-0 grid place-items-center text-[13px] font-semibold tabular-nums">{pct}</span>
-    </div>
+    <HoverTip tip={tip} label={`Score ${pct} out of 100`} className="shrink-0 rounded-full">
+      <div className="relative h-11 w-11" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+        <svg viewBox="0 0 40 40" className="h-11 w-11 -rotate-90">
+          <circle cx="20" cy="20" r={r} fill="none" stroke="rgb(226 232 240)" strokeWidth="4" />
+          <circle cx="20" cy="20" r={r} fill="none" stroke="url(#ring)" strokeWidth="4" strokeLinecap="round"
+            strokeDasharray={`${(pct / 100) * c} ${c}`} />
+          <defs><linearGradient id="ring" x1="0" x2="1"><stop offset="0" stopColor="#075492" /><stop offset="1" stopColor="#22d3ee" /></linearGradient></defs>
+        </svg>
+        <span className="absolute inset-0 grid place-items-center text-[13px] font-semibold tabular-nums">{pct}</span>
+      </div>
+    </HoverTip>
   );
 }
 
@@ -74,7 +85,7 @@ export default function BriefCard({ b, today }: { b: Brief; today: string }) {
           </div>
           <h3 className="text-[17px] font-semibold leading-snug text-ink">{b.title}</h3>
         </div>
-        <ScoreRing value={b.score} />
+        <ScoreRing value={b.score} scores={b.scores} />
       </div>
 
       {b.angle && <p className="mt-2 text-[15px] text-ink/80">{b.angle}</p>}
@@ -129,11 +140,18 @@ export default function BriefCard({ b, today }: { b: Brief; today: string }) {
           <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
             {SCORE_LABELS.map(([k, label]) => {
               const v = Math.round((b.scores[k] ?? 0) * 100);
+              const tip = (
+                <>
+                  <TipHead>{label}</TipHead>
+                  <TipRow color={SERIES[0]} label="Score" value={`${v} / 100`} />
+                  <TipRow label="Overall brief score" value={Math.round(b.score * 100)} />
+                </>
+              );
               return (
-                <div key={k}>
+                <HoverTip key={k} block tip={tip} label={`${label}: ${v} out of 100`} className="group/bar">
                   <div className="flex justify-between text-xs"><span className="text-muted">{label}</span><span className="tabular-nums">{v}</span></div>
-                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-gradient-to-r from-primary-600 to-secondary-500" style={{ width: `${v}%` }} /></div>
-                </div>
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-gradient-to-r from-primary-600 to-secondary-500 transition-opacity group-hover/bar:opacity-80" style={{ width: `${v}%` }} /></div>
+                </HoverTip>
               );
             })}
           </div>

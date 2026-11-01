@@ -1,0 +1,141 @@
+# HRP Digital Marketing Studio — UAT: every push to main.  Production: a tag dm-vX.Y.Z (+ approval in 'production').
+#   Frontend: Cloudflare Worker dm-frontend-{uat,prod} on uat-dm.hrpai.in / dm.hrpai.in (static app + /api proxy)
+#   API + job runner: Cloud Run dm-api-{uat,prod}; Cloud Scheduler calls /api/v1/internal/tick every 20 minutes and
+#   the API books exact-time Cloud Tasks (queue dm-tick-{env}) for scheduled posts and work queued in the app
+#   Database: Neon dm-uat / dm-prod (organization HRP AI, Singapore, direct host).  Media: Cloudflare R2 dm-uat-media / dm-prod-media.
+# One-time setup: infra/README.md.
+name: deploy
+on:
+  push:
+    branches: [main]
+    tags: ["dm-v*"]
+  workflow_dispatch:
+    inputs:
+      target: { description: "uat or production", required: true, default: uat }
+
+permissions: { contents: read, id-token: write }
+concurrency: { group: "deploy-${{ github.ref }}", cancel-in-progress: false }
+
+jobs:
+  deploy:
+    # skipped until the Google Cloud variables are configured (see infra/README.md)
+    if: ${{ vars.GCP_PROJECT_ID != '' }}
+    runs-on: ubuntu-24.04
+    environment: ${{ (startsWith(github.ref, 'refs/tags/dm-v') || inputs.target == 'production') && 'production' || 'uat' }}
+    env:
+      ENV_NAME: ${{ (startsWith(github.ref, 'refs/tags/dm-v') || inputs.target == 'production') && 'prod' || 'uat' }}
+      WRANGLER_ENV: ${{ (startsWith(github.ref, 'refs/tags/dm-v') || inputs.target == 'production') && 'production' || 'uat' }}
+      REGION: ${{ vars.GCP_REGION }}
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Settings for this environment
+        run: |
+          if [ "$ENV_NAME" = prod ]; then HOST=dm.hrpai.in; MIN=${{ vars.PROD_MIN_INSTANCES || 0 }}; MAX=4; APP_ENV=production
+          else HOST=uat-dm.hrpai.in; MIN=0; MAX=3; APP_ENV=uat; fi
+          { echo "HOST=$HOST"; echo "APP_URL=https://$HOST"; echo "MIN=$MIN"; echo "MAX=$MAX"; echo "APP_ENV=$APP_ENV"
+            echo "SVC=dm-api-$ENV_NAME"; echo "S=dm-$ENV_NAME"; echo "BUCKET=dm-$ENV_NAME-media"; } >> "$GITHUB_ENV"
+
+      - name: Read deploy-time secrets from Secret Manager
+        run: |
+          get() { gcloud secrets versions access latest --secret "$S-$1"; }
+          MIG=$(get migrator-url); APPDB=$(get database-url); CRON=$(get cron-secret); OV=$(get origin-verify-secret)
+          for v in "$MIG" "$APPDB" "$CRON" "$OV"; do echo "::add-mask::$v"; done
+          { echo "MIGRATION_DATABASE_URL=$MIG"; echo "APP_DATABASE_URL=$APPDB"; echo "CRON_SECRET=$CRON"; echo "OV=$OV"; } >> "$GITHUB_ENV"
+
+      - name: Build and push the API image
+        run: |
+          IMAGE="$REGION-docker.pkg.dev/$PROJECT/dm/api:${GITHUB_SHA::12}"
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker build -f backend/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Database migrations (forward-only, before the new code goes live)
+        run: |
+          docker run --rm -e MIGRATION_DATABASE_URL -e DATABASE_URL="$MIGRATION_DATABASE_URL" "$IMAGE" alembic upgrade head
+          docker run --rm -e MIGRATION_DATABASE_URL -e DATABASE_URL="$APP_DATABASE_URL" "$IMAGE" python -m app.cli ensure-app-role
+
+      - name: Deploy the API to Cloud Run (no traffic yet)
+        env:
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          PLATFORM_ADMIN_EMAIL: ${{ vars.PLATFORM_ADMIN_EMAIL || 'admin@hrpai.in' }}
+        run: |
+          if gcloud run services describe "$SVC" --region "$REGION" >/dev/null 2>&1; then
+            TRAFFIC_FLAGS="--no-traffic --tag rc-${GITHUB_SHA::7}"
+          else
+            TRAFFIC_FLAGS=""
+          fi
+          gcloud run deploy "$SVC" --image "$IMAGE" --region "$REGION" \
+            --service-account "dm-api-$ENV_NAME@$PROJECT.iam.gserviceaccount.com" \
+            --allow-unauthenticated --ingress all --port 8080 \
+            --cpu 1 --memory 2Gi --concurrency 20 --min-instances "$MIN" --max-instances "$MAX" \
+            --cpu-boost --timeout 3600 --execution-environment gen2 \
+            --set-env-vars "^##^DEPLOY_MODE=cloud##ENVIRONMENT=$APP_ENV##PUBLIC_BASE_URL=$APP_URL##APP_URL=$APP_URL##CORS_ORIGINS=$APP_URL##OAUTH_HTTPS_PROVIDERS=*##STORAGE_DIR=/tmp/storage##S3_ENDPOINT=$R2_ENDPOINT##S3_BUCKET=$BUCKET##S3_REGION=auto##PLATFORM_ADMIN_EMAIL=$PLATFORM_ADMIN_EMAIL##DB_NULL_POOL=true##BOOTSTRAP_ORG=false##TASKS_QUEUE=dm-tick-$ENV_NAME##TICK_EVERY_MINUTES=20##GCP_PROJECT=$PROJECT##GCP_REGION=$REGION##TZ=Asia/Kolkata" \
+            --set-secrets "DATABASE_URL=$S-database-url:latest,SECRET_KEY=$S-secret-key:latest,ENCRYPTION_KEY=$S-encryption-key:latest,ORIGIN_VERIFY_SECRET=$S-origin-verify-secret:latest,CRON_SECRET=$S-cron-secret:latest,S3_ACCESS_KEY_ID=$S-r2-access-key-id:latest,S3_SECRET_ACCESS_KEY=$S-r2-secret-access-key:latest,PLATFORM_ADMIN_PASSWORD=$S-admin-password:latest,MIGRATION_DATABASE_URL=$S-migrator-url:latest" \
+            $TRAFFIC_FLAGS
+          if [ -n "$TRAFFIC_FLAGS" ]; then
+            URL=$(gcloud run services describe "$SVC" --region "$REGION" --format json | jq -r --arg t "rc-${GITHUB_SHA::7}" '.status.traffic[] | select(.tag==$t) | .url')
+          else
+            URL=$(gcloud run services describe "$SVC" --region "$REGION" --format 'value(status.url)')
+          fi
+          echo "RC_URL=$URL" >> "$GITHUB_ENV"
+
+      - name: Smoke test the new revision
+        run: |
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$RC_URL/api/v1/health") && [ "$code" = 200 ] && break
+            sleep 10
+          done
+          [ "$code" = 200 ] || { echo "health check failed ($code)"; exit 1; }
+
+      - name: Shift traffic to the new revision
+        run: |
+          gcloud run services update-traffic "$SVC" --region "$REGION" --to-latest
+          echo "API_URL=$(gcloud run services describe "$SVC" --region "$REGION" --format 'value(status.url)')" >> "$GITHUB_ENV"
+
+      - name: Job runner (Cloud Scheduler every 20 minutes; exact-time wake-ups go through Cloud Tasks)
+        run: |
+          JOB="dm-tick-$ENV_NAME"
+          SCHED="*/20 * * * *"
+          ARGS=(--location "$REGION" --schedule "$SCHED" --time-zone "Asia/Kolkata" --uri "$API_URL/api/v1/internal/tick"
+                --http-method POST --attempt-deadline 30m --max-retry-attempts 0)
+          HDRS="X-Cron-Secret=$CRON_SECRET,X-Origin-Verify=$OV"
+          if gcloud scheduler jobs describe "$JOB" --location "$REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs update http "$JOB" "${ARGS[@]}" --update-headers "$HDRS" >/dev/null
+          else
+            gcloud scheduler jobs create http "$JOB" "${ARGS[@]}" --headers "$HDRS" >/dev/null
+          fi
+          echo "Scheduler $JOB: $SCHED -> $API_URL/api/v1/internal/tick"
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - name: Deploy the frontend (Cloudflare Worker + static app)
+        working-directory: frontend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm ci
+          npm run build
+          npx --yes wrangler@4 deploy --env "$WRANGLER_ENV" --var "API_ORIGIN:$API_URL"
+          printf '%s' "$OV" | npx --yes wrangler@4 secret put ORIGIN_VERIFY_SECRET --env "$WRANGLER_ENV"
+
+      - name: End-to-end check through the public URL
+        run: |
+          for i in $(seq 1 20); do
+            hdrs=$(curl -s -o /tmp/body -D - --max-time 20 "https://$HOST/api/v1/health" || true)
+            code=$(printf '%s' "$hdrs" | awk 'toupper($1) ~ /^HTTP/ {c=$2} END {print c}')
+            if [ "$code" = 200 ] && grep -q '"ok"' /tmp/body; then echo "healthy: https://$HOST"; exit 0; fi
+            if printf '%s' "$hdrs" | grep -qi '^cf-mitigated: challenge'; then echo "edge reachable (bot challenge for CI)"; exit 0; fi
+            echo "attempt $i: status '${code:-no response}', retrying in 30s"; sleep 30
+          done
+          echo "public URL not healthy after 10 minutes"; exit 1

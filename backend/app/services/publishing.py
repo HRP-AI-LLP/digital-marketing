@@ -78,12 +78,20 @@ async def publish(session: AsyncSession, post: Post, account: SocialAccount) -> 
     if not is_manual(account):
         await _check_monthly_limit(session, account, spec.label)
     mod = adapter_for_platform("manual" if is_manual(account) else account.platform)
+    restore = None
+    if not is_manual(account):
+        from app.services.links import wrap_for_publish
+
+        restore = await wrap_for_publish(session, post, account)  # tracked short links; never raises
     try:
         return await mod.publish(session, post, account, media)
     except PublishError:
         raise
     except httpx.HTTPError as e:
         raise _wrap_network(e, spec.label)
+    finally:
+        if restore is not None:
+            restore()  # the post keeps the text the person wrote; the links used are in post.meta
 
 
 async def fetch_metrics(session: AsyncSession, post: Post, account: SocialAccount) -> dict | None:
@@ -105,7 +113,7 @@ def can_delete(account: SocialAccount | None) -> bool:
 
 
 async def delete_remote(session: AsyncSession, post: Post, account: SocialAccount) -> None:
-    """Delete a published post on the platform (X, Pinterest). Raises PublishError."""
+    """Delete a published post on the platform (X, Pinterest, Discord, Telegram, Reddit). Raises PublishError."""
     if not post.external_id:
         raise PublishError("This post has no link to a platform post, so there's nothing to delete there.")
     if not can_delete(account):
@@ -143,7 +151,7 @@ async def refresh_account(session: AsyncSession, account: SocialAccount) -> None
         account.status = "connected"
         msg = account.status_message or ""
         # Keep informational notes (Pinterest trial access); clear old failure messages.
-        keep = account.platform in ("pinterest", "tiktok", "x") and msg and not msg.startswith("Last check failed") \
+        keep = account.platform in ("pinterest", "tiktok", "x", "telegram") and msg and not msg.startswith("Last check failed") \
             and "expired" not in msg.lower()
         account.status_message = msg if keep else None
         account.settings = {**(account.settings or {}), "_last_checked_at": datetime.now(UTC).isoformat()}

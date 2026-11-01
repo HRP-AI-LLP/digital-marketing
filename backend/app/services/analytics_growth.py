@@ -45,6 +45,10 @@ UNSUPPORTED: dict[str, str] = {
     "x": "X charges for (or, on the free tier, blocks) reading account numbers, so they aren't collected.",
     "tiktok": "TikTok follower numbers need an extra permission (user.info.stats) that this connection doesn't ask for.",
     "manual": "Accounts you post to by hand don't report numbers.",
+    "whatsapp": "WhatsApp channels are posted by hand, so there are no numbers to collect.",
+    "telegram": "Telegram doesn't share subscriber or view numbers with bots.",
+    "discord": "Discord webhooks can post but can't read member or reaction numbers.",
+    "reddit": "Reddit account numbers (karma, followers) aren't collected; post scores and comments are.",
 }
 SKIP_PLATFORMS = {"google"}  # the hidden Google connection holder
 
@@ -221,7 +225,7 @@ async def _linkedin_org(session, account: SocialAccount, c: httpx.AsyncClient) -
                     headers=headers(tok, False))
     if r.status_code == 403:
         return Snapshot(notes=["LinkedIn didn't allow reading this page's follower count. It needs the Community "
-                               "Management API with the r_organization_admin permission."])
+                               "Management API with the rw_organization_admin permission."])
     d = ok_json(r, "LinkedIn followers")
     return Snapshot(values={"followers": _int(d.get("firstDegreeSize"))}, raw=d,
                     notes=["LinkedIn page reach and engagement come from your posts' statistics."])

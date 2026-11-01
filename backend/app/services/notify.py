@@ -48,10 +48,24 @@ EVENTS: dict[str, str] = {
     "rank_change": "Keyword ranking changes (big drops, new top 3 / top 10)",
     "siteaudit_ready": "Site audit finished",
     "siteaudit_drop": "Website health dropped",
+    "webhook_disabled": "A webhook was turned off after repeated failures",
+    "mention": "Someone mentioned you in a team comment",
+    "post_comment": "New team comment on a post you wrote or review",
+    "experiment_done": "A/B test finished",
+    "backup_failed": "Database backup failed (platform administrators)",
 }
 DEFAULT_EXTERNAL = ["post_review", "post_failed", "catch_up", "account_issue", "manual_publish", "job_failed", "ai_issue",
-                    "inbox_urgent", "listening_spike", "listening_digest", "siteaudit_drop"]
-URGENT = {"post_failed", "account_issue", "job_failed"}
+                    "inbox_urgent", "listening_spike", "listening_digest", "siteaudit_drop", "webhook_disabled", "backup_failed"]
+# Sent by email (not Telegram) unless the user picked their own events.
+DEFAULT_EMAIL_ONLY = ["mention"]
+URGENT = {"post_failed", "account_issue", "job_failed", "backup_failed"}
+
+
+def default_events(channel: str) -> list[str]:
+    """Events a channel delivers when the user hasn't chosen any (in-app gets everything)."""
+    if channel == "inapp":
+        return list(EVENTS)
+    return DEFAULT_EXTERNAL + (DEFAULT_EMAIL_ONLY if channel == "email" else [])
 
 
 async def _users_with_permission(session, permission: str | None) -> list[uuid.UUID]:
@@ -89,7 +103,9 @@ async def notify_users(
         for p in prefs:
             by_user.setdefault(p.user_id, {})[p.channel] = p
         org = await s.get(Organization, org_id)
-        smtp = await s.scalar(select(ProviderConfig).where(ProviderConfig.kind == "smtp", ProviderConfig.enabled.is_(True)))
+        from app.services.mailer import default_sender
+
+        smtp = await default_sender(s, org)
         tg = await s.scalar(select(ProviderConfig).where(ProviderConfig.kind == "telegram", ProviderConfig.enabled.is_(True)))
         users = {u.id: u for u in (await s.scalars(select(User).where(User.id.in_(user_ids)))).all()}
 
@@ -101,7 +117,7 @@ async def notify_users(
                 s.add(Notification(organization_id=org_id, user_id=uid, event=event, title=title, body=body, link=link))
             for ch in ("email", "telegram"):
                 p = up.get(ch)
-                if p and p.enabled and event in (p.events or DEFAULT_EXTERNAL) and p.target and (ch == "email" or p.verified):
+                if p and p.enabled and event in (p.events or default_events(ch)) and p.target and (ch == "email" or p.verified):
                     if event not in URGENT and _quiet(p, org.timezone if org else "Asia/Kolkata"):
                         continue
                     external.append((ch, p, users.get(uid)))
@@ -131,14 +147,42 @@ def _abs_link(link: str | None) -> str | None:
     return link if link.startswith("http") else get_settings().web_base_url + link
 
 
-async def send_email(cfg: ProviderConfig, to: str, subject: str, body: str, link: str | None = None, *,
-                     attachments: list[tuple[str, bytes, str]] | None = None, html: str | None = None) -> None:
+def smtp_security(sec: dict) -> str:
+    """ssl (implicit TLS, port 465), starttls (587) or none. Older setups stored use_tls true/false."""
+    v = str(sec.get("security") or "").strip().lower()
+    port = int(sec.get("port") or 587)
+    if v in ("ssl", "tls", "ssl/tls", "implicit"):
+        return "ssl"
+    if v in ("starttls", "start_tls"):
+        return "starttls"
+    if v in ("none", "off", "plain"):
+        return "none"
+    if port == 465:
+        return "ssl"
+    return "none" if str(sec.get("use_tls", "true")).lower() == "false" else "starttls"
+
+
+def sender_address(sec: dict) -> str:
+    from email.utils import formataddr
+
+    addr = (sec.get("from_email") or sec.get("username") or "").strip()
+    name = (sec.get("from_name") or "").strip()
+    return formataddr((name, addr)) if name else addr
+
+
+async def send_email(cfg: ProviderConfig, to: str | list[str], subject: str, body: str, link: str | None = None, *,
+                     attachments: list[tuple[str, bytes, str]] | None = None, html: str | None = None,
+                     cc: list[str] | None = None) -> None:
     """Send one email. attachments: [(filename, data, mime type)]; html: optional HTML for the message body
     (already escaped by the caller), shown inside the branded frame instead of the plain body text."""
     sec = decrypt_json(cfg.secrets_enc)
     msg = EmailMessage()
-    msg["From"] = sec.get("from_email") or sec.get("username")
-    msg["To"] = to
+    msg["From"] = sender_address(sec)
+    msg["To"] = to if isinstance(to, str) else ", ".join(to)
+    if cc:
+        msg["Cc"] = ", ".join(cc)
+    if (sec.get("reply_to") or "").strip():
+        msg["Reply-To"] = sec["reply_to"].strip()
     msg["Subject"] = subject
     url = _abs_link(link)
     msg.set_content(body + (f"\n\nOpen: {url}" if url else ""))
@@ -157,10 +201,10 @@ HRP AI Digital Marketing Studio</div>
         maintype, _, subtype = (mime or "application/octet-stream").partition("/")
         msg.add_attachment(data, maintype=maintype, subtype=subtype or "octet-stream", filename=name)
     port = int(sec.get("port") or 587)
-    use_tls = str(sec.get("use_tls", "true")).lower() != "false"
+    mode = smtp_security(sec)
     await aiosmtplib.send(
-        msg, hostname=sec.get("host"), port=port, username=sec.get("username"), password=sec.get("password"),
-        start_tls=use_tls and port != 465, use_tls=port == 465, timeout=30,
+        msg, hostname=(sec.get("host") or "").strip(), port=port, username=sec.get("username") or None,
+        password=sec.get("password") or None, start_tls=mode == "starttls", use_tls=mode == "ssl", timeout=30,
     )
 
 

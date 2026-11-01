@@ -2,15 +2,16 @@ import { useSearchParams } from "react-router-dom";
 import { PageHeader, Tabs } from "../components/ui";
 import { CompetitorsPanel } from "./analytics/competitors";
 import { GrowthPanel, Segmented } from "./analytics/growth";
+import { HashtagsPanel } from "./analytics/hashtags";
 import { HealthPanel } from "./analytics/health";
 import { OverviewPanel } from "./analytics/overview";
 import { SearchPanel, SettingsPanel, SpeedPanel, WebsitePanel } from "./analytics/panels";
 import { ReportsPanel } from "./analytics/reports";
 
-type Tab = "overview" | "growth" | "competitors" | "health" | "reports" | "website" | "settings";
+type Tab = "overview" | "growth" | "hashtags" | "competitors" | "health" | "reports" | "website" | "settings";
 type Site = "traffic" | "search" | "speed";
 const TABS: { id: Tab; label: string }[] = [
-  { id: "overview", label: "Overview" }, { id: "growth", label: "Growth" }, { id: "competitors", label: "Competitors" },
+  { id: "overview", label: "Overview" }, { id: "growth", label: "Growth" }, { id: "hashtags", label: "Hashtags" }, { id: "competitors", label: "Competitors" },
   { id: "health", label: "Health & tips" }, { id: "reports", label: "Reports" }, { id: "website", label: "Website & search" },
   { id: "settings", label: "Settings" },
 ];
@@ -30,6 +31,7 @@ export default function Analytics() {
       <Tabs value={tab} onChange={(t) => setParams(t === "overview" ? {} : { tab: t }, { replace: true })} items={TABS} />
       {tab === "overview" && <OverviewPanel />}
       {tab === "growth" && <GrowthPanel />}
+      {tab === "hashtags" && <HashtagsPanel />}
       {tab === "competitors" && <CompetitorsPanel />}
       {tab === "health" && <HealthPanel />}
       {tab === "reports" && <ReportsPanel />}

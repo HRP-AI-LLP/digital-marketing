@@ -334,7 +334,7 @@ async def delete_report(rid: uuid.UUID, ctx: Context = Depends(require(MANAGE)))
     r = await _report(ctx, rid)
     if r.path:
         try:
-            storage.abs_path(r.path).unlink(missing_ok=True)
+            storage.delete(r.path)
         except (OSError, ValueError):
             pass
     await ctx.session.delete(r)

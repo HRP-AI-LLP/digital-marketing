@@ -704,6 +704,14 @@ async def test_posts_api_flow(client, fake):
     assert p["status"] == "in_review" and p["hashtags"] == ["One", "two"] and p["qa"]["passed"] is True
     r = await client.post("/content/posts", headers=h, json={"account_id": str(pin.id), "post_type": "text", "text": "x"})
     assert r.status_code == 400
+    # a hand-written Pinterest image post: saved as a draft, media comes next; it can't be queued without media
+    r = await client.post("/content/posts", headers=h, json={"account_id": str(pin.id), "post_type": "image", "text": "Pin",
+                                                            "status": "in_review", "scheduled_at": future})
+    assert r.status_code == 400 and "image or video first" in r.json()["detail"]
+    r = await client.post("/content/posts", headers=h, json={"account_id": str(pin.id), "post_type": "image", "text": "Pin",
+                                                            "title": "A pin"})
+    assert r.status_code == 201 and r.json()["status"] == "draft"
+    assert (await client.delete(f"/content/posts/{r.json()['id']}", headers=h)).status_code in (200, 204)
     # edit, approvals queue, approve
     r = await client.patch(f"/content/posts/{p['id']}", headers=h, json={"text": "Edited text"})
     assert r.json()["text"] == "Edited text" and r.json()["activities"][0]["action"] == "edited"
@@ -807,7 +815,8 @@ async def test_posts_bulk_actions(client, fake):
     pub = await mk_post(o["id"], acc, status="published", text="Live")
     h = o["h"]
     r = (await client.post("/content/posts/bulk", headers=h, json={"ids": [str(a.id), str(no_time.id)], "action": "approve"})).json()
-    assert r["ok"] == 1 and r["failed"] == 1 and "date and time" in [x for x in r["results"] if not x["ok"]][0]["message"]
+    assert r["ok"] == 2 and r["failed"] == 0  # a post without a time gets a good time instead of being refused
+    assert (await get_post(o["id"], no_time.id)).scheduled_at is not None
     assert (await get_post(o["id"], a.id)).status in ("scheduled", "approved")
     r = (await client.post("/content/posts/bulk", headers=h, json={"ids": [str(b.id)], "action": "reject", "reason": "Off brand"})).json()
     assert r["ok"] == 1 and (await get_post(o["id"], b.id)).status == "rejected"

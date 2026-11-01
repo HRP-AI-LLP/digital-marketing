@@ -730,3 +730,54 @@ async def test_run_now_and_delete_with_purge(client, org2):
     async with SessionLocal() as s:
         set_tenant(s, org_of(org2))
         assert (await s.scalar(select(ListeningQuery))) is None
+
+
+# ------------------------------------------------------------------ everyday words never become brand terms
+async def test_weak_terms_and_handles():
+    from app.services.listening import assist
+    from app.services.listening.text import weak_term
+
+    assert weak_term("home") and weak_term("#home") and weak_term("Team")
+    assert not weak_term("HRP AI") and not weak_term("hrpai") and not weak_term("@hrpai") and not weak_term("hrpai.in")
+    assert assist._handle("https://www.linkedin.com/company/hrp-ai/home") == "hrp-ai"
+    assert assist._handle("https://www.facebook.com/hrpai/about") == "hrpai"
+    assert assist._handle("https://www.youtube.com/@hrpai/videos") == "hrpai"
+    assert assist._handle("https://example.com/home") is None
+
+
+async def test_heuristic_drops_brand_mentions_matched_only_by_everyday_words():
+    from app.models.listening import ListeningMention, ListeningQuery
+    from app.services.listening.enrich import heuristic
+
+    q = ListeningQuery(kind="brand", name="HRP AI", terms=["HRP AI", "home"])
+    m = ListeningMention(title="got home late", snippet="", matched_terms=["home"], source="bluesky")
+    assert heuristic(m, q)["relevant"] is False
+    m2 = ListeningMention(title="HRP AI launches", snippet="", matched_terms=["HRP AI"], source="web")
+    assert heuristic(m2, q)["relevant"] is True
+
+
+async def test_everyday_word_rejected_and_removed_term_clears_mentions(client):
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal, set_tenant
+    from app.models.listening import ListeningMention, ListeningQuery
+    from tests.test_content import new_org
+
+    o = await new_org(client)
+    r = await client.post("/listening/queries", headers=o["h"], json={"name": "Brand", "kind": "brand", "terms": ["HRP AI", "home"]})
+    assert r.status_code == 422 and "everyday word" in r.text
+    async with SessionLocal() as s:  # an older topic saved before the check existed
+        set_tenant(s, o["id"])
+        q = ListeningQuery(organization_id=o["id"], name="Brand", kind="brand", terms=["HRP AI", "home"], state={})
+        s.add(q)
+        await s.flush()
+        m = ListeningMention(organization_id=o["id"], query_id=q.id, query_ids=[str(q.id)], source="bluesky", external_id="x1",
+                             dedupe_key="bluesky:x1", title="got home", matched_terms=["home"], relevant=True)
+        s.add(m)
+        await s.commit()
+        qid, mid = q.id, m.id
+    r = await client.put(f"/listening/queries/{qid}", headers=o["h"], json={"name": "Brand", "kind": "brand", "terms": ["HRP AI"]})
+    assert r.status_code == 200, r.text
+    async with SessionLocal() as s:
+        set_tenant(s, o["id"])
+        assert (await s.scalar(select(ListeningMention).where(ListeningMention.id == mid))).relevant is False

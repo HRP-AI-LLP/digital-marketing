@@ -46,6 +46,11 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("keywords.view", "Keywords & rankings", "View keyword research, keyword gaps, lists and rankings"),
     ("keywords.manage", "Keywords & rankings", "Run keyword research and gap reports, edit lists, track keywords and change settings"),
     ("linkinbio.manage", "Content", "Edit and publish the link-in-bio page and see its click counts"),
+    ("links.view", "SEO & analytics", "See tracked links and how many clicks they get"),
+    ("links.manage", "SEO & analytics", "Create tracked links and turn automatic link tracking on or off"),
+    ("connections.view", "Integrations", "View webhooks, their deliveries and API tokens"),
+    ("connections.manage", "Integrations", "Add, change and remove webhooks, and revoke anyone's API tokens"),
+    ("apitoken.create", "Integrations", "Create personal API tokens for automation tools (Zapier, Make, n8n)"),
 ]
 
 ALL_CODES = [p[0] for p in PERMISSIONS]
@@ -62,12 +67,13 @@ DEFAULT_ROLES: dict[str, tuple[str, list[str]]] = {
             "inbox.view", "inbox.reply", "inbox.manage", "research.view", "research.manage",
             "presence.view", "presence.manage", "aivis.view", "aivis.manage", "listening.view", "listening.manage",
             "siteaudit.view", "siteaudit.manage", "keywords.view", "keywords.manage", "linkinbio.manage",
+            "links.view", "links.manage", "connections.view",
         ],
     ),
     "Reviewer": (
         "Reviews and approves posts before they go out",
         ["content.view", "content.approve", "schedule.view", "analytics.view", "seo.view", "presence.view",
-         "siteaudit.view", "keywords.view", "aivis.view", "listening.view"],
+         "siteaudit.view", "keywords.view", "aivis.view", "listening.view", "links.view"],
     ),
     "Viewer": (
         "Read-only access",

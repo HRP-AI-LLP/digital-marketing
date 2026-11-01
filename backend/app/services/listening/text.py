@@ -18,6 +18,27 @@ def strip_html(s: str | None) -> str:
     return _WS.sub(" ", html.unescape(_TAG.sub(" ", s))).strip()
 
 
+# Everyday words that can't identify a brand on their own ("home" from a profile link once flooded the results).
+COMMON_WORDS = set("""
+a about above after again all also am an and any are as at back be been before being best big but by can come
+company contact could day did do does done down each even every few find first for from get go good great had has
+have he help her here him his home how i if in info into is it its just know last let life like little live look
+love made make man many may me more most my never new news next no not now of off old on one only or other our out
+over page people post posts profile right said same see shop she should show so some still such take team than
+that the their them then there these they thing think this those time to today top two up us use very video want
+was way we welcome well were what when where which while who why will with work world would year yes you your
+about-us blog careers home-page index login main official services products solutions store contact-us
+""".split())
+
+
+def weak_term(term: str) -> bool:
+    """True for a single everyday word (or a very short one) that would match countless unrelated posts."""
+    t = term.strip().lstrip("#").lower()
+    if t.startswith("@") or "." in t or " " in t or "-" in t or any(ch.isdigit() for ch in t):
+        return False
+    return t in COMMON_WORDS or (t.isalpha() and len(t) <= 2)
+
+
 def clean_terms(values, limit: int = 20, max_len: int = 80) -> list[str]:
     out: list[str] = []
     for v in values or []:

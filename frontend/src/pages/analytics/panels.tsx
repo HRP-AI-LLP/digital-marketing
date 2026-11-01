@@ -7,6 +7,7 @@ import { useJob } from "../../api/hooks";
 import { useAuth } from "../../auth/AuthContext";
 import { Alert, Badge, Button, Card, EmptyState, Field, Select, Spinner, formatDate } from "../../components/ui";
 import { BarChart, COMPARE, HeatGrid, Kpi, LineChart, MAIN, fmtDuration, fmtNum, fmtPct } from "./charts";
+import { HoverTip, TipHead, TipRow } from "../../components/viz";
 
 // ------------------------------------------------------------------ types
 type Group = { key: string; label: string; posts: number; impressions: number; engagements: number; clicks: number; engagement_rate: number; color?: string | null };
@@ -263,18 +264,27 @@ const VITALS: [string, string, string][] = [
 ];
 const LAB: [string, string][] = [["lcp", "Largest contentful paint"], ["fcp", "First contentful paint"], ["tbt", "Total blocking time"], ["cls", "Cumulative layout shift"], ["si", "Speed index"]];
 
-function ScoreDial({ label, score }: { label: string; score: number }) {
+function ScoreDial({ label, score, device, other }: { label: string; score: number; device: string; other?: { device: string; score: number } }) {
   const tone = score >= 90 ? "#047857" : score >= 50 ? "#b45309" : "#b91c1c";
+  const band = score >= 90 ? "Good (90–100)" : score >= 50 ? "Needs improvement (50–89)" : "Poor (0–49)";
   const r = 26, circ = 2 * Math.PI * r;
+  const tip = (
+    <>
+      <TipHead sub={device}>{label}</TipHead>
+      <TipRow color={tone} label="Score" value={`${score} / 100`} />
+      <TipRow label="Rating" value={band} />
+      {other && <TipRow label={other.device} value={`${other.score} (${other.score - score >= 0 ? "+" : ""}${other.score - score})`} />}
+    </>
+  );
   return (
-    <div className="flex flex-col items-center gap-1 text-center">
-      <svg width="68" height="68" role="img" aria-label={`${label} ${score} out of 100`}>
+    <HoverTip tip={tip} label={`${label} ${score} out of 100`} className="flex-col items-center gap-1 px-1 text-center">
+      <svg width="68" height="68" aria-hidden>
         <circle cx="34" cy="34" r={r} fill="none" stroke="#e2e8f0" strokeWidth="6" />
         <circle cx="34" cy="34" r={r} fill="none" stroke={tone} strokeWidth="6" strokeLinecap="round" strokeDasharray={`${(score / 100) * circ} ${circ}`} transform="rotate(-90 34 34)" />
         <text x="34" y="34" dy="0.35em" textAnchor="middle" fontSize="17" fontWeight="700" fill={tone} style={{ fontVariantNumeric: "tabular-nums" }}>{score}</text>
       </svg>
       <span className="text-xs text-muted">{label}</span>
-    </div>
+    </HoverTip>
   );
 }
 
@@ -299,7 +309,12 @@ export function SpeedPanel() {
               {!r || r.error ? <Alert tone="warn">{r?.error ?? "No result."}</Alert> : (
                 <>
                   <div className="flex flex-wrap justify-around gap-3">
-                    {Object.entries(r.scores ?? {}).map(([cat, v]) => <ScoreDial key={cat} label={SCORE_LABEL[cat] ?? cat} score={v} />)}
+                    {Object.entries(r.scores ?? {}).map(([cat, v]) => {
+                      const ok = k === "mobile" ? "desktop" : "mobile";
+                      const ov = s.data[ok]?.scores?.[cat];
+                      return <ScoreDial key={cat} label={SCORE_LABEL[cat] ?? cat} score={v} device={k === "mobile" ? "Mobile" : "Desktop"}
+                        other={ov == null ? undefined : { device: ok === "mobile" ? "Mobile" : "Desktop", score: ov }} />;
+                    })}
                   </div>
                   <h3 className="mb-2 mt-5 text-sm font-semibold">Core Web Vitals (real users, 75th percentile)</h3>
                   {Object.keys(r.field ?? {}).length === 0 ? <p className="text-sm text-muted">Not enough real-user data from Chrome for this site yet.</p> : (

@@ -36,19 +36,83 @@ function DayStrip() {
 }
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, loginSecondStep } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Second step (two-step sign-in is on for this account).
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const [useRecovery, setUseRecovery] = useState(false);
+  const [code, setCode] = useState("");
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true); setError("");
-    try { await login(email, password); }
-    catch (err) { setError((err as Error).message); }
-    finally { setBusy(false); }
+    try {
+      if (challenge) {
+        await loginSecondStep(challenge, useRecovery ? { recovery_code: code.trim() } : { code: code.replace(/\D/g, "") });
+      } else {
+        const r = await login(email, password);
+        if ("two_factor_required" in r) { setChallenge(r.challenge); setCode(""); }
+      }
+    } catch (err) {
+      const msg = (err as Error).message;
+      setError(msg);
+      if (challenge && /took too long|Sign in again/.test(msg)) { setChallenge(null); setPassword(""); }
+    } finally { setBusy(false); }
   }
+
+  function back() { setChallenge(null); setCode(""); setError(""); setUseRecovery(false); setPassword(""); }
+
+  const firstStep = (
+    <>
+      <div>
+        <h2 className="text-2xl font-bold">Sign in</h2>
+        <p className="mt-1 text-muted">Use the email your administrator added you with.</p>
+      </div>
+      {error && <Alert>{error}</Alert>}
+      <Field label="Email">
+        <Input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} />
+      </Field>
+      <Field label="Password">
+        <Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+      </Field>
+      <Button type="submit" disabled={busy} className="w-full h-10">{busy ? "Signing in…" : "Sign in"}</Button>
+      <p className="text-xs text-muted">Forgot your password? Ask an administrator of your organization to reset it.</p>
+    </>
+  );
+
+  const secondStep = (
+    <>
+      <div>
+        <h2 className="text-2xl font-bold">{useRecovery ? "Use a recovery code" : "Enter your code"}</h2>
+        <p className="mt-1 text-muted [overflow-wrap:anywhere]">
+          {useRecovery
+            ? "Type one of the recovery codes you saved when you set up two-step sign-in. Each code works once."
+            : <>Open your authenticator app and type the 6-digit code for <strong>{email}</strong>.</>}
+        </p>
+      </div>
+      {error && <Alert>{error}</Alert>}
+      <Field label={useRecovery ? "Recovery code" : "6-digit code"}>
+        {useRecovery ? (
+          <Input key="rc" autoComplete="off" autoFocus required placeholder="abcde-fghjk" value={code} onChange={(e) => setCode(e.target.value)} />
+        ) : (
+          <Input key="otp" inputMode="numeric" autoComplete="one-time-code" autoFocus required pattern="[0-9 ]{6,7}" maxLength={7}
+            placeholder="123 456" className="w-full text-center text-xl tracking-[0.3em]" value={code}
+            onChange={(e) => setCode(e.target.value.replace(/[^0-9 ]/g, ""))} />
+        )}
+      </Field>
+      <Button type="submit" disabled={busy} className="w-full h-10">{busy ? "Checking…" : "Continue"}</Button>
+      <div className="flex flex-wrap justify-between gap-2 text-sm">
+        <button type="button" className="text-brand underline" onClick={() => { setUseRecovery((v) => !v); setCode(""); setError(""); }}>
+          {useRecovery ? "Use the authenticator app instead" : "Lost your phone? Use a recovery code"}
+        </button>
+        <button type="button" className="text-muted hover:text-ink" onClick={back}>Back</button>
+      </div>
+      <p className="text-xs text-muted">No phone and no recovery codes? Ask an administrator of your organization to reset two-step sign-in for you.</p>
+    </>
+  );
 
   return (
     <div className="grid min-h-full lg:grid-cols-[1.15fr_1fr]">
@@ -76,19 +140,7 @@ export default function Login() {
       <section className="ai-page-surface flex items-center justify-center px-6 py-12">
         <form onSubmit={submit} className="ai-glass-panel w-full max-w-sm space-y-5 rounded-2xl p-8">
           <img src="/logo-full.png" alt="HRP AI LLP" className="mx-auto h-24 w-24 lg:hidden" />
-          <div>
-            <h2 className="text-2xl font-bold">Sign in</h2>
-            <p className="mt-1 text-muted">Use the email your administrator added you with.</p>
-          </div>
-          {error && <Alert>{error}</Alert>}
-          <Field label="Email">
-            <Input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} />
-          </Field>
-          <Field label="Password">
-            <Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
-          </Field>
-          <Button type="submit" disabled={busy} className="w-full h-10">{busy ? "Signing in…" : "Sign in"}</Button>
-          <p className="text-xs text-muted">Forgot your password? Ask an administrator of your organization to reset it.</p>
+          {challenge ? secondStep : firstStep}
         </form>
       </section>
     </div>

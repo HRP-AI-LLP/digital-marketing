@@ -15,6 +15,7 @@ from app.core.deps import Context, require
 from app.models import Membership, MembershipRole, Post, RolePermission, SocialAccount, User
 from app.models.inbox import SENTIMENTS, InboxItem
 from app.services import audit
+from app.services.inbox import autoreply
 from app.services.inbox import listening as listen_svc
 from app.services.inbox.base import (
     CAPABILITIES, LISTEN_REPLY_PLATFORMS, LISTENING_SOURCES, OPEN_ONLY_PLATFORMS, SYNC_DAYS, SYNC_PLATFORMS,
@@ -60,7 +61,8 @@ def _item_out(i: InboxItem, users: dict[uuid.UUID, User], accounts: dict[uuid.UU
         "sentiment": i.sentiment, "sentiment_source": i.sentiment_source, "priority": i.priority,
         "keyword": i.keyword, "engagement": i.engagement, "ai_suggestions": i.ai_suggestions or [],
         "reply_text": i.reply_text, "replied_at": i.replied_at, "reply_error": i.reply_error, "liked_at": i.liked_at,
-        "can_reply": ok, "can_like": can_like(i),
+        "can_reply": ok, "can_like": can_like(i), "auto_reply": autoreply.state_of(i),
+        "auto_sent": bool((i.raw or {}).get("auto_reply")) and i.is_own,
     }
 
 
@@ -105,6 +107,7 @@ async def list_items(
     account_id: uuid.UUID | None = None, status_: str | None = Query(None, alias="status"),
     sentiment: str | None = None, assigned: str | None = None, priority: bool | None = None,
     source: Literal["account", "listening"] | None = None, keyword: str | None = None, q: str | None = None,
+    drafts: bool = False,
     limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
     ctx: Context = Depends(require("inbox.view")),
 ):
@@ -142,6 +145,9 @@ async def list_items(
         conds.append(InboxItem.source == source)
     if keyword:
         conds.append(InboxItem.keyword == keyword)
+    if drafts:  # AI replies waiting for a person to approve
+        conds.append(InboxItem.raw["auto_reply"]["state"].as_string() == "drafted")
+        conds.append(InboxItem.reply_text.is_(None))
     if q and q.strip():
         like = f"%{q.strip()[:100]}%"
         conds.append(or_(InboxItem.text.ilike(like), InboxItem.title.ilike(like), InboxItem.author_name.ilike(like),
@@ -241,8 +247,14 @@ class ReplyIn(BaseModel):
 @router.post("/items/{item_id}/reply")
 async def reply(item_id: uuid.UUID, body: ReplyIn, ctx: Context = Depends(require("inbox.reply"))):
     it = await _get(ctx, item_id)
+    draft = autoreply.state_of(it) or {}
     try:
         await send_reply(ctx.session, ctx.org_id, it, body.text, ctx.user)
+        if draft.get("state") == "drafted":
+            raw = dict(it.raw or {})
+            raw["auto_reply"] = {**draft, "state": "approved", "edited": body.text.strip() != (draft.get("text") or "").strip(),
+                                 "by": str(ctx.user.id)}
+            it.raw = raw
     except InboxActionError as e:
         await ctx.session.commit()  # keep the recorded error on the item
         detail = e.message
@@ -432,3 +444,60 @@ async def assignees(ctx: Context = Depends(require("inbox.view"))):
                 RolePermission.permission_code == "inbox.reply").distinct())
     users = (await ctx.session.scalars(q)).all()
     return sorted([{"id": u.id, "name": u.full_name, "email": u.email} for u in users], key=lambda u: u["name"].lower())
+
+
+# ------------------------------------------------------------------ AI auto-replies
+class AutoReplyIn(BaseModel):
+    enabled: bool | None = None
+    mode: Literal["draft", "auto"] | None = None
+    platforms: list[str] | None = None
+    emoji: Literal["none", "light", "rich", "brand"] | None = None
+    sentiments: list[Literal["positive", "neutral", "question"]] | None = None
+    delay_minutes: int | None = Field(None, ge=0, le=720)
+    max_per_day: int | None = Field(None, ge=1, le=500)
+    instructions: str | None = Field(None, max_length=1000)
+
+
+def _autoreply_out(cfg: dict) -> dict:
+    return {**cfg, "available_platforms": [{"id": p, "label": _label(p)} for p in autoreply.replyable_platforms()]}
+
+
+@router.get("/autoreply")
+async def get_autoreply(ctx: Context = Depends(require("inbox.view"))):
+    from app.models import Organization
+
+    org = await ctx.session.get(Organization, ctx.org_id)
+    return _autoreply_out(autoreply.settings_of(org))
+
+
+@router.put("/autoreply")
+async def put_autoreply(body: AutoReplyIn, ctx: Context = Depends(require("inbox.reply"))):
+    from app.models import Organization
+
+    org = await ctx.session.get(Organization, ctx.org_id)
+    patch = body.model_dump(exclude_unset=True)
+    if patch.get("platforms") is not None:
+        allowed = set(autoreply.replyable_platforms())
+        patch["platforms"] = [p for p in patch["platforms"] if p in allowed]
+    cfg = autoreply.save_settings(org, patch)
+    audit.record(ctx.session, action="inbox.autoreply", organization_id=ctx.org_id, actor=ctx.user,
+                 entity_type="organization", entity_id=ctx.org_id,
+                 summary=("Turned on" if cfg["enabled"] else "Turned off") + f" AI replies ({cfg['mode']})",
+                 details={k: v for k, v in patch.items() if k != "instructions"})
+    await ctx.session.commit()
+    if cfg["enabled"]:
+        await enqueue(ctx.session, "inbox.sync", ctx.org_id, {}, dedupe_key=f"inbox.sync:{ctx.org_id}", priority=7)
+        await ctx.session.commit()
+    return _autoreply_out(cfg)
+
+
+@router.post("/items/{item_id}/draft/discard")
+async def discard_draft(item_id: uuid.UUID, ctx: Context = Depends(require("inbox.reply"))):
+    it = await _get(ctx, item_id)
+    st = autoreply.state_of(it) or {}
+    if st.get("state") == "drafted":
+        raw = dict(it.raw or {})
+        raw["auto_reply"] = {**st, "state": "skipped", "reason": "draft discarded", "by": str(ctx.user.id)}
+        it.raw = raw
+        await ctx.session.commit()
+    return await _detail(ctx, it)

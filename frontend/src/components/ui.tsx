@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 const variants: Record<Variant, string> = {
-  primary: "bg-gradient-to-r from-blue-700 to-cyan-600 text-white shadow-sm hover:from-blue-800 hover:to-cyan-700 disabled:opacity-50",
+  primary: "bg-gradient-to-r from-grad1 to-grad2 text-white shadow-sm hover:brightness-110 disabled:opacity-50",
   secondary: "bg-surface text-ink border border-line hover:border-brand/50 disabled:opacity-50",
   ghost: "text-muted hover:text-ink hover:bg-ink/5",
   danger: "bg-surface text-danger border border-danger/30 hover:bg-danger-tint",

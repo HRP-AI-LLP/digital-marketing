@@ -33,7 +33,7 @@ def generate_password(length: int = 14) -> str:
             return pw
 
 
-def create_access_token(user_id: UUID, org_id: UUID | None, token_version: int) -> str:
+def create_access_token(user_id: UUID, org_id: UUID | None, token_version: int, sid: UUID | None = None) -> str:
     s = get_settings()
     now = datetime.now(UTC)
     payload = {
@@ -44,6 +44,8 @@ def create_access_token(user_id: UUID, org_id: UUID | None, token_version: int) 
         "exp": now + timedelta(minutes=s.access_token_minutes),
         "typ": "access",
     }
+    if sid:
+        payload["sid"] = str(sid)  # the device session (refresh token row) this access token belongs to
     return jwt.encode(payload, s.secret_key, algorithm=ALGORITHM)
 
 

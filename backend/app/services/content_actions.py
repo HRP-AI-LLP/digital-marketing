@@ -35,9 +35,38 @@ async def _load(session: AsyncSession, post_id: str | uuid.UUID) -> Post:
     return post
 
 
+async def _hook(session: AsyncSession, event: str, post: Post, user, via: str, **extra) -> None:
+    """Outgoing webhooks, in the caller's transaction (they go out only if it commits). Never raises."""
+    from app.services import webhooks
+
+    try:
+        data = webhooks.post_data(post, by=getattr(user, "email", None), via=via, **extra)
+    except Exception:  # noqa: BLE001
+        return
+    await webhooks.emit(post.organization_id, event, data, session=session)
+
+
 def _actor(user, via: str) -> str:
     email = getattr(user, "email", None) or "someone"
     return email if via == "app" else f"{email} via {via}"
+
+
+async def _good_time(session: AsyncSession, post: Post, now: datetime) -> datetime:
+    """The earliest of the best few posting hours in the next 3 days for this account (never fails)."""
+    try:
+        from app.models import Organization, SocialAccount
+        from app.services import best_time
+        from app.services.content import org_tz
+
+        account = await session.get(SocialAccount, post.social_account_id) if post.social_account_id else None
+        zone = org_tz(await session.get(Organization, post.organization_id))
+        if account is not None:
+            slots = await best_time.next_slots(session, account, zone, now=now, count=3, days=3)
+            if slots:
+                return datetime.fromisoformat(slots[0]["at"])
+    except Exception:  # noqa: BLE001 - picking a time must never block approving
+        pass
+    return now + timedelta(minutes=30)
 
 
 async def approve_by_id(session: AsyncSession, post_id: str | uuid.UUID, user, via: str = "app",
@@ -62,7 +91,9 @@ async def approve_by_id(session: AsyncSession, post_id: str | uuid.UUID, user, v
 
     note = ""
     if post.scheduled_at is None:
-        raise ValueError("Pick a date and time for this post first, then approve it.")
+        # No time chosen: use the next good time for this account instead of refusing.
+        post.scheduled_at = await _good_time(session, post, now)
+        note = f" No time was set, so it goes out at a good time for {platform_of(post.platform).label}."
     if post.scheduled_at <= now:
         # Late (the app was off, or it waited for approval): it goes out now, gently spaced per account.
         post.scheduled_at = now + timedelta(minutes=1)
@@ -81,6 +112,7 @@ async def approve_by_id(session: AsyncSession, post_id: str | uuid.UUID, user, v
                  entity_type="post", entity_id=post.id,
                  summary=f"Approved a {platform_of(post.platform).label} post" + ("" if via == "app" else f" via {via}"))
     await session.flush()
+    await _hook(session, "post.approved", post, user, via)
     return "Approved. It's scheduled." + note
 
 
@@ -106,6 +138,7 @@ async def reject_by_id(session: AsyncSession, post_id: str | uuid.UUID, user, re
                  entity_type="post", entity_id=post.id,
                  summary=f"Rejected a {platform_of(post.platform).label} post: {reason[:120]}")
     await session.flush()
+    await _hook(session, "post.rejected", post, user, via, reason=reason)
     return "Rejected. The reason will guide future posts."
 
 

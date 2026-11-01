@@ -89,7 +89,7 @@ export default function LlmsTab() {
   const current = which === "llms" ? text : full;
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[1fr_380px]">
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
       <div className="min-w-0 space-y-4">
         <Card>
           <div className="flex flex-wrap items-start justify-between gap-3">

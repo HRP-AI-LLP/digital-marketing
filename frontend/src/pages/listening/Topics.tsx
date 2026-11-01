@@ -243,7 +243,7 @@ export default function Topics({ status, queries, loading, onRun }: { status: Li
   const canManage = can("listening.manage");
   const [edit, setEdit] = useState<{ d: Draft; id?: string } | null>(null);
   return (
-    <div className="grid gap-4 xl:grid-cols-[1fr_420px]">
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
       <div>
         <Suggestions canManage={canManage} />
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

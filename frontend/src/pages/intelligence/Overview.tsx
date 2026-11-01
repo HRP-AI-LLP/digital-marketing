@@ -37,7 +37,7 @@ export default function OverviewTab({ data, goTo }: { data: Overview; goTo: (t: 
   return (
     <div className="space-y-8">
       <section className="ai-mesh-dark relative overflow-hidden rounded-2xl p-6 text-white sm:p-8">
-        <div className="relative grid gap-6 lg:grid-cols-[1fr_auto] lg:items-end">
+        <div className="relative grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
           <div className="max-w-2xl">
             <div className="flex items-center gap-2 text-sm text-cyan-200">
               <Globe size={15} />

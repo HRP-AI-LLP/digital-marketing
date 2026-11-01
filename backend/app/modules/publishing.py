@@ -90,7 +90,7 @@ async def schedule_account_refresh() -> None:
 # ------------------------------------------------------------------ OAuth app tester
 APP_TO_PROVIDERS = {"meta_app": ["meta", "threads"], "linkedin_app": ["linkedin"],
                     "pinterest_app": ["pinterest"], "google_app": ["google"], "x_app": ["x"],
-                    "tiktok_app": ["tiktok"], "canva_app": ["canva"]}
+                    "tiktok_app": ["tiktok"], "canva_app": ["canva"], "reddit_app": ["reddit"]}
 
 
 @tester("oauth")

@@ -20,8 +20,10 @@ V2 = "https://api.linkedin.com/v2"
 
 MEMBER_SCOPES = ["openid", "profile", "email", "w_member_social"]
 # Community Management API scopes (company pages). Requested only when "company pages" is chosen.
-# If LinkedIn rejects one of these for your app, adjust this list.
-ORG_SCOPES = ["r_organization_admin", "rw_organization_admin", "w_organization_social", "r_organization_social"]
+# These are the scopes LinkedIn grants with the Community Management API (Development and Standard tiers).
+# rw_organization_admin covers reading the pages you administer (the older r_organization_admin belongs to the
+# retired Marketing Developer Platform and is refused for new apps).
+ORG_SCOPES = ["rw_organization_admin", "w_organization_social", "r_organization_social"]
 
 VIDEO_POLLS = 60
 VIDEO_POLL_SECONDS = 5

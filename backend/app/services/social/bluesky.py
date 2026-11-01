@@ -158,10 +158,12 @@ async def publish(session, post: Post, account: SocialAccount, media: list[Media
         elif images:
             items = []
             for m in images[:4]:
-                data = common.read_bytes(m)
+                # Bluesky takes images up to ~1 MB: compress bigger ones automatically.
+                data, mime = common.fit_image(common.read_bytes(m), m.mime or "image/png", MAX_IMAGE_BYTES)
                 if len(data) > MAX_IMAGE_BYTES:
-                    raise PublishError("Bluesky images must be under 1 MB. Use a smaller or compressed image.")
-                item = {"alt": (m.alt_text or "")[:1000], "image": await _upload_blob(c, svc, jwt, data, m.mime or "image/png")}
+                    raise PublishError("This image is too large for Bluesky (1 MB) even after compressing it. "
+                                       "Use a simpler image.")
+                item = {"alt": (m.alt_text or "")[:1000], "image": await _upload_blob(c, svc, jwt, data, mime)}
                 if _aspect(m):
                     item["aspectRatio"] = _aspect(m)
                 items.append(item)

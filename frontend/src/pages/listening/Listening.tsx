@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import { api } from "../../api/client";
 import { useJob } from "../../api/hooks";
 import { useAuth } from "../../auth/AuthContext";
 import { Alert, Button, PageHeader, Spinner, Tabs } from "../../components/ui";
+import { useInboxSummary } from "../../components/InboxBadge";
 import { ago } from "../inbox/shared";
 import Feed, { EMPTY_FILTERS, type Filters } from "./Feed";
 import Overview from "./Overview";
@@ -39,6 +40,7 @@ export default function Listening() {
   });
   const running = run.isPending || (!!jobId && job?.status !== "failed" && job?.status !== "done");
   const s = status.data;
+  const inbox = useInboxSummary();
   const result = job?.status === "done" ? (job.result as { new?: number } | null) : null;
 
   return (
@@ -58,6 +60,14 @@ export default function Listening() {
           {s.settings.enabled && s.next_run_at ? <>Next search {ago(s.next_run_at).replace(" ago", "") === "just now" ? "soon" : `around ${new Intl.DateTimeFormat("en-IN", { hour: "2-digit", minute: "2-digit" }).format(new Date(s.next_run_at))}`}. </> : null}
           {s.needs_response > 0 && <button className="font-medium text-amber-800 hover:underline" onClick={() => { setFilters({ ...EMPTY_FILTERS, needs_response: true }); setTab("feed"); }}>{s.needs_response} waiting for a reply.</button>}
         </p>
+      )}
+      {can("inbox.view") && (
+        <div className="mb-4 rounded-lg border border-line bg-surface px-4 py-2.5 text-sm text-muted">
+          Listening finds what the wider web says about your <b className="text-ink">topics</b>. Direct <b className="text-ink">@mentions, tags,
+          comments and replies on your own accounts</b> (Bluesky, Mastodon, Instagram, Facebook, YouTube) arrive in the{" "}
+          <Link className="font-medium text-primary-700 underline" to="/inbox">Inbox</Link>
+          {inbox.data ? <> ({inbox.data.mentions} mention{inbox.data.mentions === 1 ? "" : "s"}, {inbox.data.comments} comment{inbox.data.comments === 1 ? "" : "s"} unread)</> : null}.
+        </div>
       )}
       {run.error && <div className="mb-4"><Alert>{(run.error as Error).message}</Alert></div>}
       {job?.status === "failed" && <div className="mb-4"><Alert>{job.error ?? "The search didn't finish. Try again in a few minutes."}</Alert></div>}

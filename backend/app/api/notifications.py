@@ -9,7 +9,7 @@ from sqlalchemy import func, select, update
 from app.core.crypto import decrypt_json
 from app.core.deps import Context, get_context
 from app.models import Notification, NotificationPref, ProviderConfig
-from app.services.notify import DEFAULT_EXTERNAL, EVENTS, send_email, send_telegram
+from app.services.notify import EVENTS, default_events, send_email, send_telegram
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 CHANNELS = ("inapp", "email", "telegram")
@@ -21,6 +21,8 @@ def _org(ctx: Context) -> uuid.UUID:
 
 @router.get("")
 async def list_notifications(unread: bool = False, limit: int = 30, ctx: Context = Depends(get_context)):
+    if ctx.org is None:  # platform admin with no organization open: nothing to show yet
+        return {"unread": 0, "items": []}
     q = select(Notification).where(Notification.user_id == ctx.user.id, Notification.organization_id == _org(ctx))
     if unread:
         q = q.where(Notification.read_at.is_(None))
@@ -67,7 +69,7 @@ async def get_prefs(ctx: Context = Depends(get_context)):
         p = prefs.get(ch)
         out[ch] = {
             "enabled": p.enabled if p else ch != "telegram",
-            "events": (p.events if p and p.events else (list(EVENTS) if ch == "inapp" else DEFAULT_EXTERNAL)),
+            "events": (p.events if p and p.events else default_events(ch)),
             "target": p.target if p else (ctx.user.email if ch == "email" else None),
             "verified": p.verified if p else ch == "inapp",
             "quiet_start": p.quiet_start if p else None,

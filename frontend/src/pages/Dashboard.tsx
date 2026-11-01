@@ -1,9 +1,12 @@
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Check, ChevronRight } from "lucide-react";
+import { Gauge, Panel, TipRow } from "../components/viz";
+import DashboardInsights from "./dashboard/Insights";
+import SystemMap from "./dashboard/SystemMap";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { Alert, Badge, Card, StatusBadge, formatDate } from "../components/ui";
+import { Alert } from "../components/ui";
 
 type Dash = {
   organization: { id: string; name: string; timezone: string } | null;
@@ -16,46 +19,58 @@ type Dash = {
   failing_jobs: number;
 };
 
-// Platform badge: brand colour plus a short code (no logos), so each account's network is clear at a glance.
-const PLATFORM_BADGE: Record<string, { code: string; bg: string }> = {
-  facebook_page: { code: "f", bg: "#1877F2" }, instagram: { code: "IG", bg: "#D62976" }, threads: { code: "@", bg: "#111827" },
-  linkedin_person: { code: "in", bg: "#0A66C2" }, linkedin_org: { code: "in", bg: "#0A66C2" }, youtube: { code: "YT", bg: "#FF0000" },
-  gbp: { code: "G", bg: "#34A853" }, google: { code: "G", bg: "#4285F4" }, pinterest: { code: "P", bg: "#E60023" },
-  bluesky: { code: "B", bg: "#1185FE" }, mastodon: { code: "M", bg: "#6364FF" }, x: { code: "X", bg: "#111827" }, tiktok: { code: "TT", bg: "#010101" },
-};
-
-function PlatformBadge({ platform }: { platform: string }) {
-  const b = PLATFORM_BADGE[platform] ?? { code: platform.slice(0, 2).toUpperCase(), bg: "#64748B" };
+function Pill({ label, value, to, tone }: { label: string; value: number; to: string; tone?: "warn" }) {
   return (
-    <span aria-hidden className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-[11px] font-bold text-white" style={{ background: b.bg }}>
-      {b.code}
-    </span>
-  );
-}
-
-function Tile({ label, value, to, tone }: { label: string; value: number; to: string; tone?: "warn" }) {
-  return (
-    <Link to={to} className="rounded-xl border border-line bg-surface p-4 transition-colors hover:border-primary-300">
-      <div className="text-sm text-muted">{label}</div>
-      <div className={`mt-1 text-3xl font-bold tabular-nums ${tone === "warn" && value > 0 ? "text-danger" : ""}`}>{value}</div>
+    <Link to={to} className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors hover:border-primary-300 ${tone === "warn" && value > 0 ? "border-amber-300 bg-amber-50" : "border-line bg-surface"}`}>
+      <span className="font-bold tabular-nums text-ink">{value}</span><span className="text-muted">{label}</span>
     </Link>
   );
 }
 
 type HealthSummary = { score: number | null; grade: string; weakest: { label: string; score: number }[]; top_tip: string | null };
 
-function HealthCard() {
-  const q = useQuery({ queryKey: ["analytics-health-summary"], queryFn: () => api<HealthSummary>("/analytics/health/summary"), staleTime: 300000 });
+function ScoresRow({ d, canAnalytics, canPresence }: { d: Dash; canAnalytics: boolean; canPresence: boolean }) {
+  const q = useQuery({ queryKey: ["analytics-health-summary"], queryFn: () => api<HealthSummary>("/analytics/health/summary"), staleTime: 300000, enabled: canAnalytics });
   const h = q.data;
   return (
-    <Card>
-      <div className="text-sm text-muted">Marketing health</div>
-      <div className="mt-1 text-3xl font-bold tabular-nums">{h?.score ?? "—"}<span className="text-base font-normal text-muted">{h?.score != null ? " / 100" : ""}</span></div>
-      {h && <div className="text-sm font-medium text-primary-800">{h.grade}</div>}
-      {h?.weakest[0] && <p className="mt-1 text-sm text-muted">Weakest area: {h.weakest[0].label} ({h.weakest[0].score})</p>}
-      {h?.top_tip && <p className="mt-1 text-sm">Next step: {h.top_tip}</p>}
-      <Link className="text-sm text-primary-700 hover:underline" to="/analytics?tab=health">How to improve</Link>
-    </Card>
+    <section className="grid gap-5 md:grid-cols-3">
+      {canAnalytics && (
+        <Panel title="Marketing health" sub={h?.grade ?? "Overall score across channels, content and website"}>
+          <div className="flex items-center gap-4">
+            <Gauge value={h?.score ?? null} label="Marketing health" sub="out of 100" size={160}
+              detail={h?.weakest?.map((w) => <TipRow key={w.label} label={w.label} value={w.score} />)} />
+            <div className="min-w-0 text-sm">
+              {h?.weakest[0] && <p className="text-muted">Weakest: <span className="text-ink">{h.weakest[0].label} ({h.weakest[0].score})</span></p>}
+              {h?.top_tip && <p className="mt-1">{h.top_tip}</p>}
+              <Link className="mt-1 inline-block text-primary-700 hover:underline" to="/analytics?tab=health">How to improve</Link>
+            </div>
+          </div>
+        </Panel>
+      )}
+      {canPresence && (
+        <Panel title="Social presence" sub={d.social_presence?.grade ?? "How complete and active your profiles are"}>
+          <div className="flex items-center gap-4">
+            <Gauge value={d.social_presence?.score ?? null} label="Social presence" sub="out of 100" size={160}
+              detail={d.social_presence?.change != null ? <TipRow label="Change since last check" value={`${d.social_presence.change > 0 ? "+" : ""}${d.social_presence.change}`} /> : undefined} />
+            <div className="text-sm">
+              {d.social_presence?.change != null && d.social_presence.change !== 0 && (
+                <p className={`tabular-nums ${d.social_presence.change > 0 ? "text-emerald-700" : "text-danger"}`}>{d.social_presence.change > 0 ? "▲" : "▼"} {Math.abs(d.social_presence.change)} points since the previous check</p>
+              )}
+              <Link className="text-primary-700 hover:underline" to="/presence">{d.social_presence ? "See suggestions" : "Check your social profiles"}</Link>
+            </div>
+          </div>
+        </Panel>
+      )}
+      <Panel title="Digital presence" sub="Website, search and listings audit">
+        <div className="flex items-center gap-4">
+          <Gauge value={d.audit_score} label="Digital presence" sub="out of 100" size={160} />
+          <div className="text-sm">
+            <p className="text-muted">Time zone: <span className="text-ink">{d.organization?.timezone}</span></p>
+            <Link className="text-primary-700 hover:underline" to="/intelligence">{d.audit_score !== null ? "See recommendations" : "Run an audit"}</Link>
+          </div>
+        </div>
+      </Panel>
+    </section>
   );
 }
 
@@ -99,28 +114,27 @@ export default function Dashboard() {
             </div>
           )}
 
-          <section className="mt-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Tile label="Waiting for approval" value={d.counts.in_review} to="/approvals" />
-            <Tile label="Scheduled, next 7 days" value={d.counts.scheduled_7d} to="/calendar" />
-            <Tile label="Published, last 7 days" value={d.counts.published_7d} to="/posts?status=published" />
-            <Tile label="To post by hand" value={d.counts.manual_pending} to="/posts?status=manual_pending" tone="warn" />
-          </section>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Pill label="waiting for approval" value={d.counts.in_review} to="/approvals" />
+            <Pill label="scheduled in the next 7 days" value={d.counts.scheduled_7d} to="/calendar" />
+            <Pill label="published in the last 7 days" value={d.counts.published_7d} to="/posts?status=published" />
+            <Pill label="to post by hand" value={d.counts.manual_pending} to="/posts?status=manual_pending" tone="warn" />
+            <Pill label="connected accounts" value={d.accounts.filter((a) => a.status === "connected" || a.status === "manual").length} to="/settings/accounts" />
+          </div>
 
-          <section className="mt-10 grid gap-10 lg:grid-cols-[1fr_320px]">
-            <div>
-              {!allDone && (
-                <div className="mb-10">
+          {!allDone && <div className="mt-8 max-w-4xl">
+                <div>
                   <div className="flex items-baseline justify-between">
                     <h2 className="text-xl font-semibold">Get {org.name} ready to publish</h2>
                     <span className="text-sm text-muted">{doneCount} of {d.setup.length} done</span>
                   </div>
                   <div className="mt-2 h-1.5 rounded-full bg-line">
-                    <div className="h-full rounded-full bg-gradient-to-r from-blue-700 to-cyan-500 transition-all" style={{ width: `${(doneCount / d.setup.length) * 100}%` }} />
+                    <div className="h-full rounded-full bg-gradient-to-r from-grad1 to-grad2 transition-all" style={{ width: `${(doneCount / d.setup.length) * 100}%` }} />
                   </div>
                   <ol className="mt-4 divide-y divide-line border-y border-line">
                     {d.setup.map((s, i) => {
                       const badge = (
-                        <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-sm font-semibold ${s.done ? "bg-gradient-to-br from-blue-700 to-cyan-500 text-white" : "border border-primary-300 text-primary-700"}`}>
+                        <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-sm font-semibold ${s.done ? "bg-gradient-to-br from-grad1 to-grad2 text-white" : "border border-primary-300 text-primary-700"}`}>
                           {s.done ? <Check size={15} /> : i + 1}
                         </span>
                       );
@@ -151,77 +165,18 @@ export default function Dashboard() {
                     })}
                   </ol>
                 </div>
-              )}
+          </div>}
 
-              <div className="flex items-baseline justify-between">
-                <h2 className="text-xl font-semibold">Coming up</h2>
-                <Link to="/calendar" className="text-sm text-primary-700 hover:underline">Open calendar</Link>
-              </div>
-              {d.upcoming.length ? (
-                <ul className="mt-3 divide-y divide-line rounded-xl border border-line bg-surface">
-                  {d.upcoming.map((p) => (
-                    <li key={p.id}>
-                      <Link to={`/posts/${p.id}`} className="flex gap-4 px-4 py-3 hover:bg-primary-50/60">
-                        <div className="w-28 shrink-0 text-sm tabular-nums text-muted">{formatDate(p.scheduled_at, org.timezone)}</div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2 text-sm">
-                            <span className="font-medium">{p.account ?? p.platform}</span>
-                            <StatusBadge status={p.status} />
-                            <Badge>{p.post_type}</Badge>
-                          </div>
-                          <p className="truncate text-sm text-muted">{p.text || p.topic || "Draft will be written before posting time."}</p>
-                        </div>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="mt-3 text-sm text-muted">Nothing scheduled yet. Create a posting schedule, or write a post from the calendar.</p>
-              )}
-            </div>
+          <div className="mt-8"><DashboardInsights /></div>
 
-            <aside className="space-y-6">
-              <Card>
-                <div className="text-sm text-muted">Connected accounts</div>
-                {d.accounts.length ? (
-                  <ul className="mt-3 space-y-2.5 text-sm">
-                    {d.accounts.map((a) => (
-                      <li key={a.id} className="flex items-center gap-2.5">
-                        <PlatformBadge platform={a.platform} />
-                        <div className="min-w-0 flex-1 leading-tight">
-                          <div className="truncate font-medium">{a.name}</div>
-                          <div className="truncate text-xs text-muted">{a.platform_label}</div>
-                        </div>
-                        <StatusBadge status={a.status} />
-                      </li>
-                    ))}
-                  </ul>
-                ) : <p className="mt-1 text-sm">None yet. <Link className="text-primary-700 underline" to="/settings/accounts">Connect one</Link>.</p>}
-              </Card>
-              {can("analytics.view") && <HealthCard />}
-              {can("presence.view") && (
-                <Card>
-                  <div className="text-sm text-muted">Social presence score</div>
-                  <div className="mt-1 text-3xl font-bold tabular-nums">{d.social_presence?.score ?? "—"}<span className="text-base font-normal text-muted">{d.social_presence?.score != null ? " / 100" : ""}</span></div>
-                  {d.social_presence?.change != null && d.social_presence.change !== 0 && (
-                    <div className={`text-xs tabular-nums ${d.social_presence.change > 0 ? "text-emerald-700" : "text-danger"}`}>
-                      {d.social_presence.change > 0 ? "▲" : "▼"} {Math.abs(d.social_presence.change)} points since the previous check
-                    </div>
-                  )}
-                  <Link className="text-sm text-primary-700 hover:underline" to="/presence">{d.social_presence ? "See suggestions" : "Check your social profiles"}</Link>
-                </Card>
-              )}
-              <Card>
-                <div className="text-sm text-muted">Digital presence score</div>
-                <div className="mt-1 text-3xl font-bold tabular-nums">{d.audit_score ?? "—"}<span className="text-base font-normal text-muted">{d.audit_score !== null ? " / 100" : ""}</span></div>
-                <Link className="text-sm text-primary-700 hover:underline" to="/intelligence">{d.audit_score !== null ? "See recommendations" : "Run an audit"}</Link>
-              </Card>
-              <Card>
-                <div className="text-sm text-muted">Time zone</div>
-                <div className="font-medium">{org.timezone}</div>
-              </Card>
-            </aside>
-          </section>
+          <div className="mt-5">
+            <Panel title="Your marketing system" sub="Every AI agent, the services it relies on and each connected channel, with live status. Updates every 15 seconds."
+              action={<Link to="/system" className="text-sm text-primary-700 hover:underline">Open full screen</Link>}>
+              <SystemMap height={620} />
+            </Panel>
+          </div>
+
+          <div className="mt-5"><ScoresRow d={d} canAnalytics={can("analytics.view")} canPresence={can("presence.view")} /></div>
         </>
       )}
     </div>

@@ -5,6 +5,7 @@ import Activity from "./pages/Activity";
 import ChangePassword from "./pages/ChangePassword";
 import ComingSoon from "./pages/ComingSoon";
 import Dashboard from "./pages/Dashboard";
+import SystemView from "./pages/SystemView";
 import Login from "./pages/Login";
 import OrganizationSettings from "./pages/OrganizationSettings";
 import PlatformOrganizations from "./pages/PlatformOrganizations";
@@ -13,11 +14,13 @@ import Users from "./pages/Users";
 import Integrations from "./pages/Integrations";
 import AiUsage from "./pages/AiUsage";
 import NotificationSettings from "./pages/NotificationSettings";
+import Reports from "./pages/Reports";
 import Calendar from "./pages/Calendar";
 import Approvals from "./pages/Approvals";
 import Posts from "./pages/Posts";
 import MediaStudio from "./pages/MediaStudio";
 import LinkInBio from "./pages/LinkInBio";
+import GrowFollowers from "./pages/GrowFollowers";
 import Seo from "./pages/Seo";
 import Intelligence from "./pages/Intelligence";
 import Analytics from "./pages/Analytics";
@@ -31,6 +34,11 @@ import AiVisibility from "./pages/AiVisibility";
 import Listening from "./pages/listening/Listening";
 import SiteAudit from "./pages/SiteAudit";
 import Keywords from "./pages/Keywords";
+import Links from "./pages/Links";
+import Connections from "./pages/Connections";
+import AccountSecurity from "./pages/AccountSecurity";
+import Appearance from "./pages/Appearance";
+import PlatformBackups from "./pages/PlatformBackups";
 
 function Guard({ perm, platform, children }: { perm?: string; platform?: boolean; children: JSX.Element }) {
   const { can, session } = useAuth();
@@ -44,36 +52,46 @@ export default function App() {
   if (!ready) return <div className="grid h-full place-items-center text-muted">Loading…</div>;
   if (!session) return <Login />;
   if (session.user.must_change_password) return <ChangePassword forced />;
+  if (session.two_factor_setup_required) return <AccountSecurity forced />;
 
   return (
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
+        <Route path="system" element={<Guard perm="content.view"><SystemView /></Guard>} />
         <Route path="settings/organization" element={<Guard perm="org.settings.view"><OrganizationSettings /></Guard>} />
         <Route path="settings/users" element={<Guard perm="user.view"><Users /></Guard>} />
         <Route path="settings/roles" element={<Guard perm="role.view"><Roles /></Guard>} />
         <Route path="settings/activity" element={<Guard perm="audit.view"><Activity /></Guard>} />
         <Route path="platform/organizations" element={<Guard platform><PlatformOrganizations /></Guard>} />
         <Route path="settings/integrations" element={<Guard perm="integration.view"><Integrations /></Guard>} />
+        <Route path="settings/connections" element={<Guard perm="connections.view"><Connections /></Guard>} />
         <Route path="settings/ai-usage" element={<Guard perm="integration.view"><AiUsage /></Guard>} />
         <Route path="settings/notifications" element={<NotificationSettings />} />
         <Route path="settings/brand" element={<Guard perm="content.view"><Brand /></Guard>} />
         <Route path="settings/schedules" element={<Guard perm="schedule.view"><Schedules /></Guard>} />
+        <Route path="settings/schedules/:tab" element={<Guard perm="schedule.view"><Schedules /></Guard>} />
         <Route path="settings/accounts" element={<Guard perm="integration.view"><SocialAccounts /></Guard>} />
+        <Route path="reports" element={<Guard perm="content.view"><Reports /></Guard>} />
         <Route path="calendar" element={<Guard perm="content.view"><Calendar /></Guard>} />
         <Route path="approvals" element={<Guard perm="content.approve"><Approvals /></Guard>} />
         <Route path="posts/*" element={<Guard perm="content.view"><Posts /></Guard>} />
         <Route path="media" element={<Guard perm="media.manage"><MediaStudio /></Guard>} />
         <Route path="link-in-bio" element={<Guard perm="linkinbio.manage"><LinkInBio /></Guard>} />
+        <Route path="grow" element={<Guard perm="links.view"><GrowFollowers /></Guard>} />
         <Route path="seo/*" element={<Guard perm="seo.view"><Seo /></Guard>} />
         <Route path="intelligence" element={<Guard perm="intel.view"><Intelligence /></Guard>} />
         <Route path="research" element={<Guard perm="research.view"><Research /></Guard>} />
         <Route path="ai-visibility" element={<Guard perm="aivis.view"><AiVisibility /></Guard>} />, <Route path="site-audit" element={<Guard perm="siteaudit.view"><SiteAudit /></Guard>} />, <Route path="keywords" element={<Guard perm="keywords.view"><Keywords /></Guard>} />
         <Route path="analytics" element={<Guard perm="analytics.view"><Analytics /></Guard>} />
+        <Route path="links" element={<Guard perm="links.view"><Links /></Guard>} />
         <Route path="presence" element={<Guard perm="presence.view"><Presence /></Guard>} />
         <Route path="inbox" element={<Guard perm="inbox.view"><Inbox /></Guard>} />
         <Route path="listening" element={<Guard perm="listening.view"><Listening /></Guard>} />
         <Route path="account/password" element={<ChangePassword />} />
+        <Route path="account/security" element={<AccountSecurity />} />
+        <Route path="account/appearance" element={<Appearance />} />
+        <Route path="platform/backups" element={<Guard platform><PlatformBackups /></Guard>} />
         <Route path="*" element={<ComingSoon />} />
       </Route>
     </Routes>

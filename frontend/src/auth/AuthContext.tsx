@@ -1,12 +1,14 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { auth, bindSession, refreshSession, type Session } from "../api/client";
+import { auth, bindSession, refreshSession, reloadSession, type Session } from "../api/client";
 
 type AuthState = {
   session: Session | null;
   ready: boolean;
   can: (perm: string) => boolean;
   login: typeof auth.login;
+  loginSecondStep: typeof auth.loginSecondStep;
+  reload: typeof reloadSession;
   logout: () => Promise<void>;
   changePassword: typeof auth.changePassword;
   switchOrg: (id: string) => Promise<void>;
@@ -29,6 +31,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ready,
     can: (p) => !!session?.permissions.includes(p),
     login: auth.login,
+    loginSecondStep: auth.loginSecondStep,
+    reload: reloadSession,
     logout: async () => { await auth.logout(); qc.clear(); },
     changePassword: auth.changePassword,
     switchOrg: async (id) => { await auth.switchOrg(id); qc.clear(); },

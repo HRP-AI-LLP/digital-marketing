@@ -1,20 +1,23 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, Copy, Download, ExternalLink, ImagePlus, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, Copy, Download, ExternalLink, FlaskConical, ImagePlus, RefreshCw, Send, Trash2, X } from "lucide-react";
 import { api } from "../../api/client";
 import { useJob } from "../../api/hooks";
 import { useAuth } from "../../auth/AuthContext";
-import { Alert, Badge, Button, Field, Input, Modal, Select, Spinner, Textarea } from "../../components/ui";
+import { Alert, Badge, Button, Field, Input, Modal, Select, Spinner, Textarea, Toggle } from "../../components/ui";
 import { RejectDialog } from "../Approvals";
+import { BestTimeSuggest } from "./BestTime";
 import { PostMediaDialog } from "./PostMedia";
+import { PostLinkClicks } from "../Links";
+import { TeamComments, VersionHistory } from "./Collab";
 import {
   ACTION_LABELS, CharCounter, PostPreview, PostStatus, QaPanel, Section, Warnings, caption, fmt, fromLocalInput,
   parseTags, toLocalInput, tzLabel, until, useContentAccounts, useMeta, useTz, type PostDetail as Post,
 } from "./shared";
 
 /** Platforms whose API lets the app delete a published post (X deletes every part of a thread). */
-const REMOTE_DELETE = new Set(["x", "pinterest"]);
+const REMOTE_DELETE = new Set(["x", "pinterest", "discord", "telegram", "reddit"]);
 
 type Draft = { text: string; title: string; tags: string; link_url: string; first_comment: string; when: string; media_ids: string[] };
 
@@ -110,6 +113,7 @@ export default function PostDetail() {
   const [dialog, setDialog] = useState<"reject" | "dup" | "mark" | "regen" | "media" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [historyTab, setHistoryTab] = useState<"activity" | "versions">("activity");
 
   useEffect(() => {
     if (!p) return;
@@ -131,6 +135,7 @@ export default function PostDetail() {
     qc.invalidateQueries({ queryKey: ["approvals"] });
     qc.invalidateQueries({ queryKey: ["posts"] });
     qc.invalidateQueries({ queryKey: ["calendar"] });
+    qc.invalidateQueries({ queryKey: ["post-versions", id] });
   };
   useJob(jobId, () => { setJobId(null); refresh(); });
 
@@ -157,6 +162,10 @@ export default function PostDetail() {
   const reject = useMutation({ mutationFn: (reason: string) => act("reject", { reason }), onSuccess: (r) => { setDialog(null); onAct(r); } });
   const regen = useMutation({ mutationFn: (note: string) => act("regenerate", { note }), onSuccess: (r) => { setDialog(null); onAct(r); } });
   const publishNow = useMutation({ mutationFn: () => act("publish-now"), onSuccess: onAct });
+  const evergreen = useMutation({
+    mutationFn: (on: boolean) => api<Post>(`/content/posts/${id}/evergreen`, { method: "POST", json: { evergreen: on } }),
+    onSuccess: (np) => { qc.setQueryData(["post", id], np); setNotice(np.evergreen ? "Marked evergreen." : "No longer evergreen."); },
+  });
   const remove = useMutation({ mutationFn: () => api(`/content/posts/${id}`, { method: "DELETE" }), onSuccess: () => { refresh(); nav("/posts"); } });
   const removeRemote = useMutation({
     mutationFn: () => api(`/social/posts/${id}/delete-remote`, { method: "POST" }),
@@ -227,14 +236,33 @@ export default function PostDetail() {
       {p.status === "manual_pending" && (
         <div className="mb-5 rounded-xl border border-violet-200 bg-violet-50 p-4">
           <h2 className="font-semibold text-violet-900">Time to post this by hand</h2>
-          <p className="mt-1 text-sm text-violet-900/80">Copy the text, download the media, post it on {p.platform_label}, then mark it as published.</p>
+          <p className="mt-1 text-sm text-violet-900/80">
+            {p.share_url
+              ? "Press Open WhatsApp to open it with the text filled in (or copy the text), attach the media, send it in your channel, then mark it as published."
+              : `Copy the text, download the media, post it on ${p.platform_label}, then mark it as published.`}
+          </p>
           <div className="mt-3 flex flex-wrap gap-2">
+            {p.share_url && !dirty && (
+              <a href={p.share_url} target="_blank" rel="noreferrer"><Button><ExternalLink size={15} /> Open WhatsApp</Button></a>
+            )}
             <Button variant="secondary" onClick={copyText}><Copy size={15} /> Copy text</Button>
+            {p.share_url && p.link_url && (
+              <Button variant="secondary" onClick={() => navigator.clipboard?.writeText(p.link_url!)}><Copy size={15} /> Copy link</Button>
+            )}
             {p.media.filter((m) => m.url).map((m, i) => (
               <a key={m.id} href={m.url!} download><Button variant="secondary"><Download size={15} /> Download {m.kind} {p.media.length > 1 ? i + 1 : ""}</Button></a>
             ))}
             {can("content.publish") && <Button onClick={() => setDialog("mark")}><Check size={16} /> Mark as published</Button>}
           </div>
+          {p.can_auto_publish && can("content.publish") && (
+            <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-violet-200 pt-3 text-sm text-violet-900/80">
+              <span className="min-w-0 flex-1">Not posted yet? {p.platform_label} can take it automatically now.</span>
+              <Button variant="secondary" disabled={publishNow.isPending || dirty}
+                onClick={() => { if (confirm(`Post this on ${p.platform_label} automatically now? Only do this if you haven't posted it by hand.`)) publishNow.mutate(); }}>
+                <Send size={15} /> Post it automatically
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -265,9 +293,12 @@ export default function PostDetail() {
               </Field>
               <div className="grid gap-4 md:grid-cols-2">
                 <Field label="Link"><Input type="url" value={d.link_url} onChange={(e) => setD({ ...d, link_url: e.target.value })} placeholder="https://" /></Field>
-                <Field label={`Scheduled time (${tzLabel(tz)})`}>
-                  <Input type="datetime-local" value={d.when} onChange={(e) => setD({ ...d, when: e.target.value })} />
-                </Field>
+                <div>
+                  <Field label={`Scheduled time (${tzLabel(tz)})`}>
+                    <Input type="datetime-local" value={d.when} onChange={(e) => setD({ ...d, when: e.target.value })} />
+                  </Field>
+                  {canEdit && <BestTimeSuggest accountId={p.social_account_id} onPick={(v) => setD({ ...d, when: v })} />}
+                </div>
               </div>
               <Field label="First comment (optional)" hint="Posted as the first comment where the platform allows it.">
                 <Textarea rows={2} value={d.first_comment} onChange={(e) => setD({ ...d, first_comment: e.target.value })} />
@@ -305,6 +336,8 @@ export default function PostDetail() {
             )}
           </Section>
 
+          <TeamComments postId={p.id} />
+
           <Section title="Preview">
             <div className="max-w-xl"><PostPreview post={preview} /></div>
             {p.first_comment && <p className="mt-2 max-w-xl text-sm text-muted">First comment: {p.first_comment}</p>}
@@ -337,10 +370,22 @@ export default function PostDetail() {
               <p className="mt-2 text-xs text-muted">Updated {fmt(p.metrics[0].fetched_at, tz)}</p>
             </Section>
           )}
+          {can("links.view") && <PostLinkClicks postId={p.id} />}
+          <Section title="Evergreen">
+            <Toggle checked={!!p.evergreen} disabled={!can("content.create") || writing || evergreen.isPending}
+              onChange={(v) => evergreen.mutate(v)} label="Evergreen: share a fresh version again later" />
+            <p className="mt-1.5 text-xs text-muted">
+              {p.evergreen ? "When evergreen recycling is on, a refreshed version of this post (same facts and links, new opening) is shared again after a while." : "Turn this on for timeless posts worth sharing again."}{" "}
+              <Link to="/settings/schedules/evergreen" className="text-brand underline">Evergreen settings</Link>
+            </p>
+            {p.recycled_from && <p className="mt-1.5 text-xs text-muted">This is a fresh version of <Link to={`/posts/${p.recycled_from}`} className="text-brand underline">an earlier evergreen post</Link>.</p>}
+            {evergreen.error && <div className="mt-2"><Alert>{(evergreen.error as Error).message}</Alert></div>}
+          </Section>
           <Section title="More actions">
             <div className="flex flex-wrap gap-2">
               {can("content.create") && !locked && <Button variant="secondary" onClick={() => setDialog("regen")}><RefreshCw size={15} /> Write a new version</Button>}
               {can("content.create") && !writing && <Button variant="secondary" onClick={() => setDialog("dup")}><Copy size={15} /> Copy to another account</Button>}
+              {can("content.create") && !writing && <Button variant="secondary" onClick={() => nav(`/posts/experiments?from=${p.id}`)} title="Test 2–3 versions of this post"><FlaskConical size={15} /> A/B test</Button>}
               {p.status !== "manual_pending" && <Button variant="ghost" onClick={copyText}><Copy size={15} /> Copy text</Button>}
               {can("content.create") && !["published", "publishing"].includes(p.status) && (
                 <Button variant="ghost" onClick={() => { if (confirm("Delete this post? This can't be undone.")) remove.mutate(); }}><Trash2 size={15} /> Delete</Button>
@@ -348,8 +393,23 @@ export default function PostDetail() {
             </div>
             {p.warnings.length > 0 && <div className="mt-3"><Warnings items={p.warnings} /></div>}
           </Section>
-          <Section title="History">
-            {p.activities.length === 0 ? <p className="text-sm text-muted">Nothing yet.</p> : (
+          <Section title="History" action={
+            <div role="tablist" aria-label="History" className="flex gap-1 rounded-lg bg-ink/5 p-0.5 text-xs">
+              {(["activity", "versions"] as const).map((t) => (
+                <button key={t} type="button" role="tab" aria-selected={historyTab === t} onClick={() => setHistoryTab(t)}
+                  className={`rounded-md px-2.5 py-1 ${historyTab === t ? "bg-surface font-semibold text-ink shadow-sm" : "text-muted hover:text-ink"}`}>
+                  {t === "activity" ? "Activity" : `Versions${p.version ? ` (${p.version})` : ""}`}
+                </button>
+              ))}
+            </div>
+          }>
+            {historyTab === "versions" ? (
+              <VersionHistory postId={p.id} onRestored={async (m) => {
+                setNotice(m);
+                const np = await qc.fetchQuery({ queryKey: ["post", id], queryFn: () => api<Post>(`/content/posts/${id}`), staleTime: 0 });
+                const f = toDraft(np, tz); setD(f); setBaseline(JSON.stringify(f)); refresh();
+              }} />
+            ) : p.activities.length === 0 ? <p className="text-sm text-muted">Nothing yet.</p> : (
               <ol className="space-y-3 border-l border-line pl-4">
                 {p.activities.map((a) => (
                   <li key={a.id} className="relative min-w-0 text-sm">

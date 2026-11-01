@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, ExternalLink, FileText, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ExternalLink, FileText, MessageSquare, XCircle } from "lucide-react";
 import { api } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { Badge } from "../../components/ui";
@@ -10,6 +10,8 @@ export type PlatformMeta = {
   id: string; label: string; max_chars: number; max_hashtags: number; title_chars: number;
   post_types: string[]; max_images: number; notes: string; manual: boolean;
   image_size?: string; video_size?: string;
+  /** False for platforms switched off for the studio (TikTok in India); kept only for existing posts. */
+  offered?: boolean; unavailable_note?: string | null;
 };
 export type Meta = {
   platforms: PlatformMeta[]; post_types: Record<string, string>; needs_media: string[];
@@ -31,7 +33,9 @@ export type PostSummary = {
   account: AccountBrief | null; social_account_id: string | null; schedule_id: string | null;
   pillar: { id: string; name: string; color: string } | null; external_url: string | null; error: string | null;
   qa_score: number | null; qa_passed: boolean | null; similarity: number | null; char_count: number; max_chars: number;
-  media: MediaItem[]; warnings: string[];
+  media: MediaItem[]; warnings: string[]; evergreen?: boolean; recycled_from?: string | null;
+  /** Internal team comments (never published). */
+  comment_count?: number; open_comment_count?: number;
 };
 export type Activity = { id: string; action: string; note: string | null; actor: string | null; created_at: string };
 export type Metric = { fetched_at: string; impressions: number; reach: number; likes: number; comments: number; shares: number; clicks: number; saves: number; video_views: number };
@@ -42,6 +46,11 @@ export type PostDetail = PostSummary & {
   created_at: string; updated_at: string; caption: string; max_hashtags: number; title_chars: number;
   brief: { image_brief?: string | null; alt_text?: string | null; angle?: string | null; brief?: string | null; slides?: { heading: string; body: string }[] | null; video_script?: { caption: string; voiceover: string }[] | null };
   activities: Activity[]; metrics: Metric[];
+  /** WhatsApp (posted by hand): a wa.me link that opens WhatsApp with the text filled in. */
+  share_url?: string | null;
+  can_auto_publish?: boolean;
+  /** Latest saved content version (0 = none yet). */
+  version?: number;
 };
 
 // ------------------------------------------------------------------ data hooks
@@ -141,7 +150,9 @@ export const ACTION_LABELS: Record<string, string> = {
   manual_pending: "Ready to post by hand", marked_published: "Marked as published", missed: "Late",
   auto_approved: "Approved automatically", generation_failed: "Writing failed", deleted: "Deleted",
   catching_up: "Catching up (app was off)", held_for_review: "Waiting for you (its day passed)",
-  publish_waiting: "Waiting for the internet",
+  publish_waiting: "Waiting for the internet", recycled: "Fresh version of an evergreen post",
+  reshared: "Reshared as a fresh version", evergreen_on: "Marked evergreen", evergreen_off: "No longer evergreen",
+  commented: "Team comment", restored: "Earlier version restored",
 };
 
 // ------------------------------------------------------------------ small components
@@ -286,6 +297,18 @@ export function Section({ title, children, action }: { title: string; children: 
       </div>
       {children}
     </section>
+  );
+}
+
+/** Small speech-bubble count of internal team comments; open (unresolved) ones are highlighted. */
+export function CommentBadge({ total, open }: { total?: number; open?: number }) {
+  if (!total) return null;
+  const label = `${total} team comment${total === 1 ? "" : "s"}${open ? `, ${open} open` : ""}`;
+  return (
+    <span title={label} aria-label={label}
+      className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium tabular-nums ${open ? "bg-accent-tint text-secondary-800" : "bg-ink/5 text-muted"}`}>
+      <MessageSquare size={12} aria-hidden /> {total}
+    </span>
   );
 }
 

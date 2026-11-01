@@ -113,6 +113,15 @@ async def bootstrap() -> None:
         await sync_permissions(session)
         if not await session.scalar(select(User.id).limit(1)):
             password = s.platform_admin_password or generate_password()
+            if not s.bootstrap_org:
+                user = User(email=s.platform_admin_email.strip().lower(), full_name=s.platform_admin_name,
+                            password_hash=hash_password(password), must_change_password=True, is_platform_admin=True)
+                session.add(user)
+                await session.commit()
+                if not s.platform_admin_password:
+                    log.warning("Created platform admin %s with password: %s", user.email, password)
+                log.info("Bootstrapped platform admin %s (no organization)", user.email)
+                return
             org, user, _ = await provision_organization(
                 session,
                 name=s.default_org_name,

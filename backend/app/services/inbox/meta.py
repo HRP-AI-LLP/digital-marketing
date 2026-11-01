@@ -33,8 +33,18 @@ def check(r: httpx.Response, what: str, platform: str, permission: str) -> dict:
     if isinstance(err, dict):
         code = err.get("code")
         if isinstance(code, int) and (code in (3, 10) or 200 <= code <= 299):
+            if what == "Instagram mentions":
+                _LAST_ERR["tags"] = str(err.get("message") or "")[:300]
             raise InboxPermissionError(platform, permission, what)
     return graph_api.check(r, what)
+
+
+_LAST_ERR: dict = {}
+
+
+def tag_error(c) -> str | None:
+    msg = _LAST_ERR.get("tags")
+    return f"Meta says: {msg}. Comments on your own posts work as normal." if msg else None
 
 
 def _token(account: SocialAccount) -> str:
@@ -210,6 +220,12 @@ async def collect_instagram(session, account: SocialAccount, ctx: CollectContext
                     thread_key=str(t["id"]), external_post_id=str(t["id"]), external_post_url=t.get("permalink"),
                     engagement=(t.get("like_count") or 0) + (t.get("comments_count") or 0), raw=t,
                 ))
+        except InboxPermissionError:
+            # Comments work, so instagram_manage_comments is granted; Meta refuses the tagged-media list on its own
+            # terms (it needs Advanced Access through App Review). Show Meta's own words, not a setup hint.
+            ctx.notes.append("Instagram @mentions by other accounts aren't available yet: " + (tag_error(c) or
+                             "Meta only shares posts that tag you after App Review gives the app Advanced Access to "
+                             "instagram_manage_comments. Comments on your own posts work as normal."))
         except PublishError as e:
             if e.retryable:
                 raise

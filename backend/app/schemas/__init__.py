@@ -59,7 +59,9 @@ class OrganizationOut(ORM):
 
 ADDRESS_KEYS = ("line1", "line2", "city", "state", "postal_code")
 REGISTRATION_KEYS = ("gstin", "cin", "pan", "udyam", "other")
-SOCIAL_KEYS = ("linkedin", "facebook", "instagram", "x", "youtube", "tiktok", "threads", "pinterest", "github", "other")
+# "tiktok" stays so a stored link isn't dropped on save; the settings form no longer offers it (banned in India).
+SOCIAL_KEYS = ("linkedin", "facebook", "instagram", "x", "youtube", "tiktok", "threads", "pinterest", "github",
+               "whatsapp", "telegram", "reddit", "discord", "other")
 COMPANY_SIZES = ("1", "2-10", "11-50", "51-200", "201-500", "501-1000", "1001-5000", "5000+")
 GSTIN_RE = re.compile(r"^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$")
 
@@ -199,6 +201,7 @@ class UserOut(ORM):
     full_name: str
     is_platform_admin: bool
     must_change_password: bool
+    totp_enabled: bool = False
 
 
 class SessionOut(BaseModel):
@@ -206,6 +209,8 @@ class SessionOut(BaseModel):
     organization: OrganizationOut | None
     permissions: list[str]
     memberships: list[MembershipSummary]
+    # The organization requires two-step sign-in and this person hasn't set it up yet (forced setup screen).
+    two_factor_setup_required: bool = False
 
 
 class TokenOut(SessionOut):
@@ -213,6 +218,18 @@ class TokenOut(SessionOut):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class TwoFactorChallengeOut(BaseModel):
+    two_factor_required: bool = True
+    challenge: str
+    expires_in: int
+
+
+class TwoFactorLoginIn(BaseModel):
+    challenge: str = Field(max_length=2000)
+    code: str | None = Field(None, max_length=12)
+    recovery_code: str | None = Field(None, max_length=40)
 
 
 # ---- Users (members of the current organization) ---------------------------------
@@ -229,17 +246,21 @@ class MemberOut(BaseModel):
     roles: list[RoleRef]
     last_login_at: datetime | None
     joined_at: datetime
+    two_factor_enabled: bool = False
 
 
 class MemberCreate(BaseModel):
     email: EmailStr
     full_name: str = Field(min_length=1, max_length=200)
     role_ids: list[UUID] = Field(min_length=1)
+    send_email: bool = True  # email the sign-in details (when Email/SMTP is set up)
 
 
 class MemberCreated(BaseModel):
     member: MemberOut
     temporary_password: str | None
+    email_sent: bool = False
+    email_note: str | None = None
 
 
 class MemberUpdate(BaseModel):
@@ -250,6 +271,8 @@ class MemberUpdate(BaseModel):
 
 class PasswordReset(BaseModel):
     temporary_password: str
+    email_sent: bool = False
+    email_note: str | None = None
 
 
 # ---- Roles & permissions -------------------------------------------------------------
@@ -290,6 +313,8 @@ class AuditOut(ORM):
     summary: str | None
     ip_address: str | None
     created_at: datetime
+    actor_user_id: UUID | None = None
+    details: dict | None = None
 
 
 T = TypeVar("T")

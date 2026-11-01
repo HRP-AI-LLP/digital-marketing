@@ -104,9 +104,10 @@ CAPABILITIES: dict[str, Capability] = {
                            read_permissions=("read:notifications",), reply_permissions=("write:statuses",),
                            note="Replies and mentions."),
     "linkedin_org": Capability(
-        "LinkedIn company page", False, False,
-        note="LinkedIn only offers comment access to approved Community Management partners. Open each post on "
-             "LinkedIn to read and answer comments."),
+        "LinkedIn company page", True, True, max_reply_chars=1250,
+        read_permissions=("r_organization_social",), reply_permissions=("w_organization_social",),
+        note="Comments and replies on your company page posts from the last 30 days. LinkedIn doesn't share "
+             "commenters' names with apps, so they show as LinkedIn member."),
     "linkedin_person": Capability(
         "LinkedIn profile", False, False,
         note="LinkedIn doesn't offer comment access for personal profiles to apps like this one. Open each post on "
@@ -118,7 +119,7 @@ CAPABILITIES: dict[str, Capability] = {
                       note="Reviews and Q&A aren't part of the inbox yet. Answer them in Google Business Profile."),
 }
 SYNC_PLATFORMS = [p for p, c in CAPABILITIES.items() if c.sync]
-OPEN_ONLY_PLATFORMS = ["linkedin_org", "linkedin_person", "pinterest"]
+OPEN_ONLY_PLATFORMS = ["linkedin_person", "pinterest"]
 
 LISTENING_SOURCES: dict[str, dict] = {
     "web": {"label": "Web", "interval_minutes": 360, "needs": None},
@@ -142,7 +143,13 @@ _MASTODON_STEPS = ("On your Mastodon server open Preferences → Development →
                    "to like posts), save, then add the account again with the new access token.")
 
 
+_LINKEDIN_STEPS = ("The company page app needs the Community Management API with {perm}. Check the app's Auth tab on "
+                   "LinkedIn, then reconnect LinkedIn with Include company pages in Settings → Social accounts.")
+
+
 def permission_help(platform: str, permission: str) -> str:
+    if platform == "linkedin_org":
+        return _LINKEDIN_STEPS.format(perm=permission)
     if platform == "facebook_page":
         return _META_PAGE_STEPS.format(perm=permission)
     if platform == "instagram":

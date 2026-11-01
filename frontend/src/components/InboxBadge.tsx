@@ -24,7 +24,7 @@ export default function InboxBadge() {
     <span
       aria-label={`${n} unread${urgent ? `, ${q.data?.urgent} urgent` : ""}`}
       className={`ml-auto grid h-5 min-w-5 place-items-center rounded-full px-1.5 text-[11px] font-semibold tabular-nums text-white ${
-        urgent ? "bg-danger" : "bg-gradient-to-r from-blue-600 to-cyan-500"
+        urgent ? "bg-danger" : "bg-gradient-to-r from-grad1 to-grad2"
       }`}
     >
       {n > 99 ? "99+" : n}

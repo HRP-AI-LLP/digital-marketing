@@ -24,7 +24,7 @@ from app.core.deps import Context, require
 from app.models import OAuthState, Post, ProviderConfig, Schedule, SocialAccount, User
 from app.services import audit, publishing
 from app.services.llm.catalog import BY_ID
-from app.services.platforms import PLATFORMS
+from app.services.platforms import PLATFORMS, is_offered, offered_platforms, unavailable_note
 from app.services.social import common
 from app.services.social.common import OAUTH_PROVIDERS, PublishError
 
@@ -54,11 +54,37 @@ CONNECTORS: list[dict] = [
      "blurb": "Sign in with your handle and an app password."},
     {"id": "mastodon", "label": "Mastodon", "method": "token", "platforms": ["mastodon"],
      "blurb": "Use an access token from your Mastodon server."},
+    {"id": "telegram", "label": "Telegram channel", "method": "bot_token", "platforms": ["telegram"],
+     "blurb": "Post text, photos, albums, videos and PDFs to your Telegram channel through a free bot you make "
+              "with @BotFather and add as a channel admin."},
+    {"id": "discord", "label": "Discord channel", "method": "webhook", "platforms": ["discord"],
+     "blurb": "Post announcements, images, videos and files to a channel in your Discord server through a channel "
+              "webhook. No bot or developer app needed."},
+    {"id": "reddit", "label": "Reddit", "method": "oauth", "platforms": ["reddit"],
+     "blurb": "Post text, link and image posts to your Reddit profile or a subreddit you choose, with a free Reddit app."},
+    {"id": "whatsapp", "label": "WhatsApp channel (post by hand)", "method": "manual", "platforms": ["whatsapp"],
+     "blurb": "WhatsApp has no API for posting to Channels, so the app writes WhatsApp-ready updates and gives you "
+              "an Open WhatsApp button and copy buttons to post them yourself."},
     {"id": "manual", "label": "Other platforms (publish by hand)", "method": "manual", "platforms": ["manual"],
      "blurb": "No API connection: posts are prepared for you to publish by hand. You can also add X this way if "
               "you don't use the X API."},
 ]
 PLATFORM_CONNECTOR = {p: c["id"] for c in CONNECTORS for p in c["platforms"]}
+
+
+def offered_connectors() -> list[dict]:
+    """Connectors with at least one platform that is switched on (TikTok is off by default: banned in India)."""
+    out = []
+    for c in CONNECTORS:
+        plats = [p for p in c["platforms"] if is_offered(p)]
+        if plats:
+            out.append({**c, "platforms": plats})
+    return out
+
+
+def _offered_provider(provider: str) -> bool:
+    plats = [p for c in CONNECTORS if c["id"] == provider for p in c["platforms"]]
+    return not plats or any(is_offered(p) for p in plats)
 
 
 # ------------------------------------------------------------------ guide
@@ -94,7 +120,7 @@ def _out(a: SocialAccount) -> dict:
     s = a.settings or {}
     spec = PLATFORMS.get(a.platform)
     return {
-        "id": a.id, "platform": a.platform,
+        "id": a.id, "platform": a.platform, "platform_note": unavailable_note(a.platform),
         "platform_label": spec.label if spec else ("Google connection" if a.platform == "google" else a.platform),
         "name": a.name, "handle": a.handle, "avatar_url": a.avatar_url, "profile_url": a.profile_url,
         "status": a.status, "status_message": a.status_message, "token_expires_at": a.token_expires_at,
@@ -127,7 +153,7 @@ async def platforms(ctx: Context = Depends(require("integration.view"))):
     media_host = await ctx.session.scalar(
         select(ProviderConfig.id).where(ProviderConfig.kind == "media_host", ProviderConfig.enabled.is_(True)).limit(1))
     connectors = []
-    for c in CONNECTORS:
+    for c in offered_connectors():
         oauth = c["method"] == "oauth"
         app = OAUTH_PROVIDERS[c["id"]]["app"] if oauth else None
         connectors.append({
@@ -156,7 +182,7 @@ async def platforms(ctx: Context = Depends(require("integration.view"))):
              "redirect_uri": common.redirect_uri(PLATFORM_CONNECTOR[p.id])
              if PLATFORM_CONNECTOR.get(p.id) in OAUTH_PROVIDERS else None,
              "guide": guide(PLATFORM_CONNECTOR.get(p.id, "manual"))}
-            for p in PLATFORMS.values()
+            for p in offered_platforms()
         ],
         "connectors": connectors,
         "media_host_configured": bool(media_host or get_settings().public_base_url),
@@ -210,6 +236,9 @@ async def start_oauth(ctx: Context, provider: str, options: dict, return_to: str
     spec = OAUTH_PROVIDERS.get(provider)
     if spec is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown provider: {provider}")
+    if not _offered_provider(provider):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            unavailable_note(provider) or f"{spec['label']} is switched off for this studio.")
     variant = "pages" if provider == "linkedin" and options.get("company_pages") else None
     creds = await common.app_credentials(ctx.session, provider, variant)
     if not creds:
@@ -310,6 +339,16 @@ class MastodonIn(BaseModel):
     access_token: str = Field(min_length=8, max_length=500)
 
 
+class TelegramIn(BaseModel):
+    bot_token: str = Field(min_length=20, max_length=200)
+    channel: str = Field(min_length=2, max_length=300)
+
+
+class DiscordIn(BaseModel):
+    webhook_url: str = Field(min_length=30, max_length=500)
+    name: str | None = Field(None, max_length=200)
+
+
 class ManualIn(BaseModel):
     platform: str = "manual"
     name: str = Field(min_length=1, max_length=200)
@@ -357,10 +396,43 @@ async def add_mastodon(body: MastodonIn, ctx: Context = Depends(require("integra
     return _out(acc)
 
 
+@router.post("/accounts/telegram", status_code=201)
+async def add_telegram(body: TelegramIn, ctx: Context = Depends(require("integration.manage"))):
+    from app.services.social import telegram
+
+    try:
+        acc = await telegram.connect(ctx.session, ctx.org_id, ctx.user.id, body.bot_token, body.channel)
+    except PublishError as e:
+        raise _err(e)
+    except httpx.HTTPError:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Couldn't reach Telegram. Check the internet connection and try again.")
+    _audit(ctx, "social.connected", acc, f"Connected Telegram channel {acc.handle or acc.name}")
+    await ctx.session.commit()
+    return _out(acc)
+
+
+@router.post("/accounts/discord", status_code=201)
+async def add_discord(body: DiscordIn, ctx: Context = Depends(require("integration.manage"))):
+    from app.services.social import discord
+
+    try:
+        acc = await discord.connect(ctx.session, ctx.org_id, ctx.user.id, body.webhook_url, body.name)
+    except PublishError as e:
+        raise _err(e)
+    except httpx.HTTPError:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Couldn't reach Discord. Check the internet connection and try again.")
+    _audit(ctx, "social.connected", acc, f"Connected Discord webhook {acc.name}")
+    await ctx.session.commit()
+    return _out(acc)
+
+
+MANUAL_KINDS = ("manual", "x", "whatsapp")  # X by hand when the X API isn't used; WhatsApp has no posting API
+
+
 @router.post("/accounts/manual", status_code=201)
 async def add_manual(body: ManualIn, ctx: Context = Depends(require("integration.manage"))):
-    if body.platform not in ("manual", "x"):  # X by hand when the X API isn't used
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Manual accounts can be X or Other.")
+    if body.platform not in MANUAL_KINDS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Manual accounts can be Other, X or a WhatsApp channel.")
     acc = SocialAccount(organization_id=ctx.org_id, platform=body.platform, external_id=f"manual:{uuid.uuid4()}",
                         name=body.name.strip(), handle=(body.handle or "").strip() or None,
                         profile_url=(body.profile_url or "").strip() or None, status="manual", settings={},
@@ -404,6 +476,20 @@ async def update_account(aid: uuid.UUID, body: AccountPatch, ctx: Context = Depe
                 v = bool(v)
             if k == "video_source" and v not in ("upload", "url"):
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Video source must be upload or url.")
+            if k == "subreddit" and v is not None:
+                v = str(v).strip().removeprefix("https://www.reddit.com/").strip("/").removeprefix("r/")
+                if v.startswith(("u/", "user/")):
+                    v = "u_" + v.split("/", 1)[1]
+                if not re.fullmatch(r"(u_)?[A-Za-z0-9_-]{2,30}", v):
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                        "Enter a subreddit name like HRTech (without r/), or u_yourname for your profile.")
+            if k in ("flair_id", "flair_text") and v is not None:
+                v = str(v).strip()[:64] or None
+            if k == "max_file_mb" and v is not None:
+                try:
+                    v = max(1, min(500, int(v)))
+                except (TypeError, ValueError):
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST, "The file size limit must be a whole number of MB.")
             if k in ("audited", "long_posts", "collect_metrics", "disable_comment", "disable_duet", "disable_stitch",
                      "is_aigc", "sandbox") and v is not None:
                 v = bool(v)

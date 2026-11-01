@@ -260,11 +260,21 @@ async def repurpose(aid: uuid.UUID, body: RepurposeIn, ctx: Context = Depends(re
     try:
         from app.services.notify import notify_org
 
-        await notify_org(ctx.org_id, "post_review", f"{len(posts)} post(s) waiting for approval",
-                         f"Posts sharing the article “{a.title[:120]}”. Review and schedule them.",
-                         link="/approvals", permission="content.approve")
+        waiting = [p for p in posts if p.status == "in_review"]
+        if waiting:
+            await notify_org(ctx.org_id, "post_review", f"{len(waiting)} post(s) waiting for approval",
+                             f"Posts sharing the article “{a.title[:120]}”. Review and schedule them.",
+                             link="/approvals", permission="content.approve")
     except Exception:  # noqa: BLE001
         log.exception("post_review notification failed")
+    try:
+        from app.services import webhooks
+
+        for wp in posts:
+            if wp.status == "in_review":
+                await webhooks.emit(ctx.org_id, "post.needs_approval", webhooks.post_data(wp, article_id=a.id))
+    except Exception:  # noqa: BLE001
+        log.exception("post_review webhook failed")
     return {"count": len(posts), "post_ids": [p.id for p in posts],
             "posts": [{"id": p.id, "platform": p.platform, "post_type": p.post_type, "status": p.status,
                        "link_url": p.link_url} for p in posts]}

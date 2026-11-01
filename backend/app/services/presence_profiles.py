@@ -27,7 +27,9 @@ LABELS = {
 
 # How much each platform matters for a B2B Indian tech company (coverage and the overall average use these).
 IMPORTANCE = {"linkedin": 3.0, "youtube": 2.0, "instagram": 2.0, "x": 2.0, "facebook": 1.5, "github": 1.0, "threads": 1.0,
-              "pinterest": 0.5, "bluesky": 0.75, "mastodon": 0.5, "tiktok": 0.5, "medium": 0.5, "other": 0.5}
+              "pinterest": 0.5, "bluesky": 0.75, "mastodon": 0.5, "medium": 0.5, "other": 0.5,
+              # TikTok is banned in India: a TikTok profile found on an old page is shown but never weighs on scores.
+              "tiktok": 0.0}
 
 # Connected account platform → profile platform. Personal LinkedIn profiles, Google Business Profile and the hidden
 # Google holder aren't company social profiles, so they are left out.

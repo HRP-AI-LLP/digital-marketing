@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from app.services.llm import keys as _keys
 import logging
 from dataclasses import dataclass
 
@@ -49,7 +50,7 @@ async def providers(session: AsyncSession, provider: str | None = None) -> list[
             continue
         key = decrypt_json(c.secrets_enc).get("api_key") or ""
         spec = BY_ID.get(c.provider)
-        if key:
+        if key or (spec and not spec.key):
             out.append(_Cfg(c, key, (c.base_url or (spec.base_url if spec else "")).rstrip("/")))
     return out
 
@@ -130,6 +131,25 @@ def _unsplash_photo(p: dict) -> dict:
             "duration": None, "attribution": f"Photo by {user.get('name')} on Unsplash"}
 
 
+_OV_LICENSES = {"by": "CC BY", "by-sa": "CC BY-SA", "cc0": "CC0", "pdm": "Public domain", "by-nd": "CC BY-ND",
+                "by-nc": "CC BY-NC", "by-nc-sa": "CC BY-NC-SA", "by-nc-nd": "CC BY-NC-ND"}
+
+
+def _openverse_photo(p: dict) -> dict:
+    lic = _OV_LICENSES.get(str(p.get("license") or "").lower(), str(p.get("license") or "").upper())
+    ver = p.get("license_version") or ""
+    who = p.get("creator") or "unknown"
+    return {"provider": "openverse", "type": "photo", "id": str(p.get("id")), "width": p.get("width"), "height": p.get("height"),
+            "preview_url": p.get("thumbnail") or p.get("url"), "download_url": p.get("url"),
+            "author": who, "author_url": p.get("creator_url"), "page_url": p.get("foreign_landing_url"),
+            "alt": p.get("title") or "", "duration": None,
+            "attribution": p.get("attribution") or f"\"{p.get('title') or 'Photo'}\" by {who}, {lic} {ver}".strip()}
+
+
+def _ov_h(c: _Cfg) -> dict:
+    return {"Authorization": f"Bearer {c.key}"} if c.key else {}
+
+
 # ----------------------------------------------------------------------------- search
 async def _search_one(c: _Cfg, query: str, type_: str, orientation: str | None, per_page: int) -> list[dict]:
     o = _orient(c.provider, orientation)
@@ -156,6 +176,15 @@ async def _search_one(c: _Cfg, query: str, type_: str, orientation: str | None, 
             r = await http.get(f"{c.base}/search/photos", params=params, headers=_unsplash_h(c))
             _check(r, "Unsplash")
             return [_unsplash_photo(p) for p in r.json().get("results", [])]
+        if c.provider == "openverse":
+            if type_ == "video":
+                return []
+            aspect = {"landscape": "wide", "portrait": "tall", "square": "square"}.get((orientation or "").lower())
+            params = {"q": query[:200], "page_size": max(1, min(per_page, 20)), "license_type": "commercial,modification",
+                      "mature": "false", "size": "large,medium", **({"aspect_ratio": aspect} if aspect else {})}
+            r = await http.get(f"{c.base}/images/", params=params, headers=_ov_h(c))
+            _check(r, "Openverse")
+            return [_openverse_photo(p) for p in r.json().get("results", []) if p.get("url")]
     return []
 
 
@@ -206,6 +235,10 @@ async def _fetch_item(c: _Cfg, type_: str, item_id: str) -> dict:
             r = await http.get(f"{c.base}/photos/{item_id}", headers=_unsplash_h(c))
             _check(r, "Unsplash")
             return _unsplash_photo(r.json())
+        if c.provider == "openverse":
+            r = await http.get(f"{c.base}/images/{item_id}/", headers=_ov_h(c))
+            _check(r, "Openverse")
+            return _openverse_photo(r.json())
     raise StockError(f"Unsupported stock provider: {c.provider}")
 
 
@@ -283,14 +316,14 @@ from app.api.integrations import tester  # noqa: E402
 
 
 def _cfg_for_test(cfg: ProviderConfig) -> _Cfg:
-    key = decrypt_json(cfg.secrets_enc).get("api_key") or ""
-    if not key:
-        raise StockError("Add the API key.")
+    key = _keys.secrets_of(cfg).get("api_key") or ""
     spec = BY_ID.get(cfg.provider)
+    if not key and (spec is None or spec.key):
+        raise StockError("Add the API key.")
     return _Cfg(cfg, key, (cfg.base_url or (spec.base_url if spec else "")).rstrip("/"))
 
 
-@tester("pexels", "pixabay", "unsplash")
+@tester("pexels", "pixabay", "unsplash", "openverse")
 async def _test_stock(cfg: ProviderConfig) -> str:
     c = _cfg_for_test(cfg)
     items = await _search_one(c, "office", "photo", None, 3)

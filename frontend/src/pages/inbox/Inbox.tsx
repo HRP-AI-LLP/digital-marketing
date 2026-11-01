@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive, AtSign, ChevronDown, CornerDownRight, Inbox as InboxIcon, MailOpen, MessagesSquare, RefreshCw, Search,
-  SlidersHorizontal, Mail,
+  SlidersHorizontal, Mail, MessageSquareText, Sparkles,
 } from "lucide-react";
 import { api } from "../../api/client";
 import { useJob } from "../../api/hooks";
@@ -12,7 +12,9 @@ import { Alert, Button, EmptyState, Input, PageHeader, Select, Spinner, Tabs } f
 import { useInboxSummary } from "../../components/InboxBadge";
 import Channels from "./Channels";
 import Conversation from "./Conversation";
+import { ManageSavedReplies } from "./SavedReplies";
 import ListeningSettings from "./ListeningSettings";
+import AutoReplySettings, { useAutoReply } from "./AutoReply";
 import {
   Avatar, KindChip, PlatformMark, SentimentChip, UrgentChip, ago, type InboxItem, type Person, type Status,
 } from "./shared";
@@ -28,7 +30,7 @@ function Row({ it, active, checked, onCheck, onOpen }: {
     <li className={`group relative flex gap-3 border-b border-line px-3 py-3 transition-colors ${
       active ? "bg-primary-50" : unread ? "bg-surface hover:bg-slate-50" : "bg-canvas/40 hover:bg-slate-50"
     }`}>
-      {active && <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-gradient-to-b from-blue-600 to-cyan-500" />}
+      {active && <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-gradient-to-b from-grad1 to-grad2" />}
       <input type="checkbox" aria-label="Select" checked={checked} onChange={(e) => onCheck(e.target.checked)}
         className="mt-2.5 h-4 w-4 shrink-0 accent-[rgb(var(--brand))]" />
       <button onClick={onOpen} className="flex min-w-0 flex-1 gap-3 text-left" aria-current={active ? "true" : undefined}>
@@ -53,7 +55,8 @@ function Row({ it, active, checked, onCheck, onOpen }: {
             {it.priority && <UrgentChip />}
             <SentimentChip s={it.sentiment} />
             <KindChip item={it} />
-            {it.status === "replied" && <span className="text-[11px] font-medium text-primary-700">Replied</span>}
+            {it.status === "replied" && <span className="text-[11px] font-medium text-primary-700">{it.auto_reply?.state === "sent" ? "AI replied" : "Replied"}</span>}
+            {it.auto_reply?.state === "drafted" && !it.reply_text && <span className="inline-flex items-center gap-0.5 rounded bg-secondary-50 px-1.5 py-0.5 text-[10px] font-semibold text-secondary-800"><Sparkles size={10} />AI draft ready</span>}
             {it.status === "archived" && <span className="text-[11px] text-muted">Archived</span>}
             {it.assigned_to && <span className="truncate text-[11px] text-muted">· {it.assigned_to.name}</span>}
           </span>
@@ -77,6 +80,9 @@ export default function Inbox() {
   const [openId, setOpenId] = useState<string | null>(params.get("item"));
   const [showChannels, setShowChannels] = useState(false);
   const [showListening, setShowListening] = useState(false);
+  const [showSaved, setShowSaved] = useState(false);
+  const [showAuto, setShowAuto] = useState(false);
+  const auto = useAutoReply();
   const [jobs, setJobs] = useState<{ comments?: string; mentions?: string }>({});
   const canAct = can("inbox.reply");
 
@@ -86,6 +92,7 @@ export default function Inbox() {
 
   const qs = new URLSearchParams({ tab, limit: String(PAGE), offset: String(page * PAGE) });
   for (const [k, v] of Object.entries(f)) if (v && !((k === "source" || k === "keyword") && tab === "comments")) qs.set(k, v);
+  if (f.status === "drafts") { qs.delete("status"); qs.set("drafts", "true"); }
   const list = useQuery({
     queryKey: ["inbox-items", qs.toString()],
     queryFn: () => api<{ items: InboxItem[]; total: number }>(`/inbox/items?${qs}`),
@@ -151,7 +158,7 @@ export default function Inbox() {
     if (filtered) empty = <EmptyState title="Nothing matches these filters" body="Try clearing a filter or searching for something else." />;
     else if (tab === "comments" && st && syncAccounts.length === 0)
       empty = <EmptyState title="Connect an account to see comments here"
-        body="Comments and replies from Facebook, Instagram, Threads, YouTube, Bluesky and Mastodon land in this inbox. LinkedIn and Pinterest don't share comments with apps, so you answer those on the platform."
+        body="Comments and replies from Facebook, Instagram, your LinkedIn company page, Threads, YouTube, Bluesky and Mastodon land in this inbox. LinkedIn profiles and Pinterest don't share comments with apps, so you answer those on the platform."
         action={<Button variant="secondary" onClick={() => setShowChannels(true)}>See how to connect</Button>} />;
     else if (tab === "mentions" && st && !st.keywords.length)
       empty = <EmptyState title="Tell us what to listen for"
@@ -171,6 +178,17 @@ export default function Inbox() {
               {problems.length > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-amber-100 px-1 text-[11px] font-semibold text-amber-800">{problems.length}</span>}
               <ChevronDown size={14} className={`transition-transform ${showChannels ? "rotate-180" : ""}`} />
             </Button>
+            {canAct && (
+              <Button variant="secondary" onClick={() => setShowAuto(true)}>
+                <Sparkles size={15} className="text-secondary-600" /> AI replies
+                <span className={`rounded-full px-1.5 text-[11px] font-semibold ${auto.data?.enabled ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-muted"}`}>
+                  {auto.data?.enabled ? (auto.data.mode === "auto" ? "Auto" : "Drafts") : "Off"}
+                </span>
+              </Button>
+            )}
+            {can("inbox.manage") && (
+              <Button variant="secondary" onClick={() => setShowSaved(true)}><MessageSquareText size={15} /> Saved replies</Button>
+            )}
             {canAct && (
               <Button onClick={() => refresh.mutate()} disabled={refresh.isPending || running}>
                 <RefreshCw size={15} className={running ? "animate-spin" : ""} /> {running ? "Checking…" : "Refresh"}
@@ -222,6 +240,7 @@ export default function Inbox() {
           <option value="">Open and replied</option>
           <option value="new">Unread</option>
           <option value="open">Not answered</option>
+          <option value="drafts">AI drafts to approve</option>
           <option value="replied">Replied</option>
           <option value="archived">Archived</option>
           <option value="all">Everything</option>
@@ -307,6 +326,8 @@ export default function Inbox() {
         </div>
       )}
 
+      {showSaved && <ManageSavedReplies onClose={() => setShowSaved(false)} />}
+      {showAuto && <AutoReplySettings onClose={() => setShowAuto(false)} />}
       {showListening && <ListeningSettings onClose={() => setShowListening(false)} sources={st?.sources ?? []} />}
     </div>
   );

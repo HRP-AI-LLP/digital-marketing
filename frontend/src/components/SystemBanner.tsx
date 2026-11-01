@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Alert } from "./ui";
 
+export type BlogAutopilot = { enabled: boolean; days: number[]; time: string };
 export type SystemStatus = {
   worker_running: boolean;
   online: boolean | null;
@@ -11,9 +12,12 @@ export type SystemStatus = {
   last_seen: string | null;
   clock_skew_seconds: number | null;
   wake_at: string | null;
+  public_base: string | null;
+  public_ok: boolean | null;
   recent_downtime: { reason: string; started_at: string; ended_at: string }[];
   catching_up: { id: string; platform_label: string; title: string; due_at: string; posting_at: string; status: string }[];
-  settings: { catch_up_gap_minutes: number; wake_for_posts: boolean };
+  settings: { catch_up_gap_minutes: number; wake_for_posts: boolean; auto_approve_posts: boolean; auto_publish_articles: boolean;
+    publish_held_posts: boolean; blog_autopilot: BlogAutopilot };
 };
 
 export function useSystemStatus() {
@@ -46,6 +50,16 @@ export default function SystemBanner() {
       <Alert key="offline" tone="warn">
         No internet connection{d.offline_since ? ` since ${time(d.offline_since)}` : ""}. Posting is paused and nothing
         will fail: it picks up by itself as soon as the connection is back.
+      </Alert>,
+    );
+  }
+  if (d.worker_running && d.online !== false && d.public_ok === false) {
+    notes.push(
+      <Alert key="public" tone="warn">
+        Your public address ({d.public_base}) isn't answering, so Instagram, Threads and Google can't fetch images and
+        Facebook sign-in won't work. Posts that need it wait and go out by themselves once it's back. The studio
+        restarts the Cloudflare Tunnel by itself (every 10 minutes while it's down); if this stays, check
+        <code>storage\logs\tunnel.err.log</code>.
       </Alert>,
     );
   }

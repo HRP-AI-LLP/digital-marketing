@@ -13,6 +13,7 @@ Optional: `replicate_generate(...)` creates an AI clip with a configured Replica
 
 from __future__ import annotations
 
+from app.services.llm import keys as _keys
 import asyncio
 import logging
 import time
@@ -281,7 +282,7 @@ async def replicate_generate(session: AsyncSession, prompt: str, out: Path, *, a
 
 async def _replicate_one(session: AsyncSession, cfg: ProviderConfig, model: str, prompt: str, out: Path, *,
                          aspect_ratio: str, timeout_s: float, poll_s: float) -> Path:
-    key = decrypt_json(cfg.secrets_enc).get("api_key")
+    key = _keys.secrets_of(cfg).get("api_key")
     spec = BY_ID.get(cfg.provider)
     base = (cfg.base_url or (spec.base_url if spec else "")).rstrip("/")
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
@@ -333,7 +334,7 @@ from app.api.integrations import tester  # noqa: E402
 
 @tester("replicate")
 async def _test_replicate(cfg: ProviderConfig) -> str:
-    key = decrypt_json(cfg.secrets_enc).get("api_key")
+    key = _keys.secrets_of(cfg).get("api_key")
     if not key:
         raise VideoError("Add the API token.")
     spec = BY_ID.get(cfg.provider)

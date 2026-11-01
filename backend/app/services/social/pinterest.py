@@ -13,11 +13,11 @@ from app.services.social.common import PublishError, account_tokens, ok_json
 AUTHORIZE = "https://www.pinterest.com/oauth/"
 API = "https://api.pinterest.com/v5"
 SANDBOX_API = "https://api-sandbox.pinterest.com/v5"
-SCOPES = ["boards:read", "pins:read", "pins:write", "user_accounts:read"]
+SCOPES = ["boards:read", "boards:write", "pins:read", "pins:write", "user_accounts:read"]  # creating a pin needs boards:write too
 
-TRIAL_NOTE = ("If your Pinterest app has Trial access, new pins may be visible only to you. "
-              "Apply for Standard access to publish publicly.")
-
+TRIAL_BLOCKED = ("Pinterest only lets apps with Trial access create test pins, not real ones. Until Pinterest "
+                 "approves Standard access for your app, Pinterest posts are handed to you to pin by hand (download the "
+                 "image and copy the text below). Apply for Standard access in the Pinterest developer portal → your app.")
 MEDIA_POLLS = 60
 MEDIA_POLL_SECONDS = 5
 
@@ -83,7 +83,7 @@ async def complete(session, org_id, user_id, creds: dict, redirect_uri: str, cod
         session, org_id, user_id, "pinterest", str(u.get("id") or username), name=u.get("business_name") or username,
         handle=username, avatar_url=u.get("profile_image"), profile_url=f"https://www.pinterest.com/{username}/",
         tokens=_tokens(t), expires_at=common.expires_from(t.get("expires_in")), settings=settings,
-        status_message=TRIAL_NOTE if boards else "Create a board on Pinterest, then pick it in this account's settings.",
+        status_message=None if boards else "Create a board on Pinterest, then pick it in this account's settings.",
     )
     return [acc]
 
@@ -102,6 +102,24 @@ async def refresh(session, account: SocialAccount) -> None:
             tokens = _tokens(t, tokens)
             common.save_tokens(account, tokens, common.expires_from(t.get("expires_in")))
         ok_json(await c.get(f"{API}/user_account", headers=_bearer(tokens["access_token"])), "Checking the account")
+    await ensure_board(account)
+
+
+async def ensure_board(account: SocialAccount) -> str | None:
+    """A board created on Pinterest after connecting is picked up automatically (the first one), so pins can go out."""
+    board = (account.settings or {}).get("board_id")
+    if board:
+        return board
+    try:
+        boards = await list_boards(account)
+    except PublishError:
+        return None
+    if not boards:
+        account.status_message = "Create a board on Pinterest, then pick it in this account's settings."
+        return None
+    account.settings = {**(account.settings or {}), "board_id": boards[0]["id"], "board_name": boards[0].get("name")}
+    account.status_message = None
+    return boards[0]["id"]
 
 
 def _b64(asset: MediaAsset) -> dict:
@@ -155,9 +173,10 @@ async def publish(session, post: Post, account: SocialAccount, media: list[Media
     tok = account_tokens(account).get("access_token")
     if not tok:
         raise PublishError("No access token stored. Connect the account again.", reconnect=True)
-    board = (account.settings or {}).get("board_id")
+    board = await ensure_board(account)
     if not board:
-        raise PublishError("Choose a default Pinterest board in Settings → Social accounts.")
+        raise PublishError("Your Pinterest account has no board yet. Create one on Pinterest (any name, e.g. "
+                           "\"HRP AI\"); the studio picks it up automatically, or choose one in Settings → Social accounts.")
     if not media:
         raise PublishError("Pinterest pins need an image or a video.")
     base = api_base(account)
@@ -187,7 +206,12 @@ async def publish(session, post: Post, account: SocialAccount, media: list[Media
             body["media_source"] = {"source_type": "multiple_image_base64", "items": [_b64(m) for m in images[:5]]}
         else:
             body["media_source"] = {"source_type": "image_base64", **_b64(images[0])}
-        d = ok_json(await c.post(f"{base}/pins", headers=_bearer(tok), json=body), "Pinterest pin")
+        r = await c.post(f"{base}/pins", headers=_bearer(tok), json=body)
+        if not r.is_success and "trial access" in common.error_message(r).lower():
+            e = PublishError(TRIAL_BLOCKED)
+            e.manual_fallback = True  # hand the pin to a person instead of failing every day
+            raise e
+        d = ok_json(r, "Pinterest pin")
     pid = str(d["id"])
     return pid, f"https://www.pinterest.com/pin/{pid}/"
 

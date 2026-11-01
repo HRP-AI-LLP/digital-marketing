@@ -8,6 +8,7 @@ the worker's periodic task calls it for every active organization.
 from __future__ import annotations
 
 import logging
+import time as _time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
@@ -63,12 +64,26 @@ def parse_hhmm(v: str) -> time | None:
     return None
 
 
+def is_best(schedule: Schedule) -> bool:
+    return (getattr(schedule, "time_mode", None) or "fixed") == "best"
+
+
 def slot_times(schedule: Schedule, tz: ZoneInfo, start: datetime, end: datetime,
-               blackout: set[str] | None = None) -> list[datetime]:
-    """Slot datetimes (UTC) with start < t <= end, in the schedule's days/times in `tz`."""
+               blackout: set[str] | None = None, best=None) -> list[datetime]:
+    """Slot datetimes (UTC) with start < t <= end, in the schedule's days/times in `tz`.
+
+    With time_mode "best" the fixed times are ignored: each day gets the schedule's `posts_per_day` best hours
+    (from `best`, a best_time.BestTimes; the platform defaults when it is None), 3 h apart, 08:00–21:00."""
     days = {int(d) for d in (schedule.days_of_week or []) if str(d).lstrip("-").isdigit()}
+    best_mode = is_best(schedule)
     times = sorted({t for t in (parse_hhmm(x) for x in (schedule.times or [])) if t})
-    if not days or not times or end <= start:
+    if best_mode:
+        from app.services import best_time
+
+        best = best or best_time.build([], None)
+        per_day = max(1, min(best_time.MAX_PER_DAY, int(getattr(schedule, "posts_per_day", 1) or 1)))
+        by_weekday = {wd: [time(h, 0) for h in best.pick_hours(wd, per_day)] for wd in range(7)}
+    if not days or (not times and not best_mode) or end <= start:
         return []
     blackout = blackout or set()
     every = max(1, int(getattr(schedule, "interval_days", 1) or 1))
@@ -86,7 +101,7 @@ def slot_times(schedule: Schedule, tz: ZoneInfo, start: datetime, end: datetime,
     while d <= last:
         on_cycle = anchor is None or (d - anchor).days % every == 0
         if on_cycle and d.weekday() in days and d.isoformat() not in blackout:
-            for t in times:
+            for t in (by_weekday[d.weekday()] if best_mode else times):
                 local = datetime.combine(d, t, tzinfo=tz)
                 utc = local.astimezone(UTC)
                 if start < utc <= end:
@@ -154,10 +169,65 @@ async def posts_in_month(session: AsyncSession, account: SocialAccount, at: date
     return int(await session.scalar(q) or 0)
 
 
+BEST_CACHE_SECONDS = 30 * 60
+_BEST_CACHE: dict = {}
+
+
+async def best_for(session: AsyncSession, schedule: Schedule, tz: ZoneInfo, now: datetime,
+                   account: SocialAccount | None = None):
+    """The account's best times when the schedule posts at "best time", else None."""
+    if not is_best(schedule):
+        return None
+    from app.services import best_time
+
+    account = account or await session.get(SocialAccount, schedule.social_account_id)
+    if account is None:
+        return await best_time.for_account(session, account, tz, now)
+    # The planner runs every minute; the learned hours only move when new results arrive, so keep them for a while.
+    key = (account.id, getattr(tz, "key", str(tz)), now.date())
+    hit = _BEST_CACHE.get(key)
+    if hit and _time.monotonic() - hit[0] < BEST_CACHE_SECONDS:
+        return hit[1]
+    best = await best_time.for_account(session, account, tz, now)
+    if len(_BEST_CACHE) > 500:
+        _BEST_CACHE.clear()
+    _BEST_CACHE[key] = (_time.monotonic(), best)
+    return best
+
+
+async def schedule_slots(session: AsyncSession, schedule: Schedule, tz: ZoneInfo, start: datetime, end: datetime,
+                         blackout: set[str] | None = None, account: SocialAccount | None = None) -> list[datetime]:
+    """slot_times, with the account's learned best times for best-time schedules."""
+    best = await best_for(session, schedule, tz, start, account)
+    return slot_times(schedule, tz, start, end, blackout, best)
+
+
+async def _day_counts(session: AsyncSession, schedule: Schedule, tz: ZoneInfo, slots: list[datetime]) -> dict[date, int]:
+    """Posts a best-time schedule already has per local day. Best hours can shift as results come in, so the
+    per-day count (not the exact time) is what stops a day getting more than posts_per_day posts."""
+    lo, hi = min(slots) - timedelta(days=2), max(slots) + timedelta(days=2)
+    rows = (await session.execute(select(Post.scheduled_at, Post.meta).where(
+        Post.schedule_id == schedule.id, Post.scheduled_at >= lo, Post.scheduled_at <= hi))).all()
+    out: dict[date, int] = {}
+    for at, meta in rows:
+        key = (meta or {}).get("slot_at")
+        when = at
+        if key:
+            try:
+                when = datetime.strptime(key, "%Y-%m-%dT%H:%MZ").replace(tzinfo=UTC)
+            except ValueError:
+                pass
+        if when is not None:
+            d = when.astimezone(tz).date()
+            out[d] = out.get(d, 0) + 1
+    return out
+
+
 async def plan_schedule(session: AsyncSession, schedule: Schedule, account: SocialAccount, tz: ZoneInfo,
                         now: datetime, blackout: set[str]) -> list[Post]:
     """Create planned posts for the schedule's slots within its lead time (idempotent)."""
-    slots = slot_times(schedule, tz, now, now + timedelta(hours=max(1, schedule.lead_hours or 24)), blackout)
+    slots = await schedule_slots(session, schedule, tz, now, now + timedelta(hours=max(1, schedule.lead_hours or 24)),
+                                 blackout, account)
     if not slots:
         return []
     await _lock_schedule(session, schedule.id)
@@ -171,9 +241,15 @@ async def plan_schedule(session: AsyncSession, schedule: Schedule, account: Soci
     )).all())
     created = []
     limit = monthly_limit(account)
+    per_day = await _day_counts(session, schedule, tz, slots) if is_best(schedule) else None
     for at in slots:
         if at in taken_times or slot_key(at) in taken_keys:
             continue
+        if per_day is not None:
+            day = at.astimezone(tz).date()
+            if per_day.get(day, 0) >= max(1, schedule.posts_per_day or 1):
+                continue
+            per_day[day] = per_day.get(day, 0) + 1
         if limit and await posts_in_month(session, account, at, tz) >= limit:
             continue  # the account's monthly post limit (e.g. to cap X API spend) is already used up
         post = new_slot_post(schedule, account, at)
@@ -205,13 +281,17 @@ async def plan_all(session: AsyncSession, org: Organization, now: datetime | Non
 async def next_free_slot(session: AsyncSession, schedule: Schedule, tz: ZoneInfo, now: datetime,
                          days: int = 60) -> datetime | None:
     blackout = await blackout_dates(session)
-    slots = slot_times(schedule, tz, now, now + timedelta(days=days), blackout)
+    slots = await schedule_slots(session, schedule, tz, now, now + timedelta(days=days), blackout)
     if not slots:
         return None
     taken = set((await session.scalars(
         select(Post.scheduled_at).where(Post.schedule_id == schedule.id, Post.scheduled_at.in_(slots))
     )).all())
-    return next((s for s in slots if s not in taken), None)
+    if not is_best(schedule):
+        return next((s for s in slots if s not in taken), None)
+    per_day = await _day_counts(session, schedule, tz, slots)
+    cap = max(1, schedule.posts_per_day or 1)
+    return next((s for s in slots if s not in taken and per_day.get(s.astimezone(tz).date(), 0) < cap), None)
 
 
 # ------------------------------------------------------------------ promotion, dispatch, catch-up

@@ -6,6 +6,7 @@ import type { Job } from "../../api/hooks";
 import { useAuth } from "../../auth/AuthContext";
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, Spinner, formatDate } from "../../components/ui";
 import { Chips, DeleteButton, ErrorText, JobStatus, ScoreBar, SectionTitle, SetupHint, useIntelJobs } from "./shared";
+import { TipRow } from "../../components/viz";
 import { type Competitor, type JobStart, type Overview } from "./types";
 
 type PatchResult = { competitor: Competitor; job_id: string | null };
@@ -47,7 +48,10 @@ function SuggestedCard({ c, canManage }: { c: Competitor; canManage: boolean }) 
         </div>
         <span className="text-sm font-semibold tabular-nums text-brand-deep" title="How much they overlap with your offerings">{pct}% overlap</span>
       </div>
-      <div className="mt-2"><ScoreBar value={pct} label={`${c.name} overlap`} /></div>
+      <div className="mt-2"><ScoreBar value={pct} unit="%" label={`${c.name}: overlap with your offerings`} detail={<>
+        <TipRow label="Their offerings found" value={c.offerings.length} />
+        {c.page_count != null && <TipRow label="Pages crawled" value={c.page_count} />}
+      </>} /></div>
       {c.reason && <p className="mt-3 text-sm">{c.reason}</p>}
       {!!c.offerings.length && <div className="mt-3"><Chips items={c.offerings} max={6} /></div>}
       {a.error && <p className="mt-2 text-sm text-danger">{(a.error as Error).message}</p>}

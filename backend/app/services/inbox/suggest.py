@@ -13,7 +13,8 @@ from app.services.llm import router as llm_router
 
 LIMITS = {"bluesky": 300, "mastodon": 480, "threads": 500}
 EMOJI = {"none": "Don't use emojis.", "light": "At most one emoji, only if it fits.",
-         "rich": "A couple of fitting emojis are fine."}
+         "rich": "Use one to three fitting emojis (for example 🙏 for thanks, 🚀 for launches, 💡 for ideas, 🙌 for "
+                 "praise) placed naturally, never a row of them."}
 
 SYSTEM = (
     "You are the community manager for a company and draft replies to comments and mentions on social media. "
@@ -54,7 +55,9 @@ def _clean(options: list, limit: int, banned: list[str]) -> list[str]:
     return out[:3]
 
 
-async def suggest_replies(session: AsyncSession, item: InboxItem, thread: list[InboxItem], post_text: str | None) -> list[str]:
+async def suggest_replies(session: AsyncSession, item: InboxItem, thread: list[InboxItem], post_text: str | None,
+                          *, emoji: str | None = None, extra: str | None = None) -> list[str]:
+    """emoji: "none" | "light" | "rich" overrides the brand's emoji policy; extra: more instructions (auto-replies)."""
     brand = await session.scalar(select(BrandProfile))
     limit = reply_limit(item.platform)
     company = await _company(session)
@@ -72,9 +75,14 @@ async def suggest_replies(session: AsyncSession, item: InboxItem, thread: list[I
             lines.append("Don't: " + "; ".join(map(str, brand.dont_list[:8])))
         if brand.banned_words:
             lines.append("Never use these words: " + ", ".join(map(str, brand.banned_words[:20])))
-        lines.append(EMOJI.get(brand.emoji_policy or "light", EMOJI["light"]))
+        if not emoji:
+            lines.append(EMOJI.get(brand.emoji_policy or "light", EMOJI["light"]))
         if brand.language and brand.language != "en":
             lines.append(f"Default language: {brand.language} (but answer in the language of the comment).")
+    if emoji:
+        lines.append(EMOJI.get(emoji, EMOJI["light"]))
+    if extra:
+        lines.append(extra)
     payload = {
         "platform": item.platform, "kind": item.kind,
         "comment": {"author": item.author_name or item.author_handle, "text": (item.text or item.title or "")[:1500]},

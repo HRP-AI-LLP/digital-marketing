@@ -16,6 +16,8 @@ export type InboxItem = {
   sentiment: Sentiment | null; sentiment_source: string | null; priority: boolean; keyword: string | null;
   engagement: number | null; ai_suggestions: string[]; reply_text: string | null; replied_at: string | null;
   reply_error: string | null; liked_at: string | null; can_reply: boolean; can_like: boolean;
+  auto_reply?: { state: "drafted" | "sent" | "skipped" | "failed" | "approved"; text?: string; reason?: string; at?: string } | null;
+  auto_sent?: boolean;
 };
 export type Detail = {
   item: InboxItem; thread: InboxItem[];
@@ -63,7 +65,7 @@ export function Avatar({ author, size = 36, own = false }: { author: Author; siz
     return <img src={author.avatar_url} alt="" referrerPolicy="no-referrer" className="shrink-0 rounded-full bg-slate-100 object-cover" style={{ width: size, height: size }} />;
   }
   return (
-    <span aria-hidden className={`grid shrink-0 place-items-center rounded-full font-semibold text-white ${own ? "bg-gradient-to-br from-blue-700 to-cyan-500" : "bg-gradient-to-br from-slate-500 to-slate-400"}`}
+    <span aria-hidden className={`grid shrink-0 place-items-center rounded-full font-semibold text-white ${own ? "bg-gradient-to-br from-grad1 to-grad2" : "bg-gradient-to-br from-slate-500 to-slate-400"}`}
       style={{ width: size, height: size, fontSize: Math.max(11, size / 2.8) }}>
       {initials}
     </span>

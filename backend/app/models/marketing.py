@@ -274,6 +274,8 @@ class Schedule(IdMixin, TenantMixin, TimestampMixin, Base):
     instructions: Mapped[str | None] = mapped_column(Text)
     interval_days: Mapped[int] = mapped_column(Integer, default=1, server_default="1")  # 2 = every other day
     interval_start: Mapped[str | None] = mapped_column(String(10))  # local date the repeat counts from
+    time_mode: Mapped[str] = mapped_column(String(10), default="fixed", server_default="fixed")  # fixed | best
+    posts_per_day: Mapped[int] = mapped_column(Integer, default=1, server_default="1")  # used when time_mode = best
 
 
 class Post(IdMixin, TenantMixin, TimestampMixin, Base):
@@ -312,6 +314,7 @@ class Post(IdMixin, TenantMixin, TimestampMixin, Base):
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     embedding = mapped_column(Vector(), nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(String(160))
+    evergreen: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # may be reshared later
 
 
 class PostActivity(IdMixin, TenantMixin, Base):

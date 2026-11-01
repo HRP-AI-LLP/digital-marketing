@@ -116,6 +116,10 @@ def raise_for(r: httpx.Response, what: str) -> None:
     low = msg.lower().replace(" ", "")
     retryable = code == 429 or code >= 500
     reconnect = not retryable and (code in (401, 403) or any(w.replace(" ", "") in low for w in _TOKEN_WORDS))
+    if "scope" in low and ("missing" in low or "insufficient" in low or "sufficientpermissions" in low):
+        # The app now asks for more permissions than the account granted when it was connected.
+        raise PublishError(f"{what}: the connection is missing a permission ({msg[:160]}). Disconnect and connect the "
+                           "account again in Settings → Social accounts to grant it.", reconnect=True)
     raise PublishError(f"{what}: {msg}", retryable=retryable, reconnect=reconnect)
 
 
@@ -144,6 +148,7 @@ OAUTH_PROVIDERS: dict[str, dict] = {
     "x": {"label": "X", "app": "x_app", "module": "x", "pkce": True},
     "tiktok": {"label": "TikTok", "app": "tiktok_app", "module": "tiktok", "pkce": True},
     "canva": {"label": "Canva", "app": "canva_app", "module": "canva", "pkce": True},
+    "reddit": {"label": "Reddit", "app": "reddit_app", "module": "reddit"},
 }
 PKCE_PROVIDERS = {"google"} | {k for k, v in OAUTH_PROVIDERS.items() if v.get("pkce")}
 
@@ -153,7 +158,9 @@ PLATFORM_MODULE: dict[str, str] = {
     "linkedin_person": "linkedin", "linkedin_org": "linkedin", "pinterest": "pinterest",
     "gbp": "google", "youtube": "google", "google": "google",
     "bluesky": "bluesky", "mastodon": "mastodon", "x": "x", "tiktok": "tiktok", "manual": "manual",
+    "telegram": "telegram", "discord": "discord", "reddit": "reddit", "whatsapp": "manual",
 }
+MANUAL_ONLY_PLATFORMS = {"manual", "whatsapp"}  # no API at all: always published by hand
 
 
 def adapter(module: str):
@@ -161,8 +168,8 @@ def adapter(module: str):
 
 
 def is_manual(account: SocialAccount) -> bool:
-    """Accounts published by hand: 'Other', and X accounts added without an API connection."""
-    return account.platform == "manual" or account.status == "manual" or (account.external_id or "").startswith("manual:")
+    """Accounts published by hand: 'Other', WhatsApp channels, and X accounts added without an API connection."""
+    return account.platform in MANUAL_ONLY_PLATFORMS or account.status == "manual" or (account.external_id or "").startswith("manual:")
 
 
 def adapter_for_platform(platform: str):
@@ -288,8 +295,105 @@ def read_bytes(asset: MediaAsset) -> bytes:
         raise PublishError(f"Couldn't read the media file {asset.path}: {e}")
 
 
+async def fit_video(data: bytes, max_bytes: int, *, name: str = "video") -> bytes:
+    """Re-encode a video (H.264 + AAC MP4) so it is at most `max_bytes`, for platforms with upload limits (a
+    Discord server, a Telegram bot). The bitrate is worked out from the length, the picture is scaled down when
+    the bitrate is low, and it tries a little smaller each time if the first file is still too big. Raises
+    PublishError when the video is too long to fit at a watchable quality."""
+    if len(data) <= max_bytes:
+        return data
+    from app.services import media_render
+
+    work = media_render.tmp_dir("fit-")
+    try:
+        src, out = work / "in.mp4", work / "out.mp4"
+        await asyncio.to_thread(src.write_bytes, data)
+        info = await media_render.probe(src)
+        dur = info.get("duration") or 0
+        if not dur or not info.get("has_video"):
+            raise PublishError(f"{name} is {len(data) / 1_048_576:.1f} MB and couldn't be read to make it smaller.")
+        w, h = info.get("width") or 1280, info.get("height") or 720
+        for factor in (0.9, 0.78, 0.64):
+            total = max_bytes * 8 / 1000 / dur * factor  # kbit/s for the whole file
+            audio = 0 if not info.get("has_audio") else (96 if total > 700 else 64)
+            vk = int(total - audio)
+            if vk < 150:
+                raise PublishError(f"{name} is {dur:.0f} s long, too long to fit in {max_bytes // 1_048_576} MB at a watchable "
+                                   "quality. Use a shorter video.")
+            short = 1080 if vk >= 3000 else 720 if vk >= 1300 else 540 if vk >= 700 else 432
+            scale = min(1.0, short / max(1, min(w, h)))
+            sw, sh = max(2, int(w * scale) // 2 * 2), max(2, int(h * scale) // 2 * 2)
+            args = ["-i", str(src), "-vf", f"scale={sw}:{sh}", "-c:v", "libx264", "-preset", "veryfast",
+                    "-b:v", f"{vk}k", "-maxrate", f"{int(vk * 1.25)}k", "-bufsize", f"{vk * 2}k", "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart"]
+            args += ["-c:a", "aac", "-b:a", f"{audio}k", "-ac", "2"] if audio else ["-an"]
+            await media_render.run_ffmpeg([*args, str(out)], timeout_s=max(300, dur * 6))
+            result = await asyncio.to_thread(out.read_bytes)
+            if len(result) <= max_bytes:
+                log.info("Shrank %s from %.1f MB to %.1f MB for upload", name, len(data) / 1_048_576, len(result) / 1_048_576)
+                return result
+        raise PublishError(f"{name} couldn't be made smaller than {max_bytes // 1_048_576} MB. Use a shorter video.")
+    except media_render.RenderError as e:
+        raise PublishError(f"Couldn't make {name} smaller for upload: {str(e)[:200]}") from e
+    finally:
+        media_render.rm_tree(work)
+
+
+def fit_image(data: bytes, mime: str, max_bytes: int, max_side: int = 2048) -> tuple[bytes, str]:
+    """Shrink a still image until it is at most `max_bytes` (Bluesky allows ~1 MB, X 5 MB): first re-save as an
+    optimised JPEG (or PNG when it has transparency), then lower the quality, then scale down. GIFs are left alone."""
+    if len(data) <= max_bytes or mime == "image/gif":
+        return data, mime
+    import io
+
+    from PIL import Image
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+    except Exception:  # noqa: BLE001
+        return data, mime
+    alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+    if not alpha and img.mode != "RGB":
+        img = img.convert("RGB")
+    if max(img.size) > max_side:
+        img.thumbnail((max_side, max_side), Image.LANCZOS)
+    best = data
+    for _ in range(6):
+        for quality in ((None,) if alpha else (90, 82, 74, 66)):
+            out = io.BytesIO()
+            if alpha:
+                img.save(out, "PNG", optimize=True)
+            else:
+                img.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+            if len(out.getvalue()) <= max_bytes:
+                return out.getvalue(), "image/png" if alpha else "image/jpeg"
+            best = out.getvalue()
+        img = img.resize((max(1, int(img.width * 0.8)), max(1, int(img.height * 0.8))), Image.LANCZOS)
+    return best, "image/png" if alpha else "image/jpeg"
+
+
 def filename(asset: MediaAsset) -> str:
     return asset.path.rsplit("/", 1)[-1] or f"{asset.id}"
+
+
+async def _prepare_jpeg(asset: MediaAsset) -> None:
+    """Make the JPEG copy now, in its own committed transaction, so the platform's fetch is a quick static file
+    (Instagram gives up on slow links: "The media could not be fetched from this URI")."""
+    from app.core.db import SessionLocal, set_tenant
+
+    media = importlib.import_module("app.services.media")
+    try:
+        async with SessionLocal() as s:
+            set_tenant(s, asset.organization_id)
+            fresh = await s.get(MediaAsset, asset.id)
+            if fresh is None:
+                return
+            await media.make_jpeg(s, fresh)
+            await s.commit()
+            asset.meta = dict(fresh.meta or {})
+    except Exception:  # noqa: BLE001 - the link still makes the copy on first fetch
+        log.warning("couldn't prepare the JPEG copy of %s ahead of time", asset.id, exc_info=True)
 
 
 async def public_url(session: AsyncSession, asset: MediaAsset, *, jpeg: bool = False) -> str:
@@ -297,6 +401,8 @@ async def public_url(session: AsyncSession, asset: MediaAsset, *, jpeg: bool = F
     try:
         media = importlib.import_module("app.services.media")
         variant = await media.ensure_jpeg(session, asset) if jpeg and not is_video(asset) else ""
+        if variant == "jpg":
+            await _prepare_jpeg(asset)
         return await media.ensure_public_url(session, asset, variant or None)
     except PublishError:
         raise

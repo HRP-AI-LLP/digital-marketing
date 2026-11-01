@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { Card, EmptyState } from "../../components/ui";
+import { HoverTip, TipHead, TipRow, useTip } from "../../components/viz";
 import { BarChart } from "../analytics/charts";
 import { ScoreRing, SERIES, TrendChart, shortDay } from "../analytics/vizkit";
 import { CostBadge } from "./shared";
@@ -19,6 +21,43 @@ function Tile({ label, value, hint, delta }: { label: string; value: string; hin
       <div className="mt-0.5 text-2xl font-bold tabular-nums text-ink">{value}</div>
       {delta}
       {hint && <div className="text-xs text-muted">{hint}</div>}
+    </div>
+  );
+}
+
+const TONES = [
+  { key: "positive", label: "Positive", cls: "bg-emerald-600", color: "#059669" },
+  { key: "neutral", label: "Neutral", cls: "bg-slate-400", color: "#94a3b8" },
+  { key: "negative", label: "Negative", cls: "bg-danger", color: "#b91c1c" },
+] as const;
+
+/** Stacked tone bar: each segment has a popup with the count and share of all mentions. */
+function SentimentBar({ s, mentioned, answers }: { s: { positive: number; neutral: number; negative: number }; mentioned: number; answers: number }) {
+  const t = useTip();
+  const [hover, setHover] = useState<string | null>(null);
+  const total = s.positive + s.neutral + s.negative;
+  const tipFor = (k: (typeof TONES)[number]) => (
+    <>
+      <TipHead sub="How answers talk about you">{k.label}</TipHead>
+      <TipRow color={k.color} label="Answers" value={s[k.key]} />
+      <TipRow label="Share of rated mentions" value={pct((s[k.key] / total) * 100)} />
+      <TipRow label="Rated mentions" value={total} strong />
+      <TipRow label="Mentioned in" value={`${mentioned} of ${answers} answers`} />
+    </>
+  );
+  return (
+    <div ref={t.ref} className="relative">
+      <div className="flex h-3 overflow-hidden rounded-full bg-slate-100" role="img"
+        aria-label={`Positive ${s.positive}, neutral ${s.neutral}, negative ${s.negative}`}
+        onPointerLeave={() => { setHover(null); t.hide(); }}>
+        {TONES.map((k) => s[k.key] > 0 && (
+          <div key={k.key} tabIndex={0} aria-label={`${k.label}: ${s[k.key]} (${pct((s[k.key] / total) * 100)})`}
+            className={`${k.cls} outline-none transition-opacity`} style={{ width: `${(s[k.key] / total) * 100}%`, opacity: hover && hover !== k.key ? 0.45 : 1 }}
+            onPointerMove={(e) => { setHover(k.key); t.show(e, tipFor(k)); }}
+            onFocus={(e) => { setHover(k.key); t.show(e.currentTarget, tipFor(k)); }} onBlur={() => { setHover(null); t.hide(); }} />
+        ))}
+      </div>
+      {t.tip}
     </div>
   );
 }
@@ -58,12 +97,7 @@ export default function OverviewTab({ o, onOpenPrompt }: { o: O; onOpenPrompt: (
             <div className="mb-2 text-sm text-muted">How answers talk about you</div>
             {totalSent ? (
               <>
-                <div className="flex h-3 overflow-hidden rounded-full bg-slate-100" role="img"
-                  aria-label={`Positive ${s.positive}, neutral ${s.neutral}, negative ${s.negative}`}>
-                  <div className="bg-emerald-600" style={{ width: `${(s.positive / totalSent) * 100}%` }} />
-                  <div className="bg-slate-400" style={{ width: `${(s.neutral / totalSent) * 100}%` }} />
-                  <div className="bg-danger" style={{ width: `${(s.negative / totalSent) * 100}%` }} />
-                </div>
+                <SentimentBar s={s} mentioned={m.mentioned} answers={m.answers} />
                 <div className="mt-1.5 flex flex-wrap gap-4 text-xs text-muted">
                   <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-emerald-600" />Positive {s.positive}</span>
                   <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-slate-400" />Neutral {s.neutral}</span>
@@ -98,11 +132,20 @@ export default function OverviewTab({ o, onOpenPrompt }: { o: O; onOpenPrompt: (
               const ref = run.engines.find((x) => x.key === e.key);
               return (
                 <li key={e.key}>
-                  <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate" title={e.label}>{e.label}</span><span className="tabular-nums">{pct(e.visibility)}</span></div>
-                  <div className="mt-1 flex items-center gap-2">
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-primary-600" style={{ width: `${e.visibility}%` }} /></div>
-                    <CostBadge cost={ref?.cost} />
-                  </div>
+                  <HoverTip block label={`${e.label}: ${pct(e.visibility)} visibility`} className="group/bar" tip={
+                    <>
+                      <TipHead sub="Visibility by engine">{e.label}</TipHead>
+                      <TipRow color={SERIES[0]} label="Visibility" value={pct(e.visibility)} />
+                      <TipRow label="Mentioned in" value={`${e.mentioned} of ${e.answers} answers`} />
+                      <TipRow label="All engines" value={pct(m.visibility)} />
+                    </>
+                  }>
+                    <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{e.label}</span><span className="tabular-nums">{pct(e.visibility)}</span></div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-primary-600 transition-opacity group-hover/bar:opacity-80" style={{ width: `${e.visibility}%` }} /></div>
+                      <CostBadge cost={ref?.cost} />
+                    </div>
+                  </HoverTip>
                 </li>
               );
             })}

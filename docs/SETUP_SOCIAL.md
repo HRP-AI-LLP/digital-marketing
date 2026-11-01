@@ -17,7 +17,7 @@ The redirect URI has this shape:
 {PUBLIC_BASE_URL or http://localhost:8600}/api/v1/social/oauth/{provider}/callback
 ```
 
-where `{provider}` is `meta`, `threads`, `linkedin`, `pinterest`, `google`, `x`, `tiktok` or `canva`. If you set
+where `{provider}` is `meta`, `threads`, `linkedin`, `pinterest`, `google`, `x`, `reddit` or `canva`. If you set
 `PUBLIC_BASE_URL` in `.env` (for example a Cloudflare Tunnel address), the redirect URI changes,
 so register the new one in each developer app too.
 
@@ -279,6 +279,9 @@ Published X posts (and every part of a thread) can be deleted from the post's pa
 <!-- guide:tiktok -->
 ## TikTok
 
+**Switched off by default:** TikTok is banned in India, so the studio doesn't offer it (`DISABLED_PLATFORMS=tiktok`
+in `.env`). The steps below apply only if you switch it back on for use outside India.
+
 Connecting TikTok is optional and free. Goal: a TikTok developer app with Login Kit and the Content Posting API
 (Direct Post) that can publish videos and photo posts to your account.
 
@@ -305,6 +308,82 @@ What gets posted: one vertical video (animations use their MP4 version) with the
 characters including hashtags), or a photo post of up to 35 images (sent as JPG). TikTok processes the post
 for a little while; the app waits and links to it when it's live. Post numbers aren't collected for TikTok.
 TikTok's API doesn't allow deleting posts, so delete them in the TikTok app.
+
+<!-- guide:telegram -->
+## Telegram channel
+
+Free, official Telegram Bot API. Goal: a bot that is an **administrator** of your channel and may post in it.
+
+1. In Telegram, open [@BotFather](https://t.me/BotFather) and send `/newbot`. Give it a name (for example
+   "HRP AI Studio") and a username ending in `bot` (for example `hrpai_studio_bot`).
+2. BotFather replies with the **bot token** (numbers, a colon, then letters). Keep it secret: anyone with it can
+   post as the bot. (You can reuse the notifications bot from Integrations, but a separate bot is tidier.)
+3. Open your channel → **Edit (pencil) → Administrators → Add admin**, search for your bot and add it. Leave
+   **Post messages** switched on (you can switch off the other rights).
+4. In this app, on **Telegram channel** press **Add Telegram channel**, paste the token and enter the channel:
+   - a public channel: its username, for example `@hrpai_updates` or `https://t.me/hrpai_updates`;
+   - a private channel: its numeric id, which starts with `-100` (forward a channel post to
+     [@userinfobot](https://t.me/userinfobot) or open the channel in Telegram Web: the number in the address is
+     the id after `-100`).
+5. The app checks the token, finds the channel and confirms the bot is an admin that can post.
+
+What gets posted: text up to 4,096 characters (link posts show Telegram's link preview), one photo, GIF, video or
+PDF, or an album of up to 10 photos and videos. With media, the caption holds 1,024 characters; longer text is
+sent as a separate message straight after the media. Bots can upload files up to 50 MB.
+
+Telegram doesn't give bots the view counts of channel posts, so no post numbers are collected. Posts can be
+deleted from the app within 48 hours (or any time if you give the bot the **Delete messages** right).
+
+<!-- guide:discord -->
+## Discord channel
+
+Free, official Discord webhooks; no bot or developer app needed. Goal: a webhook URL for the channel you post to.
+
+1. In Discord open your server, then the channel's **Edit channel (gear) → Integrations → Webhooks →
+   New webhook**. You need the **Manage Webhooks** permission.
+2. Name the webhook (this is the name shown on posts, for example "HRP AI") and optionally give it your logo.
+3. Press **Copy webhook URL**. It looks like `https://discord.com/api/webhooks/123…/abc…`. Treat it like a
+   password: anyone with it can post in the channel.
+4. In this app, on **Discord channel** press **Add Discord channel** and paste the URL.
+
+What gets posted: text up to 2,000 characters, a link card for link posts, and up to 10 files (images, GIFs,
+videos, PDFs) of up to 25 MB each. If the server is boosted and allows bigger files, raise the limit in the
+account's settings. Mentions such as @everyone are never triggered by the app. Posts can be deleted from the
+app. Discord webhooks can't read reactions, so no post numbers are collected.
+
+<!-- guide:reddit -->
+## Reddit
+
+Free, official Reddit API. Goal: a Reddit "web app" so the studio can post as your Reddit account.
+
+1. Sign in to Reddit with the account you post from, open [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps)
+   and press **create another app…** (if Reddit asks you to register for API access first, follow its form: the
+   studio is a small, non-commercial posting tool for your own account).
+2. Name: "HRP Digital Marketing". Type: **web app**. Redirect uri: the one shown on the Reddit card in this app
+   (provider `reddit`). Reddit accepts the `http://localhost` address.
+3. Press **create app**. The **client ID** is the code under the app's name; the **secret** is next to "secret".
+4. In this app press **Set up app** on the Reddit card, paste both (and your Reddit username, which Reddit asks
+   apps to mention in their User-Agent), then press **Connect Reddit** and allow access.
+5. Open the account's **Settings** to choose where posts go: your profile (`u_yourname`, the default) or a
+   subreddit (for example `HRTech`), and a flair if that subreddit requires one.
+
+What gets posted: text posts (title + markdown body), link posts (title + link) and image posts (posted as a link
+to the image's public address, so set up public media hosting below). Every post needs a title. Read each
+subreddit's rules on self-promotion before posting there; Reddit communities remove (and ban) accounts that only
+advertise. Scores and comment counts are collected; posts can be deleted from the app.
+
+<!-- guide:whatsapp -->
+## WhatsApp channel (post by hand)
+
+WhatsApp has no API for posting to **WhatsApp Channels**, and the WhatsApp Business API only sends approved
+template messages to people who opted in, so there is nothing to connect. Add your channel as a by-hand account:
+
+1. On **WhatsApp channel (post by hand)** press **Add manual account** and give it a name (and optionally your
+   channel's link, `https://whatsapp.com/channel/…`).
+2. The studio writes short, phone-friendly WhatsApp updates for it and schedules them as usual.
+3. When a post is due it waits under **Ready to post by hand**. Press **Open WhatsApp** to open WhatsApp with the
+   text filled in (or **Copy text**), download and attach the media, send it in your channel, then press
+   **Mark as published**.
 
 <!-- guide:canva -->
 ## Canva (design import)
@@ -337,7 +416,7 @@ Publish them by hand and mark them published.
 
 **Link in bio** (in the Content menu) builds a free, mobile-friendly page with your logo, name, tagline, social
 icons, buttons and (optionally) your latest posts, in your brand colours. Put its address in your Instagram,
-TikTok and X bios.
+X and Threads bios.
 
 - Address: `PUBLIC_BASE_URL/l/<your-page-name>` (for example `https://studio.hrpai.in/l/hrp-ai`), and on this laptop
   `http://localhost:8600/l/<your-page-name>`.
@@ -395,11 +474,11 @@ valid login, so the web app, API and admin screens stay reachable only from this
    ```
 6. Run `.\stop.ps1` then `.\start.ps1`. The first start downloads `cloudflared` into `tools\`. The summary shows
    `HTTPS: https://studio.hrpai.in`, and Cloudflare shows the tunnel as **Healthy**.
-7. The Social accounts page now shows HTTPS redirect URIs for Facebook and Instagram, Threads, Pinterest, X, TikTok
+7. The Social accounts page now shows HTTPS redirect URIs for Facebook and Instagram, Threads, Pinterest, X
    and Canva, for
    example `https://studio.hrpai.in/api/v1/social/oauth/meta/callback`. Put that exact URI in each developer app
    (Meta: **Facebook Login for Business → Settings → Valid OAuth Redirect URIs**; Threads: use case settings;
-   Pinterest: app redirect URIs). Google and LinkedIn keep their `http://localhost` URIs, which they accept.
+   Pinterest: app redirect URIs). Google, LinkedIn and Reddit keep their `http://localhost` URIs, which they accept.
 8. Check it: open `https://studio.hrpai.in/api/v1/health` in a browser. It shows `"status":"ok"`. Opening
    `https://studio.hrpai.in/` shows "Not found", which is expected.
 

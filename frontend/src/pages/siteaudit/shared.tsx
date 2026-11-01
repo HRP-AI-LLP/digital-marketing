@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { api } from "../../api/client";
 import { SEV_ONE, SEV_STYLE, type Severity } from "./types";
+import { offerEmailFile } from "../../components/EmailDialog";
 
 export function SevBadge({ s, children }: { s: Severity; children?: ReactNode }) {
   return (
@@ -81,6 +82,7 @@ export async function downloadCsv(runId: string, kind: "issues" | "pages") {
   a.download = r.filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+  offerEmailFile({ filename: r.filename, mime: r.media_type || "text/csv", content: r.content });
 }
 
 export function Rating({ r }: { r?: string | null }) {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen, CheckCircle2, ExternalLink, MapPin, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react";
@@ -13,9 +13,11 @@ export type SocialAccount = {
   id: string; platform: string; platform_label: string; name: string; handle: string | null; avatar_url: string | null;
   profile_url: string | null; status: string; status_message: string | null; token_expires_at: string | null;
   settings: Record<string, any>; last_checked_at: string | null; created_at: string;
+  /** Set when the platform is switched off for the studio (TikTok in India): the account still works. */
+  platform_note?: string | null;
 };
 type Connector = {
-  id: string; label: string; method: "oauth" | "app_password" | "token" | "manual"; platforms: string[]; blurb: string;
+  id: string; label: string; method: "oauth" | "app_password" | "token" | "bot_token" | "webhook" | "manual"; platforms: string[]; blurb: string;
   app_provider: string | null; app_label: string | null; app_configured: boolean; redirect_uri: string | null;
   needs_public_media: boolean; guide: string; options: { name: string; label: string; default: boolean }[];
 };
@@ -168,6 +170,28 @@ function SettingsModal({ acc, onClose }: { acc: SocialAccount; onClose: () => vo
             <p className="text-xs text-muted">By posting to TikTok you agree to TikTok's Music Usage Confirmation.</p>
           </>
         )}
+        {acc.platform === "reddit" && (
+          <>
+            <Field label="Where posts go" hint="A subreddit name without r/ (for example HRTech), or u_yourname for your own profile. Read the subreddit's rules on self-promotion first.">
+              <Input value={settings.subreddit ?? ""} onChange={(e) => set("subreddit", e.target.value || null)}
+                placeholder={settings.username ? `u_${settings.username}` : "HRTech"} maxLength={40} />
+            </Field>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Flair ID (optional)" hint="Only if the subreddit requires a flair. Moderators can tell you the ID.">
+                <Input value={settings.flair_id ?? ""} onChange={(e) => set("flair_id", e.target.value || null)} maxLength={64} />
+              </Field>
+              <Field label="Flair text (optional)">
+                <Input value={settings.flair_text ?? ""} onChange={(e) => set("flair_text", e.target.value || null)} maxLength={64} />
+              </Field>
+            </div>
+          </>
+        )}
+        {acc.platform === "discord" && (
+          <Field label="Largest file the server accepts (MB)" hint="25 MB on most servers. Boosted servers allow more.">
+            <Input type="number" min={1} max={500} className="w-32" value={settings.max_file_mb ?? 25}
+              onChange={(e) => set("max_file_mb", Number(e.target.value || 25))} />
+          </Field>
+        )}
         {acc.platform === "mastodon" && (
           <Field label="Post visibility">
             <Select value={settings.visibility ?? "public"} onChange={(e) => set("visibility", e.target.value)}>
@@ -218,7 +242,7 @@ function AccountRow({ acc, canManage }: { acc: SocialAccount; canManage: boolean
   });
   const expires = acc.token_expires_at ? new Date(acc.token_expires_at).getTime() : null;
   const soon = expires !== null && expires - Date.now() < SOON_MS;
-  const hasSettings = acc.platform !== "x" && acc.platform !== "manual";
+  const hasSettings = acc.platform !== "x" && acc.platform !== "manual" && acc.platform !== "whatsapp";
   return (
     <li className="flex flex-wrap items-start gap-3 py-4">
       <Avatar acc={acc} />
@@ -236,8 +260,10 @@ function AccountRow({ acc, canManage }: { acc: SocialAccount; canManage: boolean
           {acc.handle && <>{acc.handle} · </>}{acc.platform_label}
           {acc.platform === "pinterest" && (acc.settings.board_name ? <> · Board: {acc.settings.board_name}</> : <> · <span className="text-danger">No board chosen</span></>)}
           {acc.platform === "youtube" && <> · New Shorts: {acc.settings.privacy ?? "public"}</>}
+          {acc.platform === "reddit" && <> · Posts to {acc.settings.subreddit?.startsWith("u_") ? "your profile" : `r/${acc.settings.subreddit ?? "?"}`}</>}
           {acc.platform === "tiktok" && <> · New posts: {acc.settings.audited ? (TIKTOK_PRIVACY[acc.settings.privacy_level] ?? "choose in settings") : "Only me"}</>}
         </div>
+        {acc.platform_note && <p className="mt-1 text-sm text-amber-800">{acc.platform_note}</p>}
         {acc.status_message && (
           <p className={`mt-1 text-sm ${acc.status === "expired" || acc.status === "error" ? "text-danger" : "text-muted"}`}>{acc.status_message}</p>
         )}
@@ -378,9 +404,78 @@ function MastodonModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ManualModal({ onClose }: { onClose: () => void }) {
+function Steps({ items }: { items: ReactNode[] }) {
+  return (
+    <ol className="list-decimal space-y-1 rounded-lg border border-line bg-canvas py-3 pl-8 pr-3 text-sm [overflow-wrap:anywhere]">
+      {items.map((it, i) => <li key={i}>{it}</li>)}
+    </ol>
+  );
+}
+
+function TelegramModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
-  const [platform, setPlatform] = useState("manual");
+  const [token, setToken] = useState("");
+  const [channel, setChannel] = useState("");
+  const add = useMutation({
+    mutationFn: () => api("/social/accounts/telegram", { method: "POST", json: { bot_token: token, channel } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: KEY }); onClose(); },
+  });
+  return (
+    <Modal title="Add a Telegram channel" onClose={onClose} wide>
+      <form className="space-y-4" onSubmit={(e: FormEvent) => { e.preventDefault(); add.mutate(); }}>
+        <p className="text-sm text-muted">The app posts through a free Telegram bot that you make once and add to your channel as an admin.</p>
+        <Steps items={[
+          <>In Telegram, open <a className="font-medium text-primary-700 underline" href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a>, send <code>/newbot</code>, and choose a name and a username ending in “bot”.</>,
+          <>BotFather replies with the bot token. Copy it (keep it secret).</>,
+          <>Open your channel → Edit → Administrators → Add admin, pick your bot and keep <span className="font-medium">Post messages</span> switched on.</>,
+          <>Paste the token and your channel below. Public channel: its @username or t.me link. Private channel: its id starting with -100.</>,
+        ]} />
+        {add.error && <Alert>{(add.error as Error).message}</Alert>}
+        <Field label="Bot token"><Input required type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="123456789:AA…" /></Field>
+        <Field label="Channel"><Input required value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="@hrpai_updates" /></Field>
+        <p className="text-xs text-muted">The token is stored encrypted on this machine and never shown again.</p>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button type="submit" disabled={add.isPending}>{add.isPending ? "Checking…" : "Add channel"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function DiscordModal({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient();
+  const [url, setUrl] = useState("");
+  const [name, setName] = useState("");
+  const add = useMutation({
+    mutationFn: () => api("/social/accounts/discord", { method: "POST", json: { webhook_url: url, name: name || null } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: KEY }); onClose(); },
+  });
+  return (
+    <Modal title="Add a Discord channel" onClose={onClose} wide>
+      <form className="space-y-4" onSubmit={(e: FormEvent) => { e.preventDefault(); add.mutate(); }}>
+        <p className="text-sm text-muted">The app posts with a channel webhook. You need the Manage Webhooks permission on the server.</p>
+        <Steps items={[
+          <>In Discord, hover the channel and press the gear (Edit channel).</>,
+          <>Open <span className="font-medium">Integrations → Webhooks → New webhook</span>. Give it the name and picture posts should show (for example “HRP AI”).</>,
+          <>Press <span className="font-medium">Copy webhook URL</span> and paste it below.</>,
+        ]} />
+        {add.error && <Alert>{(add.error as Error).message}</Alert>}
+        <Field label="Webhook URL"><Input required type="password" autoComplete="off" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://discord.com/api/webhooks/…" /></Field>
+        <Field label="Name in this app (optional)" hint="For example “HRP AI · #announcements”."><Input value={name} onChange={(e) => setName(e.target.value)} maxLength={200} /></Field>
+        <p className="text-xs text-muted">Anyone with the webhook URL can post in the channel, so it's stored encrypted and never shown again.</p>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button type="submit" disabled={add.isPending}>{add.isPending ? "Checking…" : "Add channel"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ManualModal({ onClose, initial = "manual" }: { onClose: () => void; initial?: string }) {
+  const qc = useQueryClient();
+  const [platform, setPlatform] = useState(initial);
   const [name, setName] = useState("");
   const [handle, setHandle] = useState("");
   const [profileUrl, setProfileUrl] = useState("");
@@ -396,13 +491,17 @@ function ManualModal({ onClose }: { onClose: () => void }) {
         <Field label="Platform">
           <Select value={platform} onChange={(e) => setPlatform(e.target.value)}>
             <option value="manual">Other</option>
+            <option value="whatsapp">WhatsApp channel</option>
             <option value="x">X (Twitter), without the X API</option>
           </Select>
         </Field>
-        <Field label="Name"><Input required value={name} onChange={(e) => setName(e.target.value)} placeholder={platform === "x" ? "HRP AI on X" : "HRP AI on Quora"} /></Field>
+        {platform === "whatsapp" && (
+          <p className="text-sm text-muted">WhatsApp has no API for posting to Channels. The app writes short WhatsApp-ready updates; when one is due, press Open WhatsApp on the post, attach the media and send it in your channel.</p>
+        )}
+        <Field label="Name"><Input required value={name} onChange={(e) => setName(e.target.value)} placeholder={platform === "x" ? "HRP AI on X" : platform === "whatsapp" ? "HRP AI WhatsApp channel" : "HRP AI on Quora"} /></Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Handle (optional)"><Input value={handle} onChange={(e) => setHandle(e.target.value)} placeholder="@hrpai" /></Field>
-          <Field label="Profile link (optional)"><Input type="url" value={profileUrl} onChange={(e) => setProfileUrl(e.target.value)} placeholder="https://" /></Field>
+          <Field label={platform === "whatsapp" ? "Channel link (optional)" : "Profile link (optional)"}><Input type="url" value={profileUrl} onChange={(e) => setProfileUrl(e.target.value)} placeholder={platform === "whatsapp" ? "https://whatsapp.com/channel/…" : "https://"} /></Field>
         </div>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
@@ -413,7 +512,8 @@ function ManualModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-const APP_FIELDS: Record<string, { id: string; secret: string; idLabel: string; secretLabel: string; where: string }> = {
+const APP_FIELDS: Record<string, { id: string; secret: string; idLabel: string; secretLabel: string; where: string;
+  extra?: { name: string; label: string; hint?: string } }> = {
   meta_app: { id: "client_id", secret: "client_secret", idLabel: "App ID", secretLabel: "App secret",
     where: "developers.facebook.com → My Apps → your app → App settings → Basic" },
   linkedin_app: { id: "client_id", secret: "client_secret", idLabel: "Client ID", secretLabel: "Client secret",
@@ -422,8 +522,9 @@ const APP_FIELDS: Record<string, { id: string; secret: string; idLabel: string; 
     where: "developers.pinterest.com/apps → your app" },
   x_app: { id: "client_id", secret: "client_secret", idLabel: "OAuth 2.0 Client ID", secretLabel: "OAuth 2.0 Client secret",
     where: "developer.x.com → Projects & Apps → your app → Keys and tokens → OAuth 2.0 Client ID and Client Secret" },
-  tiktok_app: { id: "client_id", secret: "client_secret", idLabel: "Client key", secretLabel: "Client secret",
-    where: "developers.tiktok.com → Manage apps → your app → App details" },
+  reddit_app: { id: "client_id", secret: "client_secret", idLabel: "Client ID", secretLabel: "Secret",
+    where: "reddit.com/prefs/apps → your web app (the client ID is the code under the app's name)",
+    extra: { name: "developer_username", label: "Your Reddit username", hint: "Reddit asks apps to say who runs them (sent in the User-Agent)." } },
   google_app: { id: "client_id", secret: "client_secret", idLabel: "Client ID", secretLabel: "Client secret",
     where: "console.cloud.google.com → APIs & Services → Credentials → OAuth 2.0 Client IDs (type: Web application)" },
 };
@@ -435,6 +536,7 @@ function AppSetupModal({ c, onClose }: { c: Connector; onClose: () => void }) {
   const [secret, setSecret] = useState("");
   const [pagesId, setPagesId] = useState("");
   const [pagesSecret, setPagesSecret] = useState("");
+  const [extra, setExtra] = useState("");
   const isLinkedIn = c.app_provider === "linkedin_app";
   const save = useMutation({
     mutationFn: async () => {
@@ -445,6 +547,7 @@ function AppSetupModal({ c, onClose }: { c: Connector; onClose: () => void }) {
       if (secret.trim()) secrets[f.secret] = secret.trim();
       if (pagesId.trim()) secrets.pages_client_id = pagesId.trim();
       if (pagesSecret.trim()) secrets.pages_client_secret = pagesSecret.trim();
+      if (f.extra && extra.trim()) secrets[f.extra.name] = extra.trim().replace(/^\/?u\//, "");
       if (existing) return api(`/integrations/providers/${existing.id}`, { method: "PATCH", json: { secrets, enabled: true } });
       return api("/integrations/providers", { method: "POST", json: { provider: c.app_provider, secrets } });
     },
@@ -472,6 +575,9 @@ function AppSetupModal({ c, onClose }: { c: Connector; onClose: () => void }) {
           <Field label={f.idLabel}><Input required autoComplete="off" value={clientId} onChange={(e) => setClientId(e.target.value)} /></Field>
           <Field label={f.secretLabel}><Input required type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} /></Field>
         </div>
+        {f.extra && (
+          <Field label={f.extra.label} hint={f.extra.hint}><Input autoComplete="off" value={extra} onChange={(e) => setExtra(e.target.value)} /></Field>
+        )}
         {isLinkedIn && (
           <div className="rounded-lg border border-line p-4">
             <div className="font-medium">Company pages app (optional)</div>
@@ -585,12 +691,12 @@ function ConnectForm({ c, canManage, mediaReady, mediaGuide, onBack, preset = {}
     else if (c.method === "oauth") start.mutate();
     else setForm(true);
   };
-  const buttonLabel = needsApp ? "Set up app" : c.method === "oauth" ? (c.id === "google" ? "Connect Google" : `Connect ${c.label}`) : c.method === "manual" ? "Add manual account" : `Add ${c.label}`;
+  const buttonLabel = needsApp ? "Set up app" : c.method === "oauth" ? (c.id === "google" ? "Connect Google" : `Connect ${c.label}`) : c.method === "manual" ? (c.id === "whatsapp" ? "Add WhatsApp channel" : "Add manual account") : `Add ${c.label}`;
   return (
     <Card className="flex flex-col">
       <div className="flex items-start justify-between gap-2">
         <h3 className="font-semibold">{c.label}</h3>
-        {c.id === "manual" && <Badge>Publish by hand</Badge>}
+        {(c.id === "manual" || c.id === "whatsapp") && <Badge>Publish by hand</Badge>}
         {onBack && <button type="button" onClick={onBack} className="text-xs text-muted hover:text-primary-700 hover:underline">Cancel</button>}
       </div>
       <p className="mt-1 text-sm text-muted">{c.blurb}</p>
@@ -614,7 +720,7 @@ function ConnectForm({ c, canManage, mediaReady, mediaGuide, onBack, preset = {}
       )}
       {c.needs_public_media && !mediaReady && (
         <p className="mt-2 text-sm text-amber-800">
-          Instagram, Threads, TikTok photos and Business Profile fetch media from a public link. Set up Cloudinary or a public URL in{" "}
+          Instagram, Threads, Business Profile and Reddit image posts fetch media from a public link. Set up Cloudinary or a public URL in{" "}
           <Link to="/settings/integrations" className="font-medium underline">Integrations</Link> before publishing.
         </p>
       )}
@@ -631,7 +737,10 @@ function ConnectForm({ c, canManage, mediaReady, mediaGuide, onBack, preset = {}
       {setup && <AppSetupModal c={c} onClose={() => setSetup(false)} />}
       {form && c.id === "bluesky" && <BlueskyModal onClose={() => setForm(false)} />}
       {form && c.id === "mastodon" && <MastodonModal onClose={() => setForm(false)} />}
+      {form && c.id === "telegram" && <TelegramModal onClose={() => setForm(false)} />}
+      {form && c.id === "discord" && <DiscordModal onClose={() => setForm(false)} />}
       {form && c.id === "manual" && <ManualModal onClose={() => setForm(false)} />}
+      {form && c.id === "whatsapp" && <ManualModal initial="whatsapp" onClose={() => setForm(false)} />}
     </Card>
   );
 }
@@ -655,7 +764,7 @@ export default function SocialAccounts() {
     else if (warning) { setBanner({ tone: "warn", text: warning }); qc.invalidateQueries({ queryKey: KEY }); }
     else {
       const n = Number(params.get("count") ?? "0");
-      const label = { meta: "Facebook and Instagram", threads: "Threads", linkedin: "LinkedIn", pinterest: "Pinterest", google: "Google", x: "X", tiktok: "TikTok" }[connected!] ?? connected;
+      const label = { meta: "Facebook and Instagram", threads: "Threads", linkedin: "LinkedIn", pinterest: "Pinterest", google: "Google", x: "X", reddit: "Reddit" }[connected!] ?? connected;
       setBanner({
         tone: "info",
         text: connected === "google"

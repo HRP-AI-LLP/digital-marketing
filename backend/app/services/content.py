@@ -46,7 +46,7 @@ log = logging.getLogger(__name__)
 # ------------------------------------------------------------------ constants
 MODES: dict[str, str] = {
     "manual": "Generate drafts only. Nothing is published unless someone schedules it.",
-    "approve_first": "Each post waits for approval. If nobody approves it before its time, it is skipped.",
+    "approve_first": "Each post waits for approval. If it's approved after its time, it goes out straight away.",
     "auto_with_window": "Each post publishes on time unless someone rejects it within the review window.",
     "full_auto": "Posts publish automatically after the quality checks pass.",
 }
@@ -83,7 +83,7 @@ def _visual(raw: Any) -> dict | None:
         if items:
             out["bullets"] = items
     return out or None
-MANUAL_PLATFORMS = {"manual"}  # X accounts added by hand have status "manual"
+MANUAL_PLATFORMS = {"manual", "whatsapp"}  # X accounts added by hand have status "manual"
 
 SIMILARITY_THRESHOLD = 0.88  # cosine similarity on embeddings
 JACCARD_THRESHOLD = 0.6  # word 3-shingle Jaccard (fallback without embeddings; stricter measure)
@@ -898,18 +898,31 @@ async def build_media(session: AsyncSession, post: Post, brand: BrandProfile) ->
 
 
 # ------------------------------------------------------------------ 6. route
-def route(post: Post, cfg: GenSettings, *, hold_reason: str | None, now: datetime | None = None) -> None:
+AUTO_APPROVE_DELAY = timedelta(minutes=15)  # posts without a time go out this long after they're ready
+
+
+def route(post: Post, cfg: GenSettings, *, hold_reason: str | None, now: datetime | None = None,
+          auto_approve: bool = False) -> None:
+    """auto_approve (Settings → Organization → Auto-approval): posts that would wait for approval are scheduled
+    straight away instead. Posts that fail the quality checks are still held for a person."""
     now = now or now_utc()
     mode = post.mode or cfg.mode
     post.approval_deadline = None
     if mode == "manual":
         post.status = "draft"
         return
+    if auto_approve and mode in ("approve_first", "auto_with_window"):
+        set_meta(post, auto_approved=True)
+        post.mode = mode = "full_auto"
     if hold_reason and mode in ("full_auto", "auto_with_window"):
         add_warning(post, f"Held for approval: {hold_reason}")
-        set_meta(post, held_from_mode=mode)
+        set_meta(post, held_from_mode=mode, auto_approved=None)
         post.mode = mode = "approve_first"
     if mode == "full_auto":
+        if post.scheduled_at is None and auto_approve:
+            post.scheduled_at = now + AUTO_APPROVE_DELAY
+        if post.scheduled_at is not None and post.scheduled_at < now:
+            post.scheduled_at = now + timedelta(minutes=1)
         post.status = "scheduled" if post.scheduled_at else "in_review"
         return
     post.status = "in_review"
@@ -918,6 +931,36 @@ def route(post: Post, cfg: GenSettings, *, hold_reason: str | None, now: datetim
         post.approval_deadline = max(deadline, now)
     elif mode == "approve_first":
         post.approval_deadline = post.scheduled_at
+
+
+def auto_approve_posts(org: Organization | None) -> bool:
+    return bool(((org.publishing if org is not None else None) or {}).get("auto_approve_posts"))
+
+
+def publish_held(org: Organization | None) -> bool:
+    """Settings → Auto-approval → "Also publish posts the checks would hold": similar or low-scoring posts go out
+    too. Posts that break a platform rule (too long, too many hashtags...) are always held, since they'd fail."""
+    return bool(((org.publishing if org is not None else None) or {}).get("publish_held_posts"))
+
+
+def hold_reasons(post: Post, org: Organization | None = None) -> list[str]:
+    """Why a finished post should still be looked at by a person (used when auto-approving waiting posts)."""
+    qa = post.qa or {}
+    meta = post.meta or {}
+    lenient = publish_held(org)
+    out = []
+    if qa and qa.get("passed") is False:
+        out.append("quality checks failed")
+    if meta.get("similar_post_id") and not lenient:
+        out.append("too similar to an earlier post")
+    score = qa.get("score")
+    if isinstance(score, (int, float)) and score < AUTO_MIN_SCORE and not lenient:
+        out.append(f"reviewer score {score:g}/10")
+    if meta.get("held_reason") or meta.get("held_from_mode"):
+        out.append("held for review")
+    if not (post.text or "").strip() and not post.media_ids:
+        out.append("no content")
+    return out
 
 
 # ------------------------------------------------------------------ the pipeline
@@ -944,6 +987,9 @@ async def generate_post(session: AsyncSession, post: Post, *, now: datetime | No
     meta.pop("warnings", None)
     post.meta = meta
     post.error = None
+    from app.services import collab
+
+    before = collab.snapshot(post)
 
     # 1. plan
     await plan_post(session, post, schedule, cfg, tz)
@@ -989,16 +1035,27 @@ async def generate_post(session: AsyncSession, post: Post, *, now: datetime | No
     hold: list[str] = []
     if not hard_ok:
         hold.append("some quality checks still fail (" + ", ".join(c["name"].replace("_", " ") for c in hard_failures(checks)) + ")")
+    lenient = publish_held(org)
     if sim.too_similar:
-        hold.append(f"it is {round(sim.score * 100)}% similar to an earlier post")
+        if lenient:
+            add_warning(post, f"Sent anyway: it is {round(sim.score * 100)}% similar to an earlier post")
+        else:
+            hold.append(f"it is {round(sim.score * 100)}% similar to an earlier post")
     if score is not None and score < AUTO_MIN_SCORE:
-        hold.append(f"the reviewer model scored it {score:g}/10")
+        if lenient:
+            add_warning(post, f"Sent anyway: the reviewer model scored it {score:g}/10")
+        else:
+            hold.append(f"the reviewer model scored it {score:g}/10")
 
     # 5. media
     await build_media(session, post, brand)
 
     # 6. route
-    route(post, cfg, hold_reason="; ".join(hold) or None, now=now)
+    route(post, cfg, hold_reason="; ".join(hold) or None, now=now, auto_approve=auto_approve_posts(org))
+    note = (meta.get("regenerate_note") or "").strip()
+    reason = ("AI wrote a new version" + (f": {note}" if note and before.get("text") else "")) if before.get("text") \
+        else "AI wrote the first version"
+    await collab.record_change(session, post, before, reason[:300])
     add_activity(session, post, "generated",
                  f"{POST_TYPES.get(post.post_type, post.post_type)} on “{(post.topic or '')[:120]}” → {STATUSES.get(post.status, post.status)}")
     return GenerateResult(post.id, post.status, notify_review=post.status == "in_review",
@@ -1041,3 +1098,10 @@ async def notify_review(post: Post, tz: ZoneInfo | None = None) -> None:
                          link=f"/approvals?post={post.id}", permission="content.approve", actions=review_actions(post.id))
     except Exception:
         log.exception("review notification failed")
+    try:
+        from app.services import webhooks
+
+        await webhooks.emit(post.organization_id, "post.needs_approval",
+                            webhooks.post_data(post, approval_deadline=post.approval_deadline))
+    except Exception:  # noqa: BLE001
+        log.exception("review webhook failed")

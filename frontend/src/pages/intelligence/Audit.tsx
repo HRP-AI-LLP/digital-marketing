@@ -6,6 +6,7 @@ import { api } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { Badge, Button, Card, EmptyState, Spinner, formatDate } from "../../components/ui";
 import { ErrorText, JobStatus, ScoreBar, SectionTitle, useIntelJobs } from "./shared";
+import { TipRow } from "../../components/viz";
 import { IMPACT_TONE, scoreTone, type Audit, type AuditSummary, type JobStart, type Overview } from "./types";
 
 const SECTION_LABELS: Record<string, string> = {
@@ -162,7 +163,10 @@ export default function AuditTab({ overview }: { overview: Overview }) {
                         <span>{SECTION_LABELS[k]}</span>
                         <span className={`font-semibold tabular-nums ${scoreTone(v)}`}>{v ?? "—"}</span>
                       </div>
-                      <div className="mt-1"><ScoreBar value={v ?? 0} label={SECTION_LABELS[k]} /></div>
+                      <div className="mt-1"><ScoreBar value={v ?? 0} label={SECTION_LABELS[k]} detail={<>
+                        {v == null && <TipRow label="Status" value="Not scored" />}
+                        <TipRow label="Overall presence score" value={`${a.score} / 100`} />
+                      </>} /></div>
                     </div>
                   );
                 })}

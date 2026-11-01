@@ -233,20 +233,33 @@ async def test_manual_x_accounts_still_publish_by_hand(org):
     assert "by hand" in e.value.message
 
 
+@pytest.fixture
+def tiktok_on(monkeypatch):
+    """TikTok is switched off by default (banned in India); its dormant adapter is tested with it switched on."""
+    monkeypatch.setattr(get_settings(), "disabled_platforms", "")
+
+
 async def test_platform_rules_and_connectors(client, org):
     d = (await client.get("/social/platforms", headers=auth(org))).json()
     conn = {c["id"]: c for c in d["connectors"]}
     assert conn["x"]["method"] == "oauth" and conn["x"]["app_configured"] is True
+    assert "tiktok" not in conn and "tiktok" not in {p["id"] for p in d["platforms"]}  # off by default in India
+    plats = {p["id"]: p for p in d["platforms"]}
+    assert plats["x"]["max_images"] == 4 and plats["x"]["connector"] == "x"
+
+
+async def test_tiktok_rules_when_switched_on(client, org, tiktok_on):
+    d = (await client.get("/social/platforms", headers=auth(org))).json()
+    conn = {c["id"]: c for c in d["connectors"]}
     assert conn["tiktok"]["redirect_uri"].endswith("/social/oauth/tiktok/callback")
     assert "Only me" in conn["tiktok"]["guide"] and "optional" in conn["x"]["guide"].lower()
     plats = {p["id"]: p for p in d["platforms"]}
     assert plats["tiktok"]["max_chars"] == 2200 and "video" in plats["tiktok"]["post_types"]
     assert "text" not in plats["tiktok"]["post_types"]
-    assert plats["x"]["max_images"] == 4 and plats["x"]["connector"] == "x"
 
 
 # ============================================================================ TikTok
-async def test_tiktok_connect_hex_pkce_and_private_default(client, org, mock):
+async def test_tiktok_connect_hex_pkce_and_private_default(client, org, mock, tiktok_on):
     url, q = await start(client, org, "/social/connect/tiktok")
     assert url.startswith("https://www.tiktok.com/v2/auth/authorize/") and q["client_key"] == ["tt-key"]
     state = q["state"][0]
@@ -368,6 +381,46 @@ async def test_pinterest_webp_sent_as_jpeg_and_delete(client, org, mock):
     mock.on("DELETE", r"/v5/pins/77$", (204, None))
     r = await client.post(f"/social/posts/{post.id}/delete-remote", headers=auth(org))
     assert r.status_code == 200 and r.json()["status"] == "removed"
+
+
+async def test_pinterest_trial_access_hands_pin_to_a_person(client, org, mock):
+    import app.modules.content  # noqa: F401 - registers post.publish
+    from app.services.jobs import run_inline
+
+    o = org_of(org)
+    acc = await make_account(o, "pinterest", "pin-t", {"access_token": "pin-tok"}, {"board_id": "b1"})
+    img = await make_media(o, mime="image/png", data=png_bytes())
+    post = await make_post(o, acc, "image", [img], title="Tips")
+    async with SessionLocal() as s:
+        set_tenant(s, o)
+        p = await s.get(Post, post.id)
+        p.status = "scheduled"
+        await s.commit()
+    mock.on("POST", r"api\.pinterest\.com/v5/pins$", (403, {"code": 3, "message": "Apps with Trial access may not create Pins in production https://api.pinterest.com - use API Sandbox https://api-sandbox.pinterest.com instead."}))
+    out = await run_inline("post.publish", o, {"post_id": str(post.id)})
+    assert out["status"] == "manual_pending"
+    async with SessionLocal() as s:
+        set_tenant(s, o)
+        a = await s.get(SocialAccount, acc.id)
+        assert a.status == "connected" and a.settings.get("manual_fallback") and "Trial access" in a.status_message
+        assert (await s.get(Post, post.id)).meta["manual_reason"] == "platform_limit"
+
+    # Pinterest approves Standard access: the next pin goes out, the note clears and the waiting pin is sent for you.
+    mock.on("POST", r"api\.pinterest\.com/v5/pins$", (201, {"id": "pin-123"}))
+    nxt = await make_post(o, acc, "image", [img], title="More tips")
+    async with SessionLocal() as s:
+        set_tenant(s, o)
+        (await s.get(Post, nxt.id)).status = "scheduled"
+        await s.commit()
+    out = await run_inline("post.publish", o, {"post_id": str(nxt.id)})
+    assert out["status"] == "published" and out["resumed"] == 1
+    async with SessionLocal() as s:
+        set_tenant(s, o)
+        a = await s.get(SocialAccount, acc.id)
+        assert a.status_message is None and "manual_fallback" not in a.settings
+        assert (await s.get(Post, post.id)).status == "scheduled"
+    out = await run_inline("post.publish", o, {"post_id": str(post.id)})
+    assert out["status"] == "published"
 
 
 # ============================================================================ Canva

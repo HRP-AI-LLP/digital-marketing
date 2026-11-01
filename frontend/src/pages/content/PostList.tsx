@@ -1,24 +1,27 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Plus, Search, Send, Trash2, X } from "lucide-react";
+import { Check, FlaskConical, Plus, Recycle, Search, Send, Trash2, Upload, X } from "lucide-react";
+import { ImportWizard } from "./ImportWizard";
 import { api } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { Alert, Button, EmptyState, Input, PageHeader, Select, Spinner } from "../../components/ui";
 import { RejectDialog } from "../Approvals";
-import { PostStatus, STATUS_LABELS, fmt, tzLabel, useContentAccounts, useMeta, usePillars, useTz, type PostSummary } from "./shared";
+import { setReportParams } from "../../components/ExportPdf";
+import { CommentBadge, PostStatus, STATUS_LABELS, fmt, tzLabel, useContentAccounts, useMeta, usePillars, useTz, type PostSummary } from "./shared";
 
 const PAGE = 50;
 
-type Action = "approve" | "reject" | "publish" | "delete";
+type Action = "approve" | "reject" | "publish" | "delete" | "evergreen_on";
 type BulkResult = { results: { id: string; ok: boolean; message: string }[]; ok: number; failed: number };
-const DONE: Record<Action, string> = { approve: "approved", reject: "rejected", publish: "sent for publishing", delete: "deleted" };
+const DONE: Record<Action, string> = { approve: "approved", reject: "rejected", publish: "sent for publishing", delete: "deleted", evergreen_on: "marked evergreen" };
 // Which statuses each action can apply to (the server re-checks every post).
 const ELIGIBLE: Record<Action, string[]> = {
   approve: ["in_review", "draft", "missed", "rejected"],
   reject: ["in_review", "draft", "scheduled", "approved", "missed"],
   publish: ["in_review", "draft", "scheduled", "approved", "missed", "rejected", "failed"],
   delete: ["planned", "in_review", "draft", "scheduled", "approved", "missed", "rejected", "failed", "manual_pending", "cancelled"],
+  evergreen_on: ["published", "in_review", "draft", "scheduled", "approved", "missed", "rejected", "failed", "manual_pending"],
 };
 
 export default function PostList() {
@@ -29,13 +32,19 @@ export default function PostList() {
   const accounts = useContentAccounts();
   const pillars = usePillars();
   const [urlParams] = useSearchParams();
-  const [f, setF] = useState({ status: urlParams.get("status") ?? "", platform: "", account_id: "", pillar_id: "", q: "", start: "", end: "" });
+  const [f, setF] = useState({ status: urlParams.get("status") ?? "", platform: urlParams.get("platform") ?? "", account_id: urlParams.get("account_id") ?? "", pillar_id: "", q: "", start: urlParams.get("start") ?? "", end: urlParams.get("end") ?? "" });
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const qc = useQueryClient();
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [rejecting, setRejecting] = useState(false);
   const [summary, setSummary] = useState<{ action: Action; r: BulkResult } | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  // The "Export PDF" button above the page exports exactly these filters.
+  useEffect(() => {
+    setReportParams({ status: f.status, platform: f.platform, account_id: f.account_id, pillar_id: f.pillar_id, start: f.start, end: f.end });
+  }, [f.status, f.platform, f.account_id, f.pillar_id, f.start, f.end]);
 
   const params = new URLSearchParams({ limit: String(PAGE), offset: String(page * PAGE) });
   for (const [k, v] of Object.entries(f)) {
@@ -77,7 +86,13 @@ export default function PostList() {
   return (
     <div>
       <PageHeader title="All posts" description={`Every post across your accounts. Times are ${tzLabel(tz)}.`}
-        action={can("content.create") && <Button onClick={() => nav("/posts/new")}><Plus size={16} /> New post</Button>} />
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => nav("/posts/experiments")}><FlaskConical size={15} /> A/B tests</Button>
+            {can("content.create") && <Button variant="secondary" onClick={() => setImporting(true)}><Upload size={15} /> Import</Button>}
+            {can("content.create") && <Button onClick={() => nav("/posts/new")}><Plus size={16} /> New post</Button>}
+          </div>
+        } />
 
       <form className="mb-4 grid gap-2 md:grid-cols-4 xl:grid-cols-7" onSubmit={(e) => { e.preventDefault(); setF({ ...f, q: search.trim() }); setPage(0); }}>
         <div className="relative md:col-span-2">
@@ -133,6 +148,7 @@ export default function PostList() {
           {can("content.approve") && <Button onClick={() => run("approve")} disabled={bulk.isPending || !count("approve")} title="Posts need a scheduled time to be approved"><Check size={15} />Approve{count("approve") !== sel.size ? ` (${count("approve")})` : ""}</Button>}
           {can("content.approve") && <Button variant="danger" onClick={() => run("reject")} disabled={bulk.isPending || !count("reject")}><X size={15} />Reject{count("reject") !== sel.size ? ` (${count("reject")})` : ""}</Button>}
           {can("content.publish") && <Button variant="secondary" onClick={() => run("publish")} disabled={bulk.isPending || !count("publish")}><Send size={15} />Publish now{count("publish") !== sel.size ? ` (${count("publish")})` : ""}</Button>}
+          {can("content.create") && <Button variant="ghost" onClick={() => run("evergreen_on")} disabled={bulk.isPending || !count("evergreen_on")} title="Evergreen posts can be reshared later as a fresh version"><Recycle size={15} />Mark evergreen</Button>}
           {can("content.create") && <Button variant="ghost" onClick={() => run("delete")} disabled={bulk.isPending || !count("delete")}><Trash2 size={15} />Delete{count("delete") !== sel.size ? ` (${count("delete")})` : ""}</Button>}
           {bulk.isPending && <Spinner label="Working…" />}
           <button className="ml-auto text-sm text-muted hover:text-ink" onClick={() => setSel(new Set())}>Clear</button>
@@ -175,7 +191,9 @@ export default function PostList() {
                     {p.pillar && <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-muted"><span className="h-2 w-2 rounded-full" style={{ background: p.pillar.color }} />{p.pillar.name}</span>}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-muted">{meta.data?.post_types[p.post_type] ?? p.post_type}</td>
-                  <td className="px-3 py-2.5"><PostStatus status={p.status} /></td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex flex-wrap items-center gap-1.5"><PostStatus status={p.status} /><CommentBadge total={p.comment_count} open={p.open_comment_count} /></div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -191,6 +209,7 @@ export default function PostList() {
           </div>
         </div>
       )}
+      {importing && <ImportWizard onClose={() => setImporting(false)} />}
       {rejecting && <RejectDialog count={sel.size} onClose={() => setRejecting(false)} onReject={(reason) => bulk.mutate({ action: "reject", reason })}
         busy={bulk.isPending} error={bulk.error as Error | null} />}
     </div>

@@ -1143,6 +1143,7 @@ async def export_article(session: AsyncSession, article: SeoArticle) -> Path:
     }
     (folder / "meta.json").write_text(json.dumps(meta_json, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     article.export_path = storage.rel_path(folder)
+    await asyncio.to_thread(storage.upload_tree, folder)
     article.status = "exported"
     await session.flush()
     return folder
@@ -1229,11 +1230,18 @@ async def repurpose(session: AsyncSession, article: SeoArticle, account_ids: lis
             meta={"source": "seo_article", "article_slug": article.slug},
             created_by=getattr(user, "id", None),
         )
+        from app.services.content import AUTO_APPROVE_DELAY, auto_approve_posts, now_utc
+
+        if auto_approve_posts(org):  # Settings → Organization → Auto-approval
+            post.status, post.mode = "scheduled", "full_auto"
+            post.scheduled_at = now_utc() + AUTO_APPROVE_DELAY
+            post.meta = {**post.meta, "auto_approved": True}
         session.add(post)
         await session.flush()
         session.add(PostActivity(organization_id=article.organization_id, post_id=post.id, user_id=getattr(user, "id", None),
                                  actor=getattr(user, "email", None), action="created",
-                                 note=f"From SEO article “{article.title[:120]}”"))
+                                 note=f"From SEO article “{article.title[:120]}”"
+                                      + (" · approved automatically" if post.status == "scheduled" else "")))
         posts.append(post)
     await session.flush()
     return posts

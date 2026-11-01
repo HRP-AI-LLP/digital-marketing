@@ -13,7 +13,7 @@ from app.core.deps import Context, require
 from app.models import LlmUsage, ProviderConfig, TaskRoute
 from app.services import audit
 from app.services.llm import client as llm
-from app.services.llm import discovery, health
+from app.services.llm import discovery, health, keys
 from app.services.llm.catalog import BY_ID, CATALOG, MEDIA_TASKS, ROUTE_TASKS, TASKS
 from app.services.llm.router import AllProvidersFailed, NoProviderError, complete, conn_from, month_spend
 
@@ -95,7 +95,8 @@ def _out(cfg: ProviderConfig, spend: float | None = None) -> dict:
         "label": spec.label if spec else cfg.provider,
         "base_url": cfg.base_url or (spec.base_url if spec else ""),
         "secrets": {k: mask(v) for k, v in secrets.items() if k in _secret_fields(cfg.provider) and v},
-        "fields": {k: v for k, v in secrets.items() if k not in _secret_fields(cfg.provider)},
+        "fields": {k: v for k, v in secrets.items() if k not in _secret_fields(cfg.provider) and k != "extra_keys"},
+        "key_count": len(keys.all_keys(cfg)),
         "settings": cfg.settings or {}, "enabled": cfg.enabled, "billing": _billing(cfg),
         "monthly_budget_usd": float(cfg.monthly_budget_usd) if cfg.monthly_budget_usd is not None else None,
         "month_spend_usd": spend, "last_test_ok": cfg.last_test_ok, "last_test_at": cfg.last_test_at,
@@ -113,10 +114,14 @@ async def _get(ctx: Context, pid: uuid.UUID) -> ProviderConfig:
 # ------------------------------------------------------------------ catalog & CRUD
 @router.get("/catalog")
 async def catalog(ctx: Context = Depends(require("integration.view"))):
+    from app.services.platforms import hidden_app_providers
+
+    hidden = hidden_app_providers()  # developer apps of switched-off platforms (TikTok in India) aren't offered
     return {
         "providers": [
             {"id": p.id, "kind": p.kind, "label": p.label, "style": p.style, "base_url": p.base_url, "key": p.key,
              "free": p.free, "docs": p.docs, "examples": list(p.examples), "local": p.local,
+             "offered": p.id not in hidden,
              "fields": [{"name": n, "label": lbl, "secret": s} for n, lbl, s in p.fields]}
             for p in CATALOG
         ],
@@ -510,3 +515,101 @@ async def playground(body: PlaygroundIn, ctx: Context = Depends(require("integra
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     await ctx.session.commit()
     return {"text": r.text, "provider": r.provider, "model": r.model}
+
+
+# ------------------------------------------------------------------ several keys (accounts) per connection
+class KeyIn(BaseModel):
+    key: str = Field(min_length=8, max_length=500)
+    test: bool = True
+
+
+def _with_keys(cfg: ProviderConfig, ordered: list[str]) -> None:
+    sec = decrypt_json(cfg.secrets_enc) or {}
+    sec["api_key"] = ordered[0] if ordered else ""
+    sec["extra_keys"] = ordered[1:]
+    if not sec["extra_keys"]:
+        sec.pop("extra_keys")
+    cfg.secrets_enc = encrypt_json(sec)
+
+
+def _key_at(cfg: ProviderConfig, fp: str) -> tuple[list[str], int]:
+    ks = keys.all_keys(cfg)
+    for i, k in enumerate(ks):
+        if keys.fingerprint(k) == fp:
+            return ks, i
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "That key isn't on this connection any more.")
+
+
+@router.get("/providers/{pid}/keys")
+async def list_keys(pid: uuid.UUID, ctx: Context = Depends(require("integration.view"))):
+    cfg = await _get(ctx, pid)
+    return {"keys": await keys.key_states(cfg)}
+
+
+@router.post("/providers/{pid}/keys", status_code=201)
+async def add_key(pid: uuid.UUID, body: KeyIn, ctx: Context = Depends(require("integration.manage"))):
+    """Add another account's API key. Calls switch to it automatically when the others run out or hit limits."""
+    cfg = await _get(ctx, pid)
+    spec = BY_ID.get(cfg.provider)
+    if spec is not None and not spec.key and cfg.kind in discovery.AI_KINDS and spec.local:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{spec.label} runs on this laptop and doesn't use API keys.")
+    new = body.key.strip()
+    ks = keys.all_keys(cfg)
+    if new in ks:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This key is already on this connection.")
+    note = None
+    if body.test and cfg.kind in discovery.AI_KINDS:
+        try:
+            with keys.using(cfg, new):
+                await discovery.discover(cfg)
+        except Exception as e:  # noqa: BLE001 - tell the person why instead of saving a dead key
+            v = health.classify(e)
+            if v.state == "auth":
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{cfg.name} rejected this key: {health.describe(e)[:200]}")
+            note = f"Saved, but the quick check said: {v.reason or health.describe(e)[:160]}"
+    _with_keys(cfg, ks + [new])
+    audit.record(ctx.session, action="integration.key_added", organization_id=ctx.org_id, actor=ctx.user,
+                 entity_type="integration", entity_id=cfg.id, summary=f"Added a backup API key to {cfg.name}", ip=ctx.ip)
+    await ctx.session.commit()
+    return {"keys": await keys.key_states(cfg), "note": note}
+
+
+@router.post("/providers/{pid}/keys/{fp}/main")
+async def make_main_key(pid: uuid.UUID, fp: str, ctx: Context = Depends(require("integration.manage"))):
+    cfg = await _get(ctx, pid)
+    ks, i = _key_at(cfg, fp)
+    _with_keys(cfg, [ks[i]] + ks[:i] + ks[i + 1:])
+    audit.record(ctx.session, action="integration.key_main", organization_id=ctx.org_id, actor=ctx.user,
+                 entity_type="integration", entity_id=cfg.id, summary=f"Changed the main API key of {cfg.name}", ip=ctx.ip)
+    await ctx.session.commit()
+    return {"keys": await keys.key_states(cfg)}
+
+
+@router.post("/providers/{pid}/keys/{fp}/reset")
+async def reset_key(pid: uuid.UUID, fp: str, ctx: Context = Depends(require("integration.manage"))):
+    """'I've topped it up': try this key again straight away."""
+    cfg = await _get(ctx, pid)
+    ks, i = _key_at(cfg, fp)
+    from app.models import ModelStatus
+
+    row = await ctx.session.scalar(select(ModelStatus).where(ModelStatus.provider_id == cfg.id,
+                                                             ModelStatus.model == keys.status_name(ks[i])))
+    if row is not None:
+        row.state, row.cooldown_until, row.reason, row.fail_count = "ok", None, None, 0
+    await health.clear_provider(ctx.session, cfg.id)
+    await ctx.session.commit()
+    return {"keys": await keys.key_states(cfg)}
+
+
+@router.delete("/providers/{pid}/keys/{fp}")
+async def remove_key(pid: uuid.UUID, fp: str, ctx: Context = Depends(require("integration.manage"))):
+    cfg = await _get(ctx, pid)
+    ks, i = _key_at(cfg, fp)
+    spec = BY_ID.get(cfg.provider)
+    if len(ks) == 1 and spec is not None and spec.key:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This is the only key. Add another one first, or remove the connection.")
+    _with_keys(cfg, ks[:i] + ks[i + 1:])
+    audit.record(ctx.session, action="integration.key_removed", organization_id=ctx.org_id, actor=ctx.user,
+                 entity_type="integration", entity_id=cfg.id, summary=f"Removed an API key from {cfg.name}", ip=ctx.ip)
+    await ctx.session.commit()
+    return {"keys": await keys.key_states(cfg)}

@@ -21,12 +21,15 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import logging
+import os
 import socket
 import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
+
+from pathlib import Path
 
 import httpx
 from sqlalchemy import select
@@ -52,6 +55,22 @@ KEEP_AWAKE_WINDOW = timedelta(minutes=10)
 DEFAULT_GAP_MINUTES = 20
 
 
+def cloud() -> bool:
+    from app.core.config import get_settings
+
+    return get_settings().cloud
+
+
+def stale_after() -> int:
+    """Seconds without a heartbeat before the worker counts as stopped. Cloud: the job runner only wakes up for work
+    (regular tick every TICK_EVERY_MINUTES), so silence in between is normal."""
+    if cloud():
+        from app.core.config import get_settings
+
+        return get_settings().tick_every_minutes * 60 + 300
+    return 120
+
+
 def now_utc() -> datetime:
     return datetime.now(UTC)
 
@@ -62,7 +81,17 @@ def publishing_settings(org: Organization | None) -> dict:
         gap = int(cfg.get("catch_up_gap_minutes", DEFAULT_GAP_MINUTES))
     except (TypeError, ValueError):
         gap = DEFAULT_GAP_MINUTES
-    return {"catch_up_gap_minutes": max(0, min(gap, 240)), "wake_for_posts": bool(cfg.get("wake_for_posts", False))}
+    return {"catch_up_gap_minutes": max(0, min(gap, 240)), "wake_for_posts": bool(cfg.get("wake_for_posts", False)),
+            "auto_approve_posts": bool(cfg.get("auto_approve_posts", False)),
+            "auto_publish_articles": bool(cfg.get("auto_publish_articles", False)),
+            "publish_held_posts": bool(cfg.get("publish_held_posts", False)),
+            "blog_autopilot": {k: v for k, v in blog_settings(org).items() if k != "last_run"}}
+
+
+def blog_settings(org: Organization | None) -> dict:
+    from app.services import blog_autopilot
+
+    return blog_autopilot.settings(org)
 
 
 # ----------------------------------------------------------------------------- connectivity
@@ -205,6 +234,11 @@ class Watchdog:
         self.wake_seq = 0  # bumped after every downtime: periodic tasks run straight away
         self.awake_held = False
         self.wake_at: datetime | None = None
+        self.public_ok: bool | None = None
+        self.public_failures = 0
+        self.tunnel_proc: subprocess.Popen | None = None
+        self.tunnel_started_at: datetime | None = None
+        self.last_public_check: datetime | None = None
         self._lock = asyncio.Lock()
         self._woken = asyncio.Event()
 
@@ -215,6 +249,10 @@ class Watchdog:
 
     async def startup(self) -> None:
         now = now_utc()
+        if cloud():  # always on, always connected: no downtime to detect, no tunnel, no laptop power management
+            self.online, self.offline_since, self.last_tick = True, None, now
+            await self._save(now)
+            return
         st = await get_state()
         last = _parse(st.get("last_seen"))
         if st.get("wake_at"):
@@ -237,6 +275,10 @@ class Watchdog:
     async def tick(self) -> None:
         async with self._lock:
             now = now_utc()
+            if cloud():  # heartbeat only (gaps between cloud ticks are normal, not downtime)
+                self.online, self.last_tick = True, now
+                await self._save(now)
+                return
             if self.last_tick is not None and (now - self.last_tick).total_seconds() > GAP_SECONDS:
                 await record_downtime(self.last_tick, now, "asleep")
                 self._wake()
@@ -248,10 +290,47 @@ class Watchdog:
                 (now - self.last_probe).total_seconds() >= PROBE_EVERY_ONLINE
             if due:
                 await self._probe(now)
+            if self.online and (self.last_public_check is None or
+                                (now - self.last_public_check).total_seconds() >= 2 * PUBLIC_CHECK_SECONDS):
+                self.last_public_check = now
+                ok = await public_link_ok(force=True)
+                if ok is None:
+                    self.public_ok, self.public_failures = None, 0
+                elif ok:
+                    if self.public_ok is False:
+                        log.info("public address is reachable again; resuming posts that need it")
+                        self._wake()
+                    self.public_ok, self.public_failures = True, 0
+                else:
+                    # Re-check every 30 s while it fails. Only call it down (banner) after three failures in a row,
+                    # about a minute: a tunnel that is still connecting right after start-up isn't a problem.
+                    self.public_failures += 1
+                    self.last_public_check = now - timedelta(seconds=2 * PUBLIC_CHECK_SECONDS - 30)
+                    if self.public_failures >= PUBLIC_DOWN_AFTER:
+                        if self.public_ok is not False:
+                            log.info("public address %s isn't answering", public_base())
+                        self.public_ok = False
+                        self._heal_tunnel(now)  # (re)start our own tunnel
             await self._save(now)
+
+    def _heal_tunnel(self, now: datetime) -> None:
+        if self.tunnel_started_at and now - self.tunnel_started_at < TUNNEL_RESTART_COOLDOWN:
+            return
+        if self.tunnel_proc is not None and self.tunnel_proc.poll() is None:
+            try:
+                self.tunnel_proc.terminate()
+            except OSError:
+                pass
+        proc = start_tunnel()
+        if proc is not None:
+            self.tunnel_proc, self.tunnel_started_at = proc, now
+            self.last_public_check = now - timedelta(seconds=2 * PUBLIC_CHECK_SECONDS - 30)  # re-check in ~30 s
+            log.info("public address unreachable; started the Cloudflare Tunnel again (pid %s)", proc.pid)
 
     async def network_failed(self) -> bool:
         """A job couldn't reach a server. Re-check now; True when we're offline (the job should wait, not fail)."""
+        if cloud():
+            return False  # the cloud is online: a server that can't be reached is that server's problem (retry)
         async with self._lock:
             await self._probe(now_utc(), force_fail_count=True)
             return not self.online
@@ -293,6 +372,7 @@ class Watchdog:
             "offline_since": self.offline_since.isoformat() if self.offline_since else None,
             "clock_skew_seconds": round(self.clock_skew, 1) if self.clock_skew is not None else None,
             "wake_at": self.wake_at.isoformat() if self.wake_at else None,
+            "public_base": public_base() or None, "public_ok": self.public_ok,
         })
 
     # -- Windows: stay awake for due posts, wake up for the next one
@@ -331,3 +411,79 @@ def _parse(v) -> datetime | None:
 
 
 WATCHDOG: Watchdog | None = None  # set by the worker; None in the API process and in tests
+
+
+# ----------------------------------------------------------------------------- public address (Cloudflare Tunnel)
+PUBLIC_CHECK_SECONDS = 60
+PUBLIC_DOWN_AFTER = 3  # failed checks in a row (30 s apart) before the address counts as down
+_public_cache: dict[str, tuple[datetime, bool]] = {}
+
+
+def public_base() -> str:
+    from app.core.config import get_settings
+
+    return (get_settings().public_base_url or "").strip().rstrip("/")
+
+
+async def public_link_ok(base: str | None = None, *, force: bool = False) -> bool | None:
+    """Can the outside world reach our public address (the tunnel Instagram, Threads, Google and TikTok fetch media
+    from)? None when no public address is set up. Cached for a minute."""
+    base = (base or public_base()).rstrip("/")
+    if not base:
+        return None
+    now = now_utc()
+    hit = _public_cache.get(base)
+    if hit and not force and (now - hit[0]).total_seconds() < PUBLIC_CHECK_SECONDS:
+        return hit[1]
+    ok = False
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as c:
+            r = await c.get(f"{base}/api/v1/health")
+            ok = r.status_code == 200
+    except (httpx.HTTPError, OSError):
+        ok = False
+    _public_cache[base] = (now, ok)
+    return ok
+
+
+def origin_of(url: str) -> str | None:
+    """'https://studio.hrpai.in' for one of our own self-hosted media links, else None (Cloudinary etc.)."""
+    i = url.find("/api/v1/media/public/")
+    return url[:i] if i > 0 else None
+
+
+TUNNEL_RESTART_COOLDOWN = timedelta(minutes=10)
+ROOT = Path(__file__).resolve().parents[3]  # the project folder (start.ps1, tools\, storage\)
+
+
+def start_tunnel() -> subprocess.Popen | None:
+    r"""Windows: start tools\cloudflared.exe with CLOUDFLARE_TUNNEL_TOKEN (loaded from .env by start.ps1).
+    Its PID goes into storage\.pids so stop.ps1 stops it too. Returns None when that isn't possible."""
+    if sys.platform != "win32":
+        return None
+    token = (os.environ.get("CLOUDFLARE_TUNNEL_TOKEN") or "").strip()
+    exe = ROOT / "tools" / "cloudflared.exe"
+    if not token.startswith("eyJ") or not exe.exists():
+        return None
+    logs = ROOT / "storage" / "logs"
+    try:
+        logs.mkdir(parents=True, exist_ok=True)
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        proc = subprocess.Popen(
+            [str(exe), "tunnel", "--no-autoupdate", "run"], env={**os.environ, "TUNNEL_TOKEN": token},
+            stdout=open(logs / "tunnel.log", "ab"), stderr=open(logs / "tunnel.err.log", "ab"),  # noqa: SIM115
+            creationflags=flags, cwd=str(ROOT))
+    except OSError as e:
+        log.warning("couldn't start the Cloudflare Tunnel: %s", e)
+        return None
+    try:
+        with open(ROOT / "storage" / ".pids", "a", encoding="ascii") as f:
+            f.write(f"\n{proc.pid}")
+    except OSError:
+        pass
+    return proc
+
+
+PUBLIC_LINK_DOWN = ("Your public address ({base}) isn't reachable right now, so {platform} can't fetch the images. "
+                    "The post is waiting and goes out by itself once the address works again. Usually the Cloudflare "
+                    "Tunnel isn't running: see storage\\logs\\tunnel.err.log.")

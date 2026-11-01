@@ -5,7 +5,8 @@ export default {
     extend: {
       colors: {
         // hrpai.in palette
-        primary: { 50: "#f0f7ff", 100: "#dceeff", 200: "#b7dcff", 300: "#80c5ff", 400: "#35a9f4", 500: "#0f8dde", 600: "#086fb8", 700: "#075492", 800: "#083f73", 900: "#062f59" },
+        primary: Object.fromEntries([50, 100, 200, 300, 400, 500, 600, 700, 800, 900].map((k) => [k, `rgb(var(--p-${k}) / <alpha-value>)`])),
+        grad1: "rgb(var(--g1) / <alpha-value>)", grad2: "rgb(var(--g2) / <alpha-value>)",
         secondary: { 50: "#ecfeff", 100: "#cffafe", 200: "#a5f3fc", 300: "#67e8f9", 400: "#22d3ee", 500: "#06a6c7", 600: "#0787a4", 700: "#0b6d86", 800: "#12576d", 900: "#15475a" },
         canvas: "rgb(var(--canvas) / <alpha-value>)",
         surface: "rgb(var(--surface) / <alpha-value>)",
@@ -17,8 +18,8 @@ export default {
         danger: { DEFAULT: "rgb(var(--danger) / <alpha-value>)", tint: "rgb(var(--danger-tint) / <alpha-value>)" },
       },
       fontFamily: {
-        display: ['"Inter Variable"', "Inter", "system-ui", "sans-serif"],
-        sans: ['"Inter Variable"', "Inter", "system-ui", "sans-serif"],
+        display: ["var(--font-sans)"],
+        sans: ["var(--font-sans)"],
       },
     },
   },

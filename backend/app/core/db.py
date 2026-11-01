@@ -19,7 +19,8 @@ _s = get_settings()
 engine = (
     create_async_engine(_s.database_url, poolclass=NullPool)
     if _s.db_null_pool
-    else create_async_engine(_s.database_url, pool_pre_ping=True)
+    else create_async_engine(_s.database_url, pool_pre_ping=True, pool_size=_s.db_pool_size, max_overflow=5,
+                             pool_recycle=1800)
 )
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 

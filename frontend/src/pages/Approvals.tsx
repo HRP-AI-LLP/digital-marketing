@@ -6,7 +6,7 @@ import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Alert, Badge, Button, EmptyState, Field, Modal, PageHeader, Spinner, Textarea } from "../components/ui";
 import {
-  PostPreview, QaSummary, Warnings, fmt, tzLabel, until, useMeta, useNow, useTz, type PostSummary,
+  CommentBadge, PostPreview, QaSummary, Warnings, fmt, tzLabel, until, useMeta, useNow, useTz, type PostSummary,
 } from "./content/shared";
 
 type Item = PostSummary & { link_url: string | null; qa: { issues?: string[]; checks?: { name: string; ok: boolean; detail: string }[] } };
@@ -56,6 +56,7 @@ function Card({ p, selected, onSelect, highlight }: { p: Item; selected: boolean
         <input type="checkbox" aria-label="Select for bulk action" checked={selected} onChange={(e) => onSelect(e.target.checked)} className="h-4 w-4 accent-[rgb(var(--brand))]" />
         <Badge tone="brand">{meta.data?.post_types[p.post_type] ?? p.post_type}</Badge>
         {p.pillar && <span className="inline-flex items-center gap-1 text-muted"><span className="h-2 w-2 rounded-full" style={{ background: p.pillar.color }} />{p.pillar.name}</span>}
+        {!!p.comment_count && <Link to={`/posts/${p.id}#comments`} className="hover:opacity-80"><CommentBadge total={p.comment_count} open={p.open_comment_count} /></Link>}
         <span className="ml-auto inline-flex items-center gap-1 text-muted">
           <Clock size={14} /> Posts {fmt(p.scheduled_at, tz, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })} {tzLabel(tz)}
         </span>

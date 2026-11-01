@@ -18,6 +18,11 @@
   --accent-tint: 236 254 255;  /* secondary-50 #ecfeff */
   --danger: 185 28 28;
   --danger-tint: 254 242 242;
+  /* accent palette (Settings → Appearance changes these; see prefs/appearance.ts) */
+  --p-50: 240 247 255; --p-100: 220 238 255; --p-200: 183 220 255; --p-300: 128 197 255; --p-400: 53 169 244;
+  --p-500: 15 141 222; --p-600: 8 111 184; --p-700: 7 84 146; --p-800: 8 63 115; --p-900: 6 47 89;
+  --g1: 29 78 216; --g2: 8 145 178;
+  --font-sans: "Inter Variable", "Inter", system-ui, sans-serif;
   color-scheme: light;
 }
 
@@ -25,13 +30,16 @@ html, body, #root { height: 100%; }
 body {
   background: rgb(var(--canvas));
   color: rgb(var(--ink));
-  font-family: "Inter Variable", "Inter", system-ui, sans-serif;
-  font-size: 15px;
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
   line-height: 1.55;
   overflow-wrap: break-word; /* long links and IDs wrap inside cards instead of spilling out */
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3 { letter-spacing: -0.02em; }
+/* Grid children may shrink below their content's width, so long (truncated) text never makes the page
+   wider than the window and causes a horizontal scrollbar. */
+.grid > * { min-width: 0; }
 
 :focus-visible { outline: 2px solid rgb(14 141 222); outline-offset: 2px; border-radius: 6px; }
 
@@ -95,3 +103,97 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 /* Tab strips scroll sideways on small screens without showing a bar */
 .no-scrollbar { scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+
+
+/* ================================================================== themes (Settings → Appearance)
+   Each theme sets the surface tokens; the accent palette (--p-*) is set separately. Dark themes also restyle the
+   few hard-coded light colours (white cards, slate tints, status tints, chart ink) so every page follows. */
+[data-theme="paper"] {
+  --canvas: 247 243 234; --surface: 255 253 248; --ink: 41 37 30; --muted: 117 105 89; --line: 231 222 205;
+}
+[data-theme="contrast"] {
+  --canvas: 255 255 255; --surface: 255 255 255; --ink: 0 0 0; --muted: 51 65 85; --line: 100 116 139;
+}
+[data-theme="contrast"] .text-muted { color: rgb(30 41 59); }
+[data-theme="contrast"] .border, [data-theme="contrast"] .border-line { border-color: rgb(71 85 105); }
+[data-theme="dark"] {
+  --canvas: 11 17 32; --surface: 17 24 39; --ink: 226 232 240; --muted: 148 163 184; --line: 39 50 68;
+  --brand-tint: 23 37 58; --accent-tint: 13 45 56; --danger: 248 113 113; --danger-tint: 60 21 24;
+}
+[data-theme="navy"] {
+  --canvas: 5 20 37; --surface: 10 34 59; --ink: 224 242 254; --muted: 147 177 205; --line: 27 56 89;
+  --brand-tint: 14 48 82; --accent-tint: 10 52 66; --danger: 248 113 113; --danger-tint: 63 22 30;
+}
+[data-theme="graphite"] {
+  --canvas: 20 20 20; --surface: 30 30 30; --ink: 236 236 236; --muted: 163 163 163; --line: 54 54 54;
+  --brand-tint: 40 44 52; --accent-tint: 36 46 50; --danger: 248 113 113; --danger-tint: 58 24 24;
+}
+[data-mode="dark"] { --brand: var(--p-300); --brand-deep: var(--p-200); }
+[data-mode="dark"] .bg-white:not(img), [data-mode="dark"] .bg-white\/95, [data-mode="dark"] .bg-white\/90,
+[data-mode="dark"] .bg-white\/80 { background-color: rgb(var(--surface) / 0.97); }
+[data-mode="dark"] .bg-slate-50, [data-mode="dark"] .hover\:bg-slate-50:hover { background-color: rgb(255 255 255 / 0.04); }
+[data-mode="dark"] .bg-slate-100, [data-mode="dark"] .hover\:bg-slate-100:hover { background-color: rgb(255 255 255 / 0.07); }
+[data-mode="dark"] .bg-slate-200 { background-color: rgb(255 255 255 / 0.1); }
+[data-mode="dark"] .bg-slate-300 { background-color: rgb(255 255 255 / 0.18); }
+[data-mode="dark"] .text-slate-900, [data-mode="dark"] .text-slate-800, [data-mode="dark"] .text-slate-700 { color: rgb(var(--ink)); }
+[data-mode="dark"] .text-slate-600, [data-mode="dark"] .text-slate-500 { color: rgb(var(--muted)); }
+[data-mode="dark"] .border-slate-100, [data-mode="dark"] .border-slate-200, [data-mode="dark"] .border-slate-200\/80,
+[data-mode="dark"] .border-slate-300, [data-mode="dark"] .divide-slate-100 > * + * { border-color: rgb(var(--line)); }
+[data-mode="dark"] .text-primary-600, [data-mode="dark"] .text-primary-700 { color: rgb(var(--p-300)); }
+[data-mode="dark"] .text-primary-800, [data-mode="dark"] .text-primary-900 { color: rgb(var(--p-200)); }
+[data-mode="dark"] .bg-primary-50, [data-mode="dark"] .hover\:bg-primary-50:hover { background-color: rgb(var(--p-500) / 0.14); }
+[data-mode="dark"] .bg-primary-50\/40, [data-mode="dark"] .bg-primary-50\/50, [data-mode="dark"] .bg-primary-50\/60 { background-color: rgb(var(--p-500) / 0.1); }
+[data-mode="dark"] .bg-primary-100 { background-color: rgb(var(--p-500) / 0.2); }
+[data-mode="dark"] .bg-primary-200 { background-color: rgb(var(--p-500) / 0.3); }
+[data-mode="dark"] .border-primary-200, [data-mode="dark"] .border-primary-300 { border-color: rgb(var(--p-500) / 0.45); }
+/* status tints */
+[data-mode="dark"] .bg-amber-50, [data-mode="dark"] .bg-amber-100 { background-color: rgb(245 158 11 / 0.13); }
+[data-mode="dark"] .text-amber-600, [data-mode="dark"] .text-amber-700 { color: rgb(252 211 77); }
+[data-mode="dark"] .text-amber-800, [data-mode="dark"] .text-amber-900 { color: rgb(253 230 138); }
+[data-mode="dark"] .border-amber-200, [data-mode="dark"] .border-amber-300 { border-color: rgb(245 158 11 / 0.35); }
+[data-mode="dark"] .bg-emerald-50, [data-mode="dark"] .bg-emerald-100 { background-color: rgb(16 185 129 / 0.13); }
+[data-mode="dark"] .text-emerald-600, [data-mode="dark"] .text-emerald-700 { color: rgb(110 231 183); }
+[data-mode="dark"] .text-emerald-800, [data-mode="dark"] .text-emerald-900 { color: rgb(167 243 208); }
+[data-mode="dark"] .border-emerald-200 { border-color: rgb(16 185 129 / 0.35); }
+[data-mode="dark"] .bg-red-50 { background-color: rgb(239 68 68 / 0.13); }
+[data-mode="dark"] .text-red-600, [data-mode="dark"] .text-red-700 { color: rgb(252 165 165); }
+[data-mode="dark"] .bg-violet-50 { background-color: rgb(139 92 246 / 0.14); }
+[data-mode="dark"] .text-violet-700, [data-mode="dark"] .text-violet-900, [data-mode="dark"] .text-violet-900\/80 { color: rgb(196 181 253); }
+[data-mode="dark"] .border-violet-200 { border-color: rgb(139 92 246 / 0.35); }
+[data-mode="dark"] .bg-rose-100 { background-color: rgb(244 63 94 / 0.15); }
+[data-mode="dark"] .text-rose-900, [data-mode="dark"] .text-orange-800 { color: rgb(253 186 116); }
+/* charts drawn with fixed light-theme colours */
+[data-mode="dark"] svg [fill="#0f172a"] { fill: rgb(var(--ink)); }
+[data-mode="dark"] svg [fill="#64748b"] { fill: rgb(var(--muted)); }
+[data-mode="dark"] svg [stroke="#e2e8f0"] { stroke: rgb(var(--line)); }
+[data-mode="dark"] svg [fill="#e2e8f0"], [data-mode="dark"] svg [fill="#f1f5f9"] { fill: rgb(255 255 255 / 0.08); }
+[data-mode="dark"] svg [fill="#f8fafc"] { fill: rgb(255 255 255 / 0.04); }
+[data-mode="dark"] svg [stroke="#fff"], [data-mode="dark"] svg [stroke="#ffffff"] { stroke: rgb(var(--surface)); }
+[data-mode="dark"] ::placeholder { color: rgb(var(--muted) / 0.8); }
+
+/* corners */
+[data-radius="soft"] .rounded-md { border-radius: 4px; }
+[data-radius="soft"] .rounded-lg { border-radius: 6px; }
+[data-radius="soft"] .rounded-xl { border-radius: 8px; }
+[data-radius="soft"] .rounded-2xl { border-radius: 10px; }
+[data-radius="sharp"] .rounded, [data-radius="sharp"] .rounded-md, [data-radius="sharp"] .rounded-lg,
+[data-radius="sharp"] .rounded-xl, [data-radius="sharp"] .rounded-2xl { border-radius: 2px; }
+
+/* density */
+[data-density="compact"] .p-6 { padding: 1rem; }
+[data-density="compact"] .p-5 { padding: 0.875rem; }
+[data-density="compact"] .p-4 { padding: 0.75rem; }
+[data-density="compact"] .py-3 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+[data-density="compact"] .gap-6 { gap: 1rem; }
+[data-density="compact"] .gap-5 { gap: 0.875rem; }
+[data-density="compact"] .mt-10 { margin-top: 1.5rem; }
+[data-density="compact"] .mt-8 { margin-top: 1.25rem; }
+[data-density="compact"] .space-y-5 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.875rem; }
+[data-density="compact"] .space-y-4 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.75rem; }
+
+/* motion */
+[data-motion="reduce"] *, [data-motion="reduce"] *::before, [data-motion="reduce"] *::after {
+  animation-duration: 0.001ms !important; animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important; scroll-behavior: auto !important;
+}
+[data-mode="dark"] .ai-glass-panel { border-color: rgb(255 255 255 / 0.08); background: rgb(var(--surface) / 0.85); box-shadow: 0 24px 80px rgb(0 0 0 / 0.35); }

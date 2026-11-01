@@ -73,7 +73,9 @@ def classify_model(mid: str, raw: dict | None = None) -> str:
 
 
 def _secrets(cfg: ProviderConfig) -> dict:
-    return decrypt_json(cfg.secrets_enc)
+    from app.services.llm import keys
+
+    return keys.secrets_of(cfg)
 
 
 def _base(cfg: ProviderConfig) -> str:
@@ -367,7 +369,7 @@ async def discover_unsaved(provider: str, base_url: str | None, secrets: dict, s
 
 
 async def statuses_for_ui(session: AsyncSession) -> list[dict]:
-    rows = (await session.scalars(select(ModelStatus))).all()
+    rows = [r for r in (await session.scalars(select(ModelStatus))).all() if not r.model.startswith("key:")]  # keys: see /keys
     from app.services.llm.health import LABELS, resting
 
     now = datetime.now(UTC)

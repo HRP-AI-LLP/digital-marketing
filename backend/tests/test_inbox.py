@@ -347,7 +347,7 @@ async def test_instagram_tags_without_permission_is_not_fatal(org1, mock):
     mock.on("GET", r"/ig2/tags$", (400, {"error": {"code": 10, "message": "(#10) Application does not have permission"}}))
     await run_sync(org, acc.id)
     st = await account_state(org, acc.id)
-    assert st["ok"] and "instagram_manage_comments" in st["notes"][0]
+    assert st["ok"] and "@mentions" in st["notes"][0]
 
 
 # ------------------------------------------------------------------ Threads
@@ -812,12 +812,12 @@ async def test_tenant_isolation(client, org1, org2):
 
 async def test_status_lists_open_only_platforms_and_refresh(client, org1):
     org = org_of(org1)
-    li = await make_account(org, "linkedin_org", "urn:li:organization:1", {"access_token": "x"}, name="HRP AI LinkedIn")
+    li = await make_account(org, "linkedin_person", "urn:li:person:1", {"access_token": "x"}, name="Asha on LinkedIn")
     await make_post(org, li, "urn:li:share:1", text="Hiring trends 2026", url="https://www.linkedin.com/feed/update/urn:li:share:1")
     s = (await client.get("/inbox/status", headers=auth(org1))).json()
     row = next(a for a in s["accounts"] if a["id"] == str(li.id))
-    assert row["sync"] is False and "Community Management" in row["note"]
-    assert any(p["url"].startswith("https://www.linkedin.com/") and p["platform"] == "linkedin_org" for p in s["open_posts"])
+    assert row["sync"] is False and "personal profiles" in row["note"]
+    assert any(p["url"].startswith("https://www.linkedin.com/") and p["platform"] == "linkedin_person" for p in s["open_posts"])
     assert {x["id"] for x in s["sources"]} >= {"web", "news", "bluesky", "mastodon", "youtube", "instagram"}
     r = await client.post("/inbox/refresh", headers=auth(org1), json={"what": "all"})
     assert r.status_code == 200 and r.json()["jobs"]["comments"]

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from app.services.llm import keys as _keys
 import logging
 import re
 import uuid
@@ -101,7 +102,7 @@ async def _edge(text: str, voice: str, out: Path, rate: str = "+0%") -> list[Wor
 
 
 async def _openai(cfg: ProviderConfig, text: str, voice: str, out: Path) -> None:
-    key = decrypt_json(cfg.secrets_enc).get("api_key")
+    key = _keys.secrets_of(cfg).get("api_key")
     spec = BY_ID.get(cfg.provider)
     base = (cfg.base_url or (spec.base_url if spec else "")).rstrip("/")
     model = (cfg.settings or {}).get("default_model") or "gpt-4o-mini-tts"
@@ -261,7 +262,7 @@ async def _test_edge(cfg: ProviderConfig) -> str:
 
 @tester("openai_tts")
 async def _test_openai_tts(cfg: ProviderConfig) -> str:
-    key = decrypt_json(cfg.secrets_enc).get("api_key")
+    key = _keys.secrets_of(cfg).get("api_key")
     if not key:
         raise TtsError("Add the API key.")
     spec = BY_ID.get(cfg.provider)

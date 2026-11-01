@@ -62,7 +62,9 @@ class GeneratedImage:
 
 # ----------------------------------------------------------------------------- provider resolution
 def _secrets(cfg: ProviderConfig) -> dict:
-    return decrypt_json(cfg.secrets_enc)
+    from app.services.llm import keys
+
+    return keys.secrets_of(cfg)
 
 
 def _base(cfg: ProviderConfig) -> str:
@@ -100,7 +102,8 @@ async def image_chain(session: AsyncSession) -> list[tuple[ProviderConfig, str]]
         if chain:
             return chain
     enabled = [c for c in cfgs.values() if c.enabled]
-    enabled.sort(key=lambda c: (BY_ID.get(c.provider).local if BY_ID.get(c.provider) else False, c.created_at))
+    enabled.sort(key=lambda c: (BY_ID.get(c.provider).local if BY_ID.get(c.provider) else False,
+                                c.provider == "ai_horde", c.created_at))  # the slow community queue goes last
     return [(c, _default_model(c)) for c in enabled]
 
 
@@ -348,6 +351,127 @@ async def _comfyui(cfg, model, prompt, negative, width, height, seed) -> bytes:
     raise ImageGenError(f"{cfg.name}: timed out waiting for the image")
 
 
+async def _pollinations(cfg, model, prompt, negative, width, height, seed) -> bytes:
+    from urllib.parse import quote
+
+    key = _secrets(cfg).get("api_key")
+    w, h = _gen_dims(width, height, 1280, 16)
+    params = {"width": w, "height": h, "seed": seed, "model": model or "flux", "nologo": "true", "private": "true",
+              "enhance": "false"}
+    if negative:
+        params["negative_prompt"] = negative[:400]
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    async with http_client(240) as http:
+        r = await http.get(f"{_base(cfg)}/prompt/{quote(prompt[:1500], safe='')}", params=params, headers=headers)
+        _raise_for(r, cfg.name)
+        if not r.headers.get("content-type", "").startswith("image/"):
+            raise ImageGenError(f"{cfg.name}: unexpected response {r.text[:200]}")
+        return r.content
+
+
+async def _cf_image(cfg, model, prompt, negative, width, height, seed) -> bytes:
+    key = _secrets(cfg).get("api_key")
+    base = _base(cfg)
+    if "YOUR_ACCOUNT_ID" in base:
+        raise ImageGenError(f"{cfg.name}: put your Cloudflare account ID in the address (replace YOUR_ACCOUNT_ID).")
+    model = model or "@cf/black-forest-labs/flux-1-schnell"
+    body: dict = {"prompt": prompt[:2000], "seed": seed % 2**31}
+    if "flux" in model:
+        body["steps"] = 8
+    else:
+        w, h = _gen_dims(width, height, 1024, 64)
+        body.update(width=w, height=h, negative_prompt=negative or "", num_steps=20)
+    async with http_client(180) as http:
+        r = await http.post(f"{base}/{model}", json=body, headers={"Authorization": f"Bearer {key}"})
+        _raise_for(r, cfg.name)
+        if r.headers.get("content-type", "").startswith("image/"):
+            return r.content
+        img = ((r.json() or {}).get("result") or {}).get("image")
+        if img:
+            return base64.b64decode(img)
+    raise ImageGenError(f"{cfg.name}: no image in the response")
+
+
+async def _nvidia_image(cfg, model, prompt, negative, width, height, seed) -> bytes:
+    key = _secrets(cfg).get("api_key")
+    model = model or "black-forest-labs/flux.1-schnell"
+    w, h = _gen_dims(width, height, 1024, 64)
+    body: dict = {"prompt": prompt[:2000], "seed": seed % 2**31, "width": w, "height": h}
+    if "schnell" in model:
+        body["steps"] = 4
+    elif "flux" in model:
+        body.update(steps=30, cfg_scale=3.5, mode="base")
+    else:
+        body.update(negative_prompt=negative or "", steps=30, cfg_scale=5, aspect_ratio=_ratio_label(width, height, ["1:1", "16:9", "9:16", "4:5", "5:4", "3:2", "2:3"]))
+        body.pop("width"), body.pop("height")
+    async with http_client(180) as http:
+        r = await http.post(f"{_base(cfg)}/{model}", json=body,
+                            headers={"Authorization": f"Bearer {key}", "Accept": "application/json"})
+        _raise_for(r, cfg.name)
+        d = r.json()
+        art = (d.get("artifacts") or [{}])[0]
+        b64 = art.get("base64") or d.get("image")
+        if b64:
+            return base64.b64decode(b64)
+    raise ImageGenError(f"{cfg.name}: no image in the response")
+
+
+async def _siliconflow_image(cfg, model, prompt, negative, width, height, seed) -> bytes:
+    key = _secrets(cfg).get("api_key")
+    model = model or "Kwai-Kolors/Kolors"
+    size = "%dx%d" % _closest(width, height, [(1024, 1024), (960, 1280), (768, 1024), (720, 1440), (720, 1280)])
+    body: dict = {"model": model, "prompt": prompt[:2000], "image_size": size, "batch_size": 1, "seed": seed % 9999999999}
+    if negative and "kolors" in model.lower():
+        body["negative_prompt"] = negative
+    async with http_client(180) as http:
+        r = await http.post(f"{_base(cfg)}/images/generations", json=body, headers={"Authorization": f"Bearer {key}"})
+        _raise_for(r, cfg.name)
+        d = r.json()
+        url = ((d.get("images") or d.get("data") or [{}])[0]).get("url")
+        if url:
+            return await _download(http, url)
+    raise ImageGenError(f"{cfg.name}: no image in the response")
+
+
+HORDE_AGENT = "hrp-ai-studio:1.0:https://hrpai.in"
+
+
+async def _horde(cfg, model, prompt, negative, width, height, seed) -> bytes:
+    key = _secrets(cfg).get("api_key") or "0000000000"
+    w, h = _gen_dims(width, height, 1024, 64)
+    body = {"prompt": f"{prompt[:900]} ### {negative[:300]}" if negative else prompt[:1000],
+            "params": {"width": w, "height": h, "steps": 25, "n": 1, "sampler_name": "k_euler_a", "seed": str(seed),
+                       "cfg_scale": 6},
+            "nsfw": False, "censor_nsfw": True, "r2": True, "shared": False, "trusted_workers": True,
+            **({"models": [model]} if model else {})}
+    headers = {"apikey": key, "Client-Agent": HORDE_AGENT}
+    async with http_client(60) as http:
+        r = await http.post(f"{_base(cfg)}/generate/async", json=body, headers=headers)
+        _raise_for(r, cfg.name)
+        job = r.json().get("id")
+        if not job:
+            raise ImageGenError(f"{cfg.name}: the request wasn't accepted ({r.text[:200]})")
+        for _ in range(100):  # up to ~8 minutes
+            await asyncio.sleep(5)
+            c = await http.get(f"{_base(cfg)}/generate/check/{job}", headers={"Client-Agent": HORDE_AGENT})
+            _raise_for(c, cfg.name)
+            st = c.json()
+            if st.get("faulted") or st.get("is_possible") is False:
+                raise ImageGenError(f"{cfg.name}: no worker can make this image right now")
+            if st.get("done"):
+                break
+        else:
+            await http.delete(f"{_base(cfg)}/generate/status/{job}", headers={"Client-Agent": HORDE_AGENT})
+            raise ImageGenError(f"{cfg.name}: timed out in the queue")
+        s = await http.get(f"{_base(cfg)}/generate/status/{job}", headers={"Client-Agent": HORDE_AGENT})
+        _raise_for(s, cfg.name)
+        gens = s.json().get("generations") or []
+        if gens and gens[0].get("img"):
+            img = gens[0]["img"]
+            return await _download(http, img) if img.startswith("http") else base64.b64decode(img)
+    raise ImageGenError(f"{cfg.name}: no image in the response")
+
+
 STYLES = {
     "openai_image": _openai_image,
     "gemini_image": _gemini_image,
@@ -355,6 +479,11 @@ STYLES = {
     "stability": _stability,
     "a1111": _a1111,
     "comfyui": _comfyui,
+    "pollinations": _pollinations,
+    "cf_image": _cf_image,
+    "nvidia_image": _nvidia_image,
+    "siliconflow_image": _siliconflow_image,
+    "horde": _horde,
 }
 
 
@@ -393,7 +522,9 @@ async def generate(session: AsyncSession, prompt: str, width: int, height: int, 
             continue
         t0 = time.perf_counter()
         try:
-            raw = await fn(cfg, model, prompt, negative, width, height, seed)
+            from app.services.llm import keys
+
+            raw = await keys.with_keys(cfg, lambda: fn(cfg, model, prompt, negative, width, height, seed))
             data = await asyncio.to_thread(cover_fit, raw, width, height)
         except Exception as e:  # noqa: BLE001
             log.warning("image provider %s failed: %s", cfg.name, e)
@@ -487,3 +618,54 @@ async def _test_comfyui(cfg: ProviderConfig) -> str:
     if missing:
         msg += " Warning: the workflow has no {{prompt}} placeholder, so every image will look the same."
     return msg
+
+
+@tester("pollinations")
+async def _test_pollinations(cfg: ProviderConfig) -> str:
+    async with http_client(30) as http:
+        r = await http.get("https://image.pollinations.ai/models")
+        _raise_for(r, cfg.name)
+        models = r.json() if isinstance(r.json(), list) else []
+    return f"Reachable. Models: {', '.join(map(str, models[:6])) or 'flux'}. Images will use {_default_model(cfg)}."
+
+
+@tester("cf_image")
+async def _test_cf_image(cfg: ProviderConfig) -> str:
+    key = _secrets(cfg).get("api_key")
+    if not key:
+        raise ImageGenError("Add a Cloudflare API token with Workers AI access.")
+    if "YOUR_ACCOUNT_ID" in _base(cfg):
+        raise ImageGenError("Put your Cloudflare account ID in the address (replace YOUR_ACCOUNT_ID).")
+    async with http_client(20) as http:
+        r = await http.get("https://api.cloudflare.com/client/v4/user/tokens/verify", headers={"Authorization": f"Bearer {key}"})
+        _raise_for(r, cfg.name)
+    return f"Token is valid. Images will use {_default_model(cfg)}."
+
+
+@tester("nvidia_image")
+async def _test_nvidia_image(cfg: ProviderConfig) -> str:
+    if not _secrets(cfg).get("api_key"):
+        raise ImageGenError("Add your NVIDIA API key (nvapi-…) from build.nvidia.com.")
+    return f"Key saved. Images will use {_default_model(cfg)}; use Generate a test image to check it."
+
+
+@tester("siliconflow_image")
+async def _test_siliconflow(cfg: ProviderConfig) -> str:
+    key = _secrets(cfg).get("api_key")
+    if not key:
+        raise ImageGenError("Add your SiliconFlow API key.")
+    async with http_client(20) as http:
+        r = await http.get(f"{_base(cfg)}/user/info", headers={"Authorization": f"Bearer {key}"})
+        _raise_for(r, cfg.name)
+        bal = ((r.json() or {}).get("data") or {}).get("totalBalance")
+    return f"Connected{f'. Balance: {bal}' if bal is not None else ''}. Images will use {_default_model(cfg)}."
+
+
+@tester("horde")
+async def _test_horde(cfg: ProviderConfig) -> str:
+    key = _secrets(cfg).get("api_key") or "0000000000"
+    async with http_client(20) as http:
+        r = await http.get(f"{_base(cfg)}/find_user", headers={"apikey": key, "Client-Agent": HORDE_AGENT})
+        _raise_for(r, cfg.name)
+        u = r.json()
+    return f"Connected as {u.get('username', 'anonymous')} (kudos {int(u.get('kudos') or 0)}). Images queue on community GPUs, so they can take a few minutes."

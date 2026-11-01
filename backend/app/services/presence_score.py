@@ -477,7 +477,7 @@ def suggestions(profiles: list[dict], result: dict, ctx: Context) -> list[dict]:
             add(f"{p['key']}:reconnect", f"Reconnect {lbl}", "The connection stopped working, so only public data was used.",
                 imp * 3, "data", p["platform"], p["key"], {"to": "/settings/accounts", "label": "Reconnect"})
         if failed("website_link"):
-            where = "bio" if p["platform"] in ("instagram", "threads", "tiktok", "x", "bluesky") else "profile"
+            where = "bio" if p["platform"] in ("instagram", "threads", "x", "bluesky") else "profile"
             add(f"{p['key']}:website_link", f"Add {dom} link to {lbl} {where}",
                 checks["website_link"]["detail"] + " A link back brings visitors to your website and confirms the profile is yours.",
                 imp * 3, "cross_linking", p["platform"], p["key"], open_profile)

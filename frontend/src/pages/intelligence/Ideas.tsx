@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, Select, Spinner, StatusBadge, Textarea } from "../../components/ui";
 import { ErrorText, JobStatus, ScoreBar, useIntelJobs } from "./shared";
+import { TipRow } from "../../components/viz";
 import { SOURCE_LABEL, type Idea, type JobStart, type Overview, type Pillar } from "./types";
 
 type Filters = { status: string; source: string; pillar: string; q: string };
@@ -61,7 +62,11 @@ function IdeaRow({ i, pillarName, canManage }: { i: Idea; pillarName?: string; c
       </td>
       <td className="w-28 py-3 pr-4">
         <div className="text-sm tabular-nums">{pct}%</div>
-        <ScoreBar value={pct} label={`Score for ${i.title}`} />
+        <ScoreBar value={pct} unit="%" label={i.title} detail={<>
+          <TipRow label="Source" value={SOURCE_LABEL[i.source] ?? i.source} />
+          {i.keywords.length > 0 && <TipRow label="Keywords" value={i.keywords.length} />}
+          <TipRow label="Times used" value={i.used_count} />
+        </>} />
       </td>
       <td className="py-3 pr-4"><Badge tone={i.source === "gap" ? "accent" : i.source === "gsc" ? "brand" : "neutral"}>{SOURCE_LABEL[i.source] ?? i.source}</Badge></td>
       <td className="py-3 pr-4 text-sm">{pillarName ?? <span className="text-muted">Any</span>}</td>

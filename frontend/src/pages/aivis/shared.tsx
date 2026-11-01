@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ExternalLink } from "lucide-react";
 import { api } from "../../api/client";
 import { Alert, Badge, Modal, Spinner } from "../../components/ui";
+import { SERIES, TipHead, TipRow, useTip } from "../../components/viz";
 import type { Answer, PaidHint, PromptResult } from "./types";
 
 export function CostBadge({ cost }: { cost?: "free" | "paid" }) {
@@ -11,18 +12,35 @@ export function CostBadge({ cost }: { cost?: "free" | "paid" }) {
 
 /** One engine's result for one prompt: filled dot = mentioned (with rank), ring = not mentioned, cross = failed. */
 export function MentionDot({ r, onOpen }: { r?: PromptResult; onOpen?: (id: string) => void }) {
-  if (!r) return <span className="text-xs text-muted" title="Not checked in this run">—</span>;
+  const t = useTip<HTMLSpanElement>();
+  if (!r) return <span className="text-xs text-muted" aria-label="Not checked in this run">—</span>;
   const label = r.status !== "ok" ? `${r.engine_label}: failed` : r.mentioned
     ? `${r.engine_label}: mentioned${r.position ? `, #${r.position}` : ""}${r.sentiment ? `, ${r.sentiment}` : ""}`
     : `${r.engine_label}: not mentioned${r.competitors.length ? ` (names ${r.competitors.slice(0, 3).join(", ")})` : ""}`;
   const tone = r.sentiment === "negative" ? "bg-danger text-white" : "bg-primary-600 text-white";
+  const tip = (
+    <>
+      <TipHead sub="Click to read the answer">{r.engine_label}</TipHead>
+      {r.status !== "ok" ? <TipRow color="#b91c1c" label="Result" value="Engine failed" /> : <>
+        <TipRow color={r.mentioned ? (r.sentiment === "negative" ? "#b91c1c" : SERIES[0]) : "#cbd5e1"} label="You were" value={r.mentioned ? "Mentioned" : "Not mentioned"} />
+        {r.mentioned && <TipRow label="Rank in the answer" value={r.position ? `#${r.position}` : "Not listed"} />}
+        {r.sentiment && <TipRow label="Tone" value={r.sentiment.replace(/^./, (x) => x.toUpperCase())} />}
+        <TipRow label="Competitors named" value={r.competitors.length} />
+        {r.competitors.length > 0 && <div className="mt-1 text-[11px] text-muted [overflow-wrap:anywhere]">{r.competitors.slice(0, 6).join(", ")}{r.competitors.length > 6 ? ` +${r.competitors.length - 6} more` : ""}</div>}
+      </>}
+    </>
+  );
   return (
-    <button type="button" onClick={() => onOpen?.(r.answer_id)} title={label} aria-label={label}
-      className="inline-flex h-7 min-w-7 items-center justify-center rounded-full px-1 text-[11px] font-semibold tabular-nums focus:outline-none focus:ring-2 focus:ring-primary-500/40">
-      {r.status !== "ok" ? <span className="text-danger">×</span>
-        : r.mentioned ? <span className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 ${tone}`}>{r.position ?? "✓"}</span>
-          : <span className="inline-block h-4 w-4 rounded-full border-2 border-slate-300" />}
-    </button>
+    <span ref={t.ref} className="relative inline-flex">
+      <button type="button" onClick={() => onOpen?.(r.answer_id)} aria-label={label}
+        onPointerMove={(e) => t.show(e, tip)} onPointerLeave={t.hide} onFocus={(e) => t.show(e.currentTarget, tip)} onBlur={t.hide}
+        className="inline-flex h-7 min-w-7 items-center justify-center rounded-full px-1 text-[11px] font-semibold tabular-nums transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-primary-500/40">
+        {r.status !== "ok" ? <span className="text-danger">×</span>
+          : r.mentioned ? <span className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 ${tone}`}>{r.position ?? "✓"}</span>
+            : <span className="inline-block h-4 w-4 rounded-full border-2 border-slate-300" />}
+      </button>
+      {t.tip}
+    </span>
   );
 }
 

@@ -4,6 +4,8 @@ import { Download, RefreshCw } from "lucide-react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Alert, Badge, Button, Card, EmptyState, Input, PageHeader, Select, Spinner } from "../components/ui";
+import { offerEmailFile } from "../components/EmailDialog";
+import { SERIES, TipHead, TipRow, fmtDayLong, useTip } from "../components/viz";
 
 // ------------------------------------------------------------------ types
 type Price = { key: string; input_per_million?: number; output_per_million?: number; per_image?: number; per_second?: number; per_million_chars?: number };
@@ -76,28 +78,46 @@ function query(period: string, from: string, to: string) {
 }
 
 // ------------------------------------------------------------------ daily chart (one series, one axis)
+const METRIC_LABEL = { tokens: "Tokens", cost_usd: "Cost", calls: "Calls" } as const;
+
 function DailyChart({ days, metric }: { days: Day[]; metric: "tokens" | "cost_usd" | "calls" }) {
+  const t = useTip();
   const [hover, setHover] = useState<number | null>(null);
   if (days.length === 0) return <p className="py-8 text-center text-sm text-muted">No AI calls in this period.</p>;
   const vals = days.map((d) => d[metric]);
   const max = Math.max(...vals, metric === "cost_usd" ? 0.01 : 1);
+  const total = vals.reduce((a, v) => a + v, 0);
   const fmt = (v: number) => (metric === "cost_usd" ? usd(v) : num(v));
   const label = (d: string) => new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short" }).format(new Date(`${d}T00:00:00`));
-  const h = days[hover ?? -1];
+  const tipFor = (d: Day) => (
+    <>
+      <TipHead>{fmtDayLong(d.day)}</TipHead>
+      <TipRow color={SERIES[0]} label={METRIC_LABEL[metric]} value={fmt(d[metric])} />
+      {total > 0 && <TipRow label="Share of the period" value={`${((d[metric] / total) * 100).toFixed(1)}%`} />}
+      {metric !== "calls" && <TipRow label="Calls" value={num(d.calls)} />}
+      {metric !== "tokens" && <TipRow label="Tokens" value={num(d.tokens)} />}
+      {metric !== "cost_usd" && <TipRow label="Cost" value={usd(d.cost_usd)} />}
+      {d.list_value_usd !== d.cost_usd && <TipRow label="List value" value={usd(d.list_value_usd)} />}
+    </>
+  );
+  const clear = () => { setHover(null); t.hide(); };
   return (
-    <div className="relative">
-      <div className="mb-1 flex justify-between text-xs text-muted"><span>{fmt(max)}</span>
-        {h && <span className="font-medium text-ink">{label(h.day)}: {fmt(h[metric])}{metric !== "calls" ? ` · ${h.calls} calls` : ""}</span>}</div>
+    <div ref={t.ref} className="relative">
+      <div className="mb-1 flex justify-between text-xs text-muted"><span>{fmt(max)}</span></div>
       <div className="flex h-40 items-end gap-[2px] border-b border-line" role="img"
-        aria-label={`Daily ${metric === "cost_usd" ? "cost" : metric}, ${days.length} days`} onMouseLeave={() => setHover(null)}>
+        aria-label={`Daily ${metric === "cost_usd" ? "cost" : metric}, ${days.length} days`} onPointerLeave={clear}>
         {days.map((d, i) => (
-          <div key={d.day} className="flex h-full min-w-0 max-w-[36px] flex-1 items-end" onMouseEnter={() => setHover(i)}>
-            <div className={`w-full rounded-t-[4px] ${hover === i ? "bg-primary-800" : "bg-primary-600"}`}
+          <div key={d.day} tabIndex={0} aria-label={`${label(d.day)}: ${fmt(d[metric])}`}
+            className="flex h-full min-w-0 max-w-[36px] flex-1 items-end outline-none"
+            onPointerMove={(e) => { setHover(i); t.show(e, tipFor(d)); }}
+            onFocus={(e) => { setHover(i); t.show(e.currentTarget, tipFor(d)); }} onBlur={clear}>
+            <div className={`w-full rounded-t-[4px] transition-opacity ${hover === i ? "bg-primary-800" : "bg-primary-600"} ${hover !== null && hover !== i ? "opacity-50" : ""}`}
               style={{ height: `${Math.max(d[metric] > 0 ? 2 : 0, (d[metric] / max) * 100)}%` }} />
           </div>
         ))}
       </div>
       <div className="mt-1 flex justify-between text-xs text-muted"><span>{label(days[0].day)}</span><span>{label(days[days.length - 1].day)}</span></div>
+      {t.tip}
     </div>
   );
 }
@@ -108,12 +128,14 @@ function csv(rows: UsageRow[]) {
   const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const lines = rows.map((r) => [r.provider_label, r.integration, r.model, KIND_SHORT[r.kind] ?? r.kind, r.calls, r.failures, r.input_tokens,
     r.output_tokens, r.units, r.cost_usd, r.list_value_usd, SOURCE[r.price_source]?.label, r.tasks.join("; "), r.first_used, r.last_used].map(esc).join(","));
-  const blob = new Blob([[head.join(","), ...lines].join("\n")], { type: "text/csv" });
+  const content = [head.join(","), ...lines].join("\n");
+  const blob = new Blob([content], { type: "text/csv" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = `ai-usage-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
+  offerEmailFile({ filename: a.download, mime: "text/csv", content });
 }
 
 // ------------------------------------------------------------------ the report

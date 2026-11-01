@@ -55,7 +55,7 @@ export default function BrandLook({ canEdit }: { canEdit: boolean }) {
   const err = (save.error || up.error) as Error | null;
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
       <div className="space-y-6">
         <Card>
           <h2 className="font-semibold">Colours</h2>

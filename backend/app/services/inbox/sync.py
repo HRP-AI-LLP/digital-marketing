@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Post, SocialAccount, User
 from app.models.inbox import InboxItem, InboxSettings
-from app.services.inbox import bluesky, mastodon, meta, sentiment, threads, youtube
+from app.services.inbox import bluesky, linkedin, mastodon, meta, sentiment, threads, youtube
 from app.services.inbox.base import (
     CAPABILITIES, LISTEN_REPLY_PLATFORMS, SYNC_DAYS, SYNC_PLATFORMS, CollectContext, InboxPermissionError, PostRef,
     clip, parse_time,
@@ -22,11 +22,11 @@ log = logging.getLogger("inbox")
 
 COLLECTORS = {
     "facebook_page": meta.collect_facebook, "instagram": meta.collect_instagram, "threads": threads.collect,
-    "youtube": youtube.collect, "bluesky": bluesky.collect, "mastodon": mastodon.collect,
+    "youtube": youtube.collect, "bluesky": bluesky.collect, "mastodon": mastodon.collect, "linkedin_org": linkedin.collect,
 }
 REPLIERS = {
     "facebook_page": meta.reply_facebook, "instagram": meta.reply_instagram, "threads": threads.reply,
-    "youtube": youtube.reply, "bluesky": bluesky.reply, "mastodon": mastodon.reply,
+    "youtube": youtube.reply, "bluesky": bluesky.reply, "mastodon": mastodon.reply, "linkedin_org": linkedin.reply,
 }
 LIKERS = {"facebook_page": meta.like_facebook, "bluesky": bluesky.like, "mastodon": mastodon.like}
 
@@ -140,6 +140,12 @@ async def notify_new(session: AsyncSession, org_id: uuid.UUID, items: list[Inbox
             sent["urgent"] = len(urgent)
         except Exception:  # noqa: BLE001
             log.exception("inbox urgent notification failed")
+        from app.services import webhooks
+
+        await webhooks.emit(org_id, "inbox.new_urgent", lambda: {"count": len(urgent), "title": title, "items": [
+            {"id": i.id, "kind": i.kind, "platform": i.platform, "sentiment": i.sentiment, "priority": i.priority,
+             "author": i.author_name, "text": (i.text or "")[:1000], "url": i.url} for i in urgent[:20]],
+            "app_url": webhooks.app_link(link)})
     pending = dict(state.get("pending_digest") or {})
     for i in items:
         if i.is_own:
@@ -224,7 +230,7 @@ def _account_state(settings: InboxSettings, acc: SocialAccount) -> dict:
     return dict(((settings.state or {}).get("accounts") or {}).get(str(acc.id)) or {})
 
 
-async def send_reply(session: AsyncSession, org_id: uuid.UUID, item: InboxItem, text: str, user: User) -> InboxItem:
+async def send_reply(session: AsyncSession, org_id: uuid.UUID, item: InboxItem, text: str, user: User | None) -> InboxItem:
     """Send a reply through the platform. Records the outcome on the item (and our reply as its own item).
     The caller commits, also after an InboxActionError (the error is recorded on the item)."""
     ok, why = can_reply(item)
@@ -253,7 +259,7 @@ async def send_reply(session: AsyncSession, org_id: uuid.UUID, item: InboxItem, 
         item.reply_error = f"Couldn't reach the platform ({type(e).__name__}). Check whether the reply went out first."
         raise InboxActionError(item.reply_error, 502)
     now = _now()
-    item.status, item.reply_text, item.replied_at, item.replied_by = "replied", text, now, user.id
+    item.status, item.reply_text, item.replied_at, item.replied_by = "replied", text, now, user.id if user else None
     item.reply_external_id, item.reply_error = ext_id, None
     st = _account_state(settings, acc)
     if st.get("reply_missing_permission"):
@@ -270,7 +276,8 @@ async def send_reply(session: AsyncSession, org_id: uuid.UUID, item: InboxItem, 
                 parent_external_id=item.external_id, thread_key=item.thread_key or item.external_id, parent_id=item.id,
                 url=url, author_name=acc.name, author_handle=acc.handle, author_avatar_url=acc.avatar_url,
                 author_url=acc.profile_url, text=text, published_at=now, is_own=True, status="read",
-                replied_by=user.id, ai_suggestions=[], raw={"sent_from_inbox": True},
+                replied_by=user.id if user else None, ai_suggestions=[],
+                raw={"sent_from_inbox": True, **({"auto_reply": True} if user is None else {})},
             )
             session.add(own)
     await session.flush()

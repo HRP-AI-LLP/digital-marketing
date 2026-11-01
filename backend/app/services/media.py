@@ -1006,7 +1006,7 @@ def _script(post: Post, meta: dict) -> list[dict]:
 
 
 def music_files() -> list[Path]:
-    d = storage.root() / "music"
+    d = storage.local_dir("music")
     if not d.exists():
         return []
     return sorted(p for p in d.iterdir() if p.suffix.lower() in (".mp3", ".m4a", ".aac", ".wav", ".ogg") and p.is_file())
@@ -1075,7 +1075,7 @@ def _three_scene_for(text: str) -> str:
 
 
 async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: tuple[int, int]) -> MediaAsset:
-    """Short video (YouTube Shorts / Reels / TikTok-style): hook in the first 2 s, 4-8 scenes paced by the
+    """Short vertical video (YouTube Shorts / Instagram Reels style): hook in the first 2 s, 4-8 scenes paced by the
     voice-over, footage (stock clip / AI image / 3D scene / branded motion background) with Ken Burns and
     varied transitions, kinetic captions and word-by-word subtitles synced to the voice, a progress bar,
     and an animated end card with the logo and call to action."""
@@ -1201,7 +1201,7 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
         music = None
         if meta.get("music") != "none":
             files = music_files()
-            if meta.get("music") and (storage.root() / "music" / Path(str(meta["music"])).name).exists():
+            if meta.get("music") and (storage.local_dir("music") / Path(str(meta["music"])).name).exists():
                 music = storage.root() / "music" / Path(str(meta["music"])).name
             elif files:
                 music = files[int(hashlib.sha1(str(post.id or post.title).encode()).hexdigest(), 16) % len(files)]

@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Bot, CheckCircle2, CircleAlert, FileText, Gauge, ShieldAlert } from "lucide-react";
 import { Card, formatDate } from "../../components/ui";
+import { TipHead, TipRow, useTip } from "../../components/viz";
 import { ScoreRing, TrendChart, shortDay } from "../analytics/vizkit";
 import { Rating, SevBadge } from "./shared";
-import { SEV_DOT, SEV_LABEL, fmtMs, scoreTone, type Overview, type RunFull, type Severity, type StrategySummary } from "./types";
+import { SEV_DOT, SEV_LABEL, fmtMs, scoreTone, type Category, type Overview, type RunFull, type Severity, type StrategySummary } from "./types";
 
 type Go = (tab: "issues" | "pages", opts?: { severity?: Severity; category?: string; check?: string }) => void;
 
@@ -90,30 +91,64 @@ export default function OverviewTab({ o, run, go }: { o: Overview; run: RunFull;
         <AiCard run={run} />
         <Card>
           <h3 className="mb-3 font-semibold">Issues by area</h3>
-          <ul className="space-y-2">
-            {run.categories.filter((c) => c.checks > 0).map((c) => {
-              const total = c.error + c.warning + c.notice;
-              return (
-                <li key={c.id}>
-                  <button onClick={() => go("issues", { category: c.id })} className="w-full text-left">
-                    <div className="flex items-baseline justify-between gap-3 text-sm">
-                      <span className="hover:text-primary-700">{c.label}</span>
-                      <span className="text-xs tabular-nums text-muted">{c.error} errors · {c.warning} warnings · {c.notice} notices</span>
-                    </div>
-                    <div className="mt-1 flex h-1.5 overflow-hidden rounded-full bg-slate-100" aria-hidden>
-                      {(["error", "warning", "notice"] as Severity[]).map((s) => (
-                        <div key={s} className={SEV_DOT[s]} style={{ width: `${(c[s] / Math.max(1, total)) * 100}%` }} />
-                      ))}
-                    </div>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <IssuesByArea cats={run.categories.filter((c) => c.checks > 0)} go={go} />
         </Card>
       </section>
 
       <SiteFiles run={run} />
+    </div>
+  );
+}
+
+const SEV_COLOR: Record<Severity, string> = { error: "#b91c1c", warning: "#f59e0b", notice: "#0f8dde" };
+const SEVS: Severity[] = ["error", "warning", "notice"];
+
+/** One stacked bar per area; hovering a segment (or focusing the row) shows the counts and shares. */
+function IssuesByArea({ cats, go }: { cats: Category[]; go: Go }) {
+  const t = useTip();
+  const [hover, setHover] = useState<string | null>(null);
+  const tipFor = (c: Category, focus?: Severity) => {
+    const total = c.error + c.warning + c.notice;
+    return (
+      <>
+        <TipHead sub={`${c.checks} ${c.checks === 1 ? "check" : "checks"} in this area`}>{c.label}</TipHead>
+        {SEVS.filter((sv) => !focus || sv === focus).map((sv) => (
+          <TipRow key={sv} color={SEV_COLOR[sv]} label={SEV_LABEL[sv]} value={`${c[sv]}${total ? ` (${Math.round((c[sv] / total) * 100)}%)` : ""}`} />
+        ))}
+        <TipRow label="All issues in this area" value={total} strong />
+      </>
+    );
+  };
+  const clear = () => { setHover(null); t.hide(); };
+  return (
+    <div ref={t.ref} className="relative">
+      <ul className="space-y-2">
+        {cats.map((c) => {
+          const total = c.error + c.warning + c.notice;
+          return (
+            <li key={c.id}>
+              <button onClick={() => go("issues", { category: c.id })} className="w-full text-left"
+                onFocus={(e) => { setHover(`${c.id}`); t.show(e.currentTarget, tipFor(c)); }} onBlur={clear}>
+                <div className="flex items-baseline justify-between gap-3 text-sm">
+                  <span className="hover:text-primary-700">{c.label}</span>
+                  <span className="text-xs tabular-nums text-muted">{c.error} errors · {c.warning} warnings · {c.notice} notices</span>
+                </div>
+                <div className="mt-1 flex h-1.5 overflow-hidden rounded-full bg-slate-100" aria-hidden onPointerLeave={clear}>
+                  {SEVS.map((sv) => {
+                    const k = `${c.id}:${sv}`;
+                    const dim = hover !== null && hover !== k && hover !== c.id;
+                    return (
+                      <div key={sv} className={`${SEV_DOT[sv]} transition-opacity`} style={{ width: `${(c[sv] / Math.max(1, total)) * 100}%`, opacity: dim ? 0.4 : 1 }}
+                        onPointerMove={(e) => { setHover(k); t.show(e, tipFor(c, sv)); }} />
+                    );
+                  })}
+                </div>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {t.tip}
     </div>
   );
 }

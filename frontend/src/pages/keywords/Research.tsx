@@ -12,6 +12,9 @@ import {
 } from "./shared";
 import type { KwList, KwRow, Report } from "./types";
 
+const monthLabel = (ym: string) =>
+  /^\d{4}-\d{2}$/.test(ym) ? new Intl.DateTimeFormat("en-IN", { month: "short", year: "numeric" }).format(new Date(`${ym}-01T00:00:00`)) : ym;
+
 const MODES = [
   { id: "suggestions", label: "Keywords that contain my words" },
   { id: "related", label: "Related searches" },
@@ -112,7 +115,7 @@ export function KeywordTable({ rows, selected, setSelected, showPosition }: {
               {hasKd && <td className="px-3 py-2"><Kd v={r.kd} /></td>}
               {hasCpc && <td className="px-3 py-2 text-right tabular-nums">{r.cpc !== null ? usd(r.cpc) : "—"}</td>}
               <td className="px-3 py-2"><IntentBadge intent={r.intent} guessed={r.intent_guessed} /></td>
-              {hasTrend && <td className="px-3 py-2"><Sparkline values={r.trend} label={`Monthly searches: ${r.trend.join(", ")}`} /></td>}
+              {hasTrend && <td className="px-3 py-2"><Sparkline values={r.trend} labels={r.trend_months.map(monthLabel)} title="Searches" label={`Monthly searches: ${r.trend.join(", ")}`} /></td>}
               {(hasGsc || showPosition) && (
                 <td className="whitespace-nowrap px-3 py-2 text-xs tabular-nums text-muted">
                   {showPosition && r.position ? <span className="text-sm text-ink">#{r.position}</span>
@@ -194,7 +197,7 @@ export function ResearchTab() {
       <DataNotice o={o.data} />
       {can("keywords.manage") && (
         <Card>
-          <form className="grid gap-4 lg:grid-cols-[1fr_250px_170px_auto] lg:items-start" onSubmit={(e) => { e.preventDefault(); if (seedList.length) start.mutate(); }}>
+          <form className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_250px_170px_auto] lg:items-start" onSubmit={(e) => { e.preventDefault(); if (seedList.length) start.mutate(); }}>
             <Field label="Seed keywords or a website" hint="Up to 5, separated by commas. Type a domain (like example.com) to see what it ranks for.">
               <Input value={seeds} onChange={(e) => setSeeds(e.target.value)} placeholder="hrms software, payroll software" list="kw-recent" />
             </Field>

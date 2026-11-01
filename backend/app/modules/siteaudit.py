@@ -77,6 +77,13 @@ async def _after(org_id: uuid.UUID, run: SiteAuditRun, result: dict) -> None:
     if prev is not None:
         parts.append(f"{result['new_issues']} new and {result['fixed_issues']} fixed since the last audit.")
     await _notify(org_id, "siteaudit_ready", f"Site audit finished: health {score}/100", " ".join(parts))
+    from app.services import webhooks
+
+    await webhooks.emit(org_id, "siteaudit.finished", lambda: {
+        "run_id": run.id, "score": score, "previous_score": prev, "pages": result.get("pages"),
+        "errors": result.get("errors"), "warnings": result.get("warnings"), "notices": result.get("notices"),
+        "new_issues": result.get("new_issues"), "fixed_issues": result.get("fixed_issues"),
+        "app_url": webhooks.app_link(LINK)})
     threshold = int(cfg.get("drop_threshold") or svc.DEFAULTS["drop_threshold"])
     if prev is not None and score is not None and prev - score >= threshold:
         await _notify(org_id, "siteaudit_drop", f"Website health dropped from {prev} to {score}",

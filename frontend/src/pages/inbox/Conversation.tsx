@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -11,6 +11,7 @@ import {
   Avatar, KindChip, PlatformMark, SentimentChip, UrgentChip, ago, openLabel, type Detail, type InboxItem, type Person,
   type Sentiment,
 } from "./shared";
+import { SavedRepliesPicker } from "./SavedReplies";
 
 function Message({ m, highlight }: { m: InboxItem; highlight: boolean }) {
   const own = m.is_own;
@@ -20,11 +21,12 @@ function Message({ m, highlight }: { m: InboxItem; highlight: boolean }) {
       <div className={`min-w-0 max-w-[85%] ${own ? "items-end text-right" : ""} flex flex-col`}>
         <div className={`flex flex-wrap items-baseline gap-x-2 text-xs text-muted ${own ? "justify-end" : ""}`}>
           <span className="font-semibold text-ink">{own ? "You" : m.author.name || m.author.handle}</span>
+          {own && m.auto_sent && <span className="inline-flex items-center gap-0.5 rounded bg-secondary-50 px-1.5 py-0.5 text-[10px] font-semibold text-secondary-800"><Sparkles size={10} />AI auto-reply</span>}
           {!own && m.author.handle && m.author.handle !== m.author.name && <span>{m.author.handle.startsWith("@") ? m.author.handle : `@${m.author.handle}`}</span>}
           <span>{ago(m.published_at || m.created_at)}</span>
         </div>
         <div className={`mt-1 whitespace-pre-line break-words rounded-2xl px-3.5 py-2 text-left text-[14px] leading-relaxed ${
-          own ? "rounded-tr-md bg-gradient-to-br from-blue-700 to-cyan-600 text-white"
+          own ? "rounded-tr-md bg-gradient-to-br from-grad1 to-grad2 text-white"
             : highlight ? "rounded-tl-md bg-primary-50 ring-2 ring-primary-500/30" : "rounded-tl-md bg-slate-100"
         }`}>
           {m.title && <div className="mb-1 font-semibold">{m.title}</div>}
@@ -50,8 +52,23 @@ export default function Conversation({ id, onBack, people }: { id: string; onBac
   const canAct = can("inbox.reply");
   const [text, setText] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const caret = useRef<[number, number] | null>(null);
   const q = useQuery({ queryKey: ["inbox-item", id], queryFn: () => api<Detail>(`/inbox/items/${id}`) });
-  useEffect(() => { setText(""); setNotice(null); }, [id]);
+  useEffect(() => { setText(""); setNotice(null); caret.current = null; }, [id]);
+  const draft = q.data?.item.auto_reply?.state === "drafted" ? q.data.item.auto_reply.text ?? "" : "";
+  useEffect(() => { if (draft) setText((t) => t || draft); }, [draft, id]);
+  const discard = useMutation({
+    mutationFn: () => api<Detail>(`/inbox/items/${id}/draft/discard`, { method: "POST" }),
+    onSuccess: (d) => { setText(""); refresh(d); },
+  });
+  const addEmoji = (e: string) => {
+    const el = document.getElementById("inbox-reply") as HTMLTextAreaElement | null;
+    const [start, end] = caret.current && caret.current[1] <= text.length ? caret.current : [text.length, text.length];
+    const before = text.slice(0, start), after = text.slice(end);
+    const next = before + (before && !/\s$/.test(before) ? " " : "") + e + after;
+    setText(next);
+    requestAnimationFrame(() => { el?.focus(); const pos = next.length - after.length; el?.setSelectionRange(pos, pos); caret.current = [pos, pos]; });
+  };
 
   const refresh = (d?: Detail) => {
     if (d) qc.setQueryData(["inbox-item", id], d);
@@ -71,6 +88,20 @@ export default function Conversation({ id, onBack, people }: { id: string; onBac
     mutationFn: () => api<{ suggestions: string[] }>(`/inbox/items/${id}/suggest`, { method: "POST" }),
     onSuccess: (r) => qc.setQueryData<Detail>(["inbox-item", id], (d) => d && { ...d, item: { ...d.item, ai_suggestions: r.suggestions } }),
   });
+  const insertSaved = (snippet: string, note: string | null) => {
+    const el = document.getElementById("inbox-reply") as HTMLTextAreaElement | null;
+    const [start, end] = caret.current && caret.current[1] <= text.length ? caret.current : [text.length, text.length];
+    const before = text.slice(0, start), after = text.slice(end);
+    const glue = before && !/\s$/.test(before) ? " " : "";
+    const next = before + glue + snippet + after;
+    setText(next);
+    setNotice(note);
+    requestAnimationFrame(() => {
+      const pos = (before + glue + snippet).length;
+      el?.focus();
+      el?.setSelectionRange(pos, pos);
+    });
+  };
   const like = useMutation({
     mutationFn: () => api<{ liked_at: string }>(`/inbox/items/${id}/like`, { method: "POST" }),
     onSuccess: (r) => qc.setQueryData<Detail>(["inbox-item", id], (d) => d && { ...d, item: { ...d.item, liked_at: r.liked_at } }),
@@ -190,6 +221,19 @@ export default function Conversation({ id, onBack, people }: { id: string; onBac
           <p className="text-sm text-muted">You can read the inbox. Ask an administrator for the inbox reply permission to answer.</p>
         ) : (
           <form onSubmit={(e) => { e.preventDefault(); if (text.trim() && !over) reply.mutate(); }}>
+            {it.auto_reply?.state === "drafted" && (
+              <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-secondary-200 bg-accent-tint/60 px-3 py-2 text-xs text-slate-700">
+                <Sparkles size={14} className="text-secondary-600" />
+                <span className="flex-1">The AI drafted this reply. Edit it if you like, then press <b>Send reply</b>.</span>
+                <button type="button" onClick={() => discard.mutate()} className="font-medium text-muted underline hover:text-ink">Discard draft</button>
+              </div>
+            )}
+            {it.auto_reply?.state === "skipped" && it.auto_reply.reason === "needs a person" && !it.reply_text && (
+              <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">Left for you: the AI doesn't answer complaints or urgent comments by itself.</div>
+            )}
+            {it.auto_reply?.state === "failed" && it.auto_reply.reason && !it.reply_text && (
+              <div className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-muted">AI reply wasn't sent: {it.auto_reply.reason}</div>
+            )}
             {it.ai_suggestions.length > 0 && (
               <div className="mb-3">
                 <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted"><Sparkles size={13} className="text-secondary-600" /> Suggested replies — pick one to edit</div>
@@ -209,8 +253,16 @@ export default function Conversation({ id, onBack, people }: { id: string; onBac
             <label htmlFor="inbox-reply" className="sr-only">Your reply</label>
             <Textarea id="inbox-reply" rows={3} value={text} placeholder={`Reply to ${it.author.name || "them"} on ${it.platform_label}…`}
               onChange={(e) => { setText(e.target.value); setNotice(null); }}
+              onSelect={(e) => { caret.current = [e.currentTarget.selectionStart, e.currentTarget.selectionEnd]; }}
               onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && text.trim() && !over) reply.mutate(); }} />
             <div className="mt-2 flex flex-wrap items-center gap-2">
+              <SavedRepliesPicker itemId={it.id} platform={it.platform} onInsert={insertSaved} />
+              <span className="flex items-center gap-0.5" aria-label="Add an emoji">
+                {["🙏", "😊", "🙌", "🚀", "💡", "🎉", "👏", "❤️", "👍", "✨"].map((e) => (
+                  <button key={e} type="button" title={`Add ${e}`} onClick={() => addEmoji(e)}
+                    className="grid h-7 w-7 place-items-center rounded-md text-base hover:bg-slate-100">{e}</button>
+                ))}
+              </span>
               <Button type="button" variant="secondary" disabled={suggest.isPending} onClick={() => suggest.mutate()}>
                 <Sparkles size={15} className="text-secondary-600" />
                 {suggest.isPending ? "Writing suggestions…" : it.ai_suggestions.length ? "New suggestions" : "Suggest replies"}

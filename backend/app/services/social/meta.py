@@ -320,6 +320,21 @@ async def _wait_container(c: httpx.AsyncClient, container: str, tok: str, what: 
     raise PublishError(f"{what} is still processing the media. It will be retried.", retryable=True)
 
 
+FETCH_RETRY_SECONDS = (10, 30)
+
+
+async def _create_container(c: httpx.AsyncClient, ig: str, data: dict, what: str) -> dict:
+    """Instagram downloads image_url/video_url while this call runs. Its downloader sometimes gives up on a link
+    that works ("could not be fetched"), so try again a couple of times before calling it a failure."""
+    for wait in (*FETCH_RETRY_SECONDS, None):
+        r = await c.post(f"{GRAPH}/{ig}/media", data=data)
+        if r.is_success or wait is None or "could not be fetched" not in common.error_message(r).lower():
+            return check(r, what)
+        common.log.info("%s: Instagram couldn't fetch the media yet; trying again in %ss", what, wait)
+        await common.sleep(wait)
+    return check(r, what)
+
+
 async def _publish_instagram(session, post: Post, account: SocialAccount, media: list[MediaAsset], tok: str):
     ig = account.external_id
     caption = common.compose_text(post)
@@ -338,7 +353,7 @@ async def _publish_instagram(session, post: Post, account: SocialAccount, media:
                     data.update(media_type="VIDEO", video_url=url)
                 else:
                     data["image_url"] = url
-                cid = str(check(await c.post(f"{GRAPH}/{ig}/media", data=data), "Instagram carousel item")["id"])
+                cid = str((await _create_container(c, ig, data, "Instagram carousel item"))["id"])
                 if common.is_video(m):
                     await _wait_container(c, cid, tok)
                 children.append(cid)
@@ -352,7 +367,7 @@ async def _publish_instagram(session, post: Post, account: SocialAccount, media:
             data = {"image_url": url, "caption": caption, "access_token": tok}
             if media[0].alt_text:
                 data["alt_text"] = media[0].alt_text[:1000]
-        container = str(check(await c.post(f"{GRAPH}/{ig}/media", data=data), "Instagram media")["id"])
+        container = str((await _create_container(c, ig, data, "Instagram media"))["id"])
         await _wait_container(c, container, tok)
         mid = str(check(await c.post(f"{GRAPH}/{ig}/media_publish", data={"creation_id": container, "access_token": tok}),
                         "Instagram publish")["id"])
@@ -390,20 +405,65 @@ async def fetch_metrics(session, post: Post, account: SocialAccount) -> dict | N
             return common.metrics({"media": base, "insights": ins}, likes=base.get("like_count"),
                                   comments=base.get("comments_count"), reach=ins.get("reach"), saves=ins.get("saved"),
                                   shares=ins.get("shares"), impressions=ins.get("views"), video_views=ins.get("views"))
-        base = check(await c.get(f"{GRAPH}/{post.external_id}", params={
-            "fields": "shares,comments.summary(true).limit(0),reactions.summary(true).limit(0)", "access_token": tok}),
-            "Facebook post")
+        target, video = post.external_id, {}
+        if _is_fb_video(post):
+            # Videos and reels are stored by their video id; their Page post (shares, reactions, insights) has its
+            # own id, and the video itself carries the view counts.
+            video = await _fb_video_stats(c, post.external_id, tok)
+            if video.get("post_id"):
+                pid = str(video["post_id"])
+                target = pid if "_" in pid else f"{account.external_id}_{pid}"
+        base = {}
+        try:
+            base = check(await c.get(f"{GRAPH}/{target}", params={
+                "fields": "shares,comments.summary(true).limit(0),reactions.summary(true).limit(0)", "access_token": tok}),
+                "Facebook post")
+        except PublishError:
+            if not video:
+                raise
         ins = {}
         try:
-            d = check(await c.get(f"{GRAPH}/{post.external_id}/insights",
+            d = check(await c.get(f"{GRAPH}/{target}/insights",
                                   params={"metric": FB_POST_INSIGHTS, "access_token": tok}), "Facebook insights")
             ins = {m["name"]: (m.get("values") or [{}])[0].get("value", 0) for m in d.get("data", [])}
         except PublishError:
             pass
+        likes = ((base.get("reactions") or {}).get("summary") or {}).get("total_count")
+        comments = ((base.get("comments") or {}).get("summary") or {}).get("total_count")
         return common.metrics(
-            {"post": base, "insights": ins},
-            likes=((base.get("reactions") or {}).get("summary") or {}).get("total_count"),
-            comments=((base.get("comments") or {}).get("summary") or {}).get("total_count"),
-            shares=(base.get("shares") or {}).get("count"), impressions=ins.get("post_impressions"),
-            reach=ins.get("post_impressions_unique"), clicks=ins.get("post_clicks"),
+            {"post": base, "insights": ins, "video": video},
+            likes=likes if likes is not None else video.get("likes"),
+            comments=comments if comments is not None else video.get("comments"),
+            shares=(base.get("shares") or {}).get("count"),
+            impressions=ins.get("post_impressions") or video.get("impressions"),
+            reach=ins.get("post_impressions_unique") or video.get("reach"), clicks=ins.get("post_clicks"),
+            video_views=video.get("views"),
         )
+
+
+def _is_fb_video(post: Post) -> bool:
+    return "/videos/" in (post.external_url or "") or "/reel/" in (post.external_url or "") or post.post_type in ("video", "animation")
+
+
+async def _fb_video_stats(c, video_id: str, tok: str) -> dict:
+    """Likes, comments, views and the Page post id of a Facebook video or reel ({} when it can't be read)."""
+    out: dict = {}
+    try:
+        v = check(await c.get(f"{GRAPH}/{video_id}", params={
+            "fields": "post_id,likes.summary(true).limit(0),comments.summary(true).limit(0)", "access_token": tok}),
+            "Facebook video")
+        out["post_id"] = v.get("post_id")
+        out["likes"] = ((v.get("likes") or {}).get("summary") or {}).get("total_count")
+        out["comments"] = ((v.get("comments") or {}).get("summary") or {}).get("total_count")
+    except PublishError:
+        return out
+    try:
+        d = check(await c.get(f"{GRAPH}/{video_id}/video_insights", params={
+            "metric": "total_video_views,total_video_impressions,total_video_impressions_unique", "access_token": tok}),
+            "Facebook video insights")
+        vals = {m["name"]: (m.get("values") or [{}])[0].get("value", 0) for m in d.get("data", [])}
+        out.update(views=vals.get("total_video_views"), impressions=vals.get("total_video_impressions"),
+                   reach=vals.get("total_video_impressions_unique"))
+    except PublishError:
+        pass
+    return out

@@ -8,6 +8,7 @@ import { useAuth } from "../../auth/AuthContext";
 import {
   Alert, Badge, Button, Card, Field, Input, Modal, PageHeader, Spinner, StatusBadge, Textarea, formatDate,
 } from "../../components/ui";
+import { HoverTip, SERIES, TipHead, TipRow } from "../../components/viz";
 import { Markdown } from "./Markdown";
 import { JobProgress } from "./NewArticle";
 import { WebsitePanel } from "./WebsitePanel";
@@ -37,9 +38,19 @@ function ScorePanel({ article, dirty }: { article: Article; dirty: boolean }) {
           {article.seo_score}<span className="text-base font-medium text-muted">/100</span>
         </span>
       </div>
-      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100" aria-hidden>
-        <div className="h-full rounded-full bg-gradient-to-r from-primary-600 to-secondary-500" style={{ width: `${article.seo_score}%` }} />
-      </div>
+      <HoverTip block className="group/bar mt-2 py-0.5" label={`SEO score ${article.seo_score} out of 100, ${passing.length} of ${article.seo_checks.length} checks passed`} tip={
+        <>
+          <TipHead sub={dirty ? "From the last save" : undefined}>SEO score</TipHead>
+          <TipRow color={SERIES[0]} label="Score" value={`${article.seo_score} / 100`} />
+          <TipRow label="Checks passed" value={`${passing.length} of ${article.seo_checks.length}`} />
+          <TipRow label="Needs work" value={failing.filter((c) => c.severity !== "warn").length} />
+          <TipRow label="Suggestions" value={failing.filter((c) => c.severity === "warn").length} />
+        </>
+      }>
+        <span className="block h-2 overflow-hidden rounded-full bg-slate-100">
+          <span className="block h-full rounded-full bg-gradient-to-r from-primary-600 to-secondary-500 transition-opacity group-hover/bar:opacity-80" style={{ width: `${article.seo_score}%` }} />
+        </span>
+      </HoverTip>
       {dirty && <p className="mt-2 text-xs text-muted">Save to update the score.</p>}
       <ul className="mt-3 space-y-2 text-sm">
         {[...failing, ...passing].map((c) => (

@@ -149,12 +149,33 @@ async def _test_telegram(cfg: ProviderConfig) -> str:
 async def _test_smtp(cfg: ProviderConfig) -> str:
     import aiosmtplib
 
+    from app.services.notify import smtp_security
+
     sec = decrypt_json(cfg.secrets_enc)
     port = int(sec.get("port") or 587)
-    smtp = aiosmtplib.SMTP(hostname=sec.get("host"), port=port, use_tls=port == 465,
-                           start_tls=port != 465 and str(sec.get("use_tls", "true")).lower() != "false", timeout=20)
-    await smtp.connect()
+    mode = smtp_security(sec)
+    smtp = aiosmtplib.SMTP(hostname=(sec.get("host") or "").strip(), port=port, use_tls=mode == "ssl",
+                           start_tls=mode == "starttls", timeout=20)
+    host = (sec.get("host") or "").strip()
+    try:
+        await smtp.connect()
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"Couldn't connect to {host}:{port} ({mode}): {e}. Check the server, port and security "
+                           "(GoDaddy: smtpout.secureserver.net, 465, ssl).") from e
     if sec.get("username"):
-        await smtp.login(sec.get("username"), sec.get("password") or "")
-    await smtp.quit()
-    return f"Signed in to {sec.get('host')}:{port}."
+        try:
+            await smtp.login(sec.get("username"), sec.get("password") or "")
+        except aiosmtplib.SMTPServerDisconnected as e:
+            raise RuntimeError(
+                f"{host} accepted the connection but hung up when signing in as {sec.get('username')}. That almost "
+                "always means the password is wrong (GoDaddy closes the connection instead of saying so). Re-type the "
+                "mailbox password with Edit, and check you can sign in with it at email.godaddy.com.") from e
+        except aiosmtplib.SMTPAuthenticationError as e:
+            raise RuntimeError(f"Sign-in refused for {sec.get('username')}: {e.message}. Check the username and password "
+                               "(Gmail and Zoho need an app password).") from e
+    try:
+        await smtp.quit()
+    except Exception:  # noqa: BLE001
+        pass
+    return (f"Signed in to {sec.get('host')}:{port} ({mode.upper() if mode != 'none' else 'no encryption'}). "
+            "Send a test email from Settings → Organization → Email to check delivery.")

@@ -69,6 +69,44 @@ Nothing scheduled is ever dropped or marked as missed.
 Downtime is recorded in `downtime_periods`, and the worker heartbeat is in `system_state`. `GET /api/v1/system/status`
 powers the banner.
 
+## Backups and restoring
+
+The worker backs up the database every night (default **02:30**, laptop time; if the laptop was off then, as soon
+as the studio runs again). Platform admins manage it in **Platform → Backups**: see every backup, download one,
+press **Back up now**, and change the settings.
+
+- **Where:** `storage\backups\dm-YYYYMMDD-HHMMSS-daily.dump` (compressed PostgreSQL custom format). The dump is
+  made with `podman exec hrp-dm-postgres pg_dump -U dm_owner -Fc digital_marketing`, or with a local `pg_dump`
+  (PostgreSQL command-line tools) when the container isn't there. Each file is checked before it counts.
+- **How many:** the newest backup of each of the last 14 days plus one per week for 8 weeks (both adjustable).
+- **A second copy:** set *Also copy to* to a folder that OneDrive or Google Drive syncs (for example
+  `C:\Users\you\OneDrive\HRP Backups`), so a backup survives a lost or broken laptop.
+- **Media files:** optionally zip `storage\orgs` (generated and uploaded images and videos, without caches) next to
+  each backup. It can be large, so it's off by default.
+- **Failures** notify platform admins (in the app, and by email or Telegram per their notification settings).
+
+**Restore** (stops the app, asks you to type RESTORE, saves a safety copy of the current database, restores inside
+the container with `pg_restore --clean --if-exists` in one transaction, then starts the studio again):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\restore.ps1                      # newest backup
+powershell -ExecutionPolicy Bypass -File .\restore.ps1 -File storage\backups\dm-20261019-023000-daily.dump -Media
+```
+
+On a new laptop: copy the project folder, run `start.ps1` once (it creates the containers), copy the backup into
+`storage\backups\` (and the same `.env`, which holds the key that decrypts stored passwords and API keys), then run
+`restore.ps1`.
+
+## Sign-in security
+
+- **Two-step sign-in:** Account → Security → *Set up*: scan the QR code with an authenticator app (Google or
+  Microsoft Authenticator, Authy, 1Password…), type the 6-digit code, and keep the 10 one-time recovery codes.
+  After that, signing in asks for a code. Five wrong codes in a row lock the second step for 10 minutes.
+- **Require it for everyone:** Settings → Organization → Sign-in security (Administrators only). Members set it up
+  at their next sign-in. An Administrator can reset it for someone who lost their phone (Users → Edit).
+- **Devices:** Account → Security lists every signed-in device; *Sign out other devices* ends them at once. Signing
+  in from a new device sends an email (when an email sender is set up in Settings → Organization → Email).
+
 ## Layout
 
 ```

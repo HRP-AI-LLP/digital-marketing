@@ -526,7 +526,7 @@ async def delete_source(sid: uuid.UUID, ctx: Context = Depends(require(MANAGE)))
     await ctx.session.commit()
     if path:
         try:
-            storage.abs_path(path).unlink(missing_ok=True)
+            storage.delete(path)
         except (OSError, ValueError):
             pass
 

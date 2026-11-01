@@ -12,8 +12,11 @@ import {
 export type Spec = {
   id: string; kind: string; label: string; style: string; base_url: string; key: boolean; free: string; docs: string;
   examples: string[]; local: boolean; fields: { name: string; label: string; secret: boolean }[];
+  /** False for developer apps of switched-off platforms (TikTok in India): not offered for new setups. */
+  offered?: boolean;
 };
 export type ProviderCfg = {
+  key_count?: number;
   id: string; kind: string; provider: string; name: string; label: string; base_url: string;
   secrets: Record<string, string>; fields: Record<string, string>; settings: Record<string, any>; enabled: boolean;
   monthly_budget_usd: number | null; month_spend_usd: number | null; last_test_ok: boolean | null;
@@ -187,6 +190,10 @@ function ProviderForm({ spec, existing, onClose }: { spec: Spec; existing?: Prov
         <p className="text-sm text-muted">
           {spec.free}{spec.docs && <> · <a className="text-primary-700 underline" href={spec.docs} target="_blank" rel="noreferrer">Get credentials <ExternalLink size={12} className="inline" /></a></>}
         </p>
+        {spec.id === "smtp" && (
+          <SmtpPresets onPick={(p) => setSecrets({ ...secrets, host: p.host, port: p.port, security: p.security,
+            from_email: secrets.from_email || secrets.username || "" })} />
+        )}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Name"><Input required value={name} onChange={(e) => setName(e.target.value)} /></Field>
           {(spec.base_url || spec.id === "custom_openai") && (
@@ -336,6 +343,7 @@ function ProviderRow({ cfg, spec, canManage, statuses }: { cfg: ProviderCfg; spe
               ))}
             </ul>
           )}
+          {spec?.key && !spec.local && <ApiKeys cfg={cfg} canManage={canManage} onChange={refresh} />}
           {result && (
             <p className={`mt-1 text-sm ${result.ok ? "text-emerald-700" : "text-danger"}`}>
               {result.message}{cfg.last_test_at && !test.data && <span className="text-muted"> ({formatDate(cfg.last_test_at)})</span>}
@@ -353,6 +361,60 @@ function ProviderRow({ cfg, spec, canManage, statuses }: { cfg: ProviderCfg; spe
       </div>
       {editing && spec && <ProviderForm spec={spec} existing={cfg} onClose={() => setEditing(false)} />}
     </li>
+  );
+}
+
+type KeyState = { index: number; label: string; masked: string; fingerprint: string; state: string; state_label: string; until: string | null; last_ok_at: string | null };
+
+/** Several accounts / API keys for one provider: when one runs out of credits or hits its limit, the next takes over. */
+function ApiKeys({ cfg, canManage, onChange }: { cfg: ProviderCfg; canManage: boolean; onChange: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [key, setKey] = useState("");
+  const [note, setNote] = useState<string | null>(null);
+  const q = useQuery({ queryKey: ["int-keys", cfg.id], queryFn: () => api<{ keys: KeyState[] }>(`/integrations/providers/${cfg.id}/keys`), enabled: open || (cfg.key_count ?? 1) > 1 });
+  const done = (r: { keys: KeyState[]; note?: string | null }) => { q.refetch(); onChange(); setNote(r.note ?? null); };
+  const add = useMutation({ mutationFn: () => api<{ keys: KeyState[]; note: string | null }>(`/integrations/providers/${cfg.id}/keys`, { method: "POST", json: { key } }),
+    onSuccess: (r) => { setKey(""); done(r); } });
+  const act = useMutation({ mutationFn: ({ fp, op }: { fp: string; op: "main" | "reset" | "remove" }) =>
+    api<{ keys: KeyState[] }>(`/integrations/providers/${cfg.id}/keys/${fp}${op === "remove" ? "" : `/${op}`}`, { method: op === "remove" ? "DELETE" : "POST" }),
+    onSuccess: done });
+  const keys = q.data?.keys ?? [];
+  const count = cfg.key_count ?? 1;
+  return (
+    <div className="mt-2">
+      <button type="button" onClick={() => setOpen(!open)} className="text-sm font-medium text-primary-700 hover:underline">
+        {count > 1 ? `${count} API keys (accounts) · switch automatically` : "Add another account's API key"} {open ? "▴" : "▾"}
+      </button>
+      {(open || count > 1) && keys.length > 0 && (
+        <ul className="mt-2 space-y-1.5 rounded-lg border border-line bg-slate-50/60 p-2 text-sm">
+          {keys.map((k) => (
+            <li key={k.fingerprint} className="flex flex-wrap items-center gap-2">
+              <span className="w-28 shrink-0 text-muted">{k.label}</span>
+              <code className="text-xs" translate="no">{k.masked}</code>
+              <span className={`rounded-full px-2 py-0.5 text-xs ${k.state === "ok" ? "bg-emerald-50 text-emerald-800" : k.state === "cooldown" ? "bg-amber-50 text-amber-800" : "bg-red-50 text-red-700"}`}>
+                {k.state === "ok" ? "Ready" : k.state_label}{k.until ? ` · until ${new Date(k.until).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}
+              </span>
+              {canManage && (
+                <span className="ml-auto flex gap-1">
+                  {k.state !== "ok" && <Button variant="ghost" className="h-7 px-2 text-xs" onClick={() => act.mutate({ fp: k.fingerprint, op: "reset" })}>Try again now</Button>}
+                  {k.index > 0 && <Button variant="ghost" className="h-7 px-2 text-xs" onClick={() => act.mutate({ fp: k.fingerprint, op: "main" })}>Use first</Button>}
+                  {keys.length > 1 && <Button variant="ghost" className="h-7 px-2 text-xs" aria-label={`Remove ${k.label}`} onClick={() => act.mutate({ fp: k.fingerprint, op: "remove" })}><Trash2 size={13} /></Button>}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && canManage && (
+        <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (key.trim()) add.mutate(); }}>
+          <Input type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder={`API key from another ${cfg.label} account`} className="max-w-sm flex-1" />
+          <Button type="submit" variant="secondary" disabled={!key.trim() || add.isPending}>{add.isPending ? "Checking…" : "Add key"}</Button>
+          <span className="w-full text-xs text-muted">Keys are used in order. When one runs out of credits, reaches its daily or rate limit, or stops working, the next one takes over straight away, and the first is tried again once its limit resets.</span>
+        </form>
+      )}
+      {(add.error || act.error) && <p className="mt-1 text-sm text-danger">{((add.error || act.error) as Error).message}</p>}
+      {note && <p className="mt-1 text-sm text-amber-800">{note}</p>}
+    </div>
   );
 }
 
@@ -564,9 +626,38 @@ export default function Integrations() {
       {tab === "routing" && catalog.data && <Routing providers={providers.data ?? []} catalog={catalog.data} statuses={statuses} />}
       {tab === "usage" && <Usage />}
       {picking && group && catalog.data && (
-        <AddPicker specs={catalog.data.providers.filter((s) => group.kinds.includes(s.kind))} onClose={() => setPicking(false)} onPick={(s) => { setPicking(false); setAdding(s); }} />
+        <AddPicker specs={catalog.data.providers.filter((s) => group.kinds.includes(s.kind) && s.offered !== false)} onClose={() => setPicking(false)} onPick={(s) => { setPicking(false); setAdding(s); }} />
       )}
       {adding && <ProviderForm spec={adding} onClose={() => setAdding(null)} />}
+    </div>
+  );
+}
+
+
+// ------------------------------------------------------------------ email presets
+const SMTP_PRESETS = [
+  { id: "godaddy", label: "GoDaddy Professional Email", host: "smtpout.secureserver.net", port: "465", security: "ssl",
+    note: "Username and send-from are your full address (info@hrpai.in); the password is that mailbox's password." },
+  { id: "godaddy365", label: "Microsoft 365 from GoDaddy", host: "smtp.office365.com", port: "587", security: "starttls",
+    note: "First turn on SMTP authentication for this mailbox in GoDaddy's Email & Office Dashboard." },
+  { id: "google", label: "Google Workspace / Gmail", host: "smtp.gmail.com", port: "587", security: "starttls",
+    note: "Use an app password (Google account → Security → App passwords), not your normal password." },
+  { id: "zoho", label: "Zoho Mail (India)", host: "smtp.zoho.in", port: "465", security: "ssl", note: "Use an app-specific password if two-factor sign-in is on." },
+  { id: "outlook", label: "Outlook.com / Hotmail", host: "smtp-mail.outlook.com", port: "587", security: "starttls", note: "" },
+];
+
+function SmtpPresets({ onPick }: { onPick: (p: { host: string; port: string; security: string }) => void }) {
+  const [id, setId] = useState("");
+  const p = SMTP_PRESETS.find((x) => x.id === id);
+  return (
+    <div className="rounded-lg border border-line bg-primary-50/40 p-3">
+      <Field label="Quick setup: which email provider?">
+        <Select value={id} onChange={(e) => { setId(e.target.value); const x = SMTP_PRESETS.find((y) => y.id === e.target.value); if (x) onPick(x); }}>
+          <option value="">Choose to fill in the server settings…</option>
+          {SMTP_PRESETS.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
+        </Select>
+      </Field>
+      {p?.note && <p className="mt-2 text-sm text-muted">{p.note}</p>}
     </div>
   );
 }

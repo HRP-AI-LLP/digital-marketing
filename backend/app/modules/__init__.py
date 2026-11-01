@@ -17,6 +17,7 @@ MODULES = [
     "app.modules.inbox",
     "app.modules.research",
     "app.modules.presence", "app.modules.aivis", "app.modules.listening", "app.modules.siteaudit", "app.modules.keywords", "app.modules.networks",
+    "app.modules.webhooks", "app.modules.scheduling", "app.modules.experiments", "app.modules.security",
 ]
 
 

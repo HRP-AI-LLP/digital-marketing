@@ -138,7 +138,7 @@ export default function PromptsTab({ brandTerms, initialQuery = "" }: { brandTer
     <div className="space-y-5">
       {canEdit && (
         <form onSubmit={onAdd} className="rounded-xl border border-line bg-surface p-4">
-          <div className="grid gap-2 md:grid-cols-[1fr_200px_auto_auto]">
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_200px_auto_auto]">
             <Input aria-label="New prompt" placeholder="A question your buyers ask, e.g. “best HRMS software for mid-size companies in India”"
               value={text} onChange={(e) => setText(e.target.value)} maxLength={300} />
             <Input aria-label="Topic" placeholder="Topic (optional)" list="aivis-topics" value={topic} onChange={(e) => setTopic(e.target.value)} maxLength={60} />

@@ -138,9 +138,16 @@ if ($code -ne 0) { Fail "Database migration failed." }
 
 # ---------------------------------------------------------------- frontend
 Step "Preparing the web app (Node)"
+$lock = Get-Item "frontend\package-lock.json" -ErrorAction SilentlyContinue
+$stamp = Get-Item "frontend\node_modules\.package-lock.json" -ErrorAction SilentlyContinue
 if (-not (Test-Path "frontend\node_modules")) {
   Push-Location frontend; npm ci; $code = $LASTEXITCODE; Pop-Location
   if ($code -ne 0) { Fail "Installing web packages failed." }
+} elseif ($lock -and (-not $stamp -or $lock.LastWriteTime -gt $stamp.LastWriteTime)) {
+  # an update added or changed web packages (for example the 3D views): install just what changed
+  Write-Host "  New web packages in this update, installing them..."
+  Push-Location frontend; npm install --no-audit --no-fund; $code = $LASTEXITCODE; Pop-Location
+  if ($code -ne 0) { Fail "Installing the new web packages failed. Check the internet connection and run .\start.ps1 again." }
 }
 
 # ---------------------------------------------------------------- run
@@ -166,7 +173,17 @@ $web = Start-Process -FilePath "npm.cmd" -ArgumentList "run", "dev" -WorkingDire
   -WindowStyle Hidden -PassThru -RedirectStandardOutput "$Logs\web.log" -RedirectStandardError "$Logs\web.err.log"
 # Optional public HTTPS address (Cloudflare Tunnel) for sign-in callbacks and Instagram/Threads media links.
 $tunnel = $null
-if ($env:CLOUDFLARE_TUNNEL_TOKEN) {
+$tunnelElsewhere = Get-Process cloudflared -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($tunnelElsewhere -and $env:PUBLIC_BASE_URL) {
+  # Only rely on it if the public address actually answers (a tunnel started by hand can be dead after sleep).
+  try { $null = Invoke-WebRequest "$($env:PUBLIC_BASE_URL)/api/v1/health" -UseBasicParsing -TimeoutSec 10 } catch { $tunnelElsewhere = $null }
+}
+if ($tunnelElsewhere) {
+  # Already running (for example installed as a Windows service with "cloudflared service install"): don't start a second one.
+  Write-Host "Cloudflare Tunnel is already running on this laptop (PID $($tunnelElsewhere.Id)); using it."
+} elseif ($env:CLOUDFLARE_TUNNEL_TOKEN -match '^[0-9a-fA-F-]{36}$') {
+  Write-Host "[!] CLOUDFLARE_TUNNEL_TOKEN in .env looks like a tunnel ID, not a token. The token is the long text starting with 'eyJ' (Cloudflare Zero Trust -> Networks -> Tunnels -> your tunnel -> Configure)." -ForegroundColor Yellow
+} elseif ($env:CLOUDFLARE_TUNNEL_TOKEN) {
   $cf = Join-Path $Root "tools\cloudflared.exe"
   if (-not (Test-Path $cf)) {
     Write-Host "Downloading cloudflared (first time only)..."
@@ -200,6 +217,8 @@ Write-Host "  API docs: http://127.0.0.1:$($env:API_PORT)/api/docs"
 Write-Host "  Worker:   runs scheduled posting, crawling and media jobs (log: storage\logs\worker.err.log)"
 if ($tunnel) {
   Write-Host "  HTTPS:    $($env:PUBLIC_BASE_URL) (Cloudflare Tunnel; sign-in callbacks and media links only; log: storage\logs\tunnel.err.log)"
+} elseif ($tunnelElsewhere) {
+  Write-Host "  HTTPS:    $($env:PUBLIC_BASE_URL) (Cloudflare Tunnel already running on this laptop)"
 } elseif ($env:CLOUDFLARE_TUNNEL_TOKEN) {
   Write-Host "  HTTPS:    tunnel NOT running - Facebook, Instagram and Threads sign-in will fail. See storage\logs\tunnel.err.log" -ForegroundColor Yellow
 }

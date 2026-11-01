@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { CheckCircle2, Trash2, X } from "lucide-react";
 import { useJob, type Job } from "../../api/hooks";
 import { Alert, Badge, Button, Input, Spinner } from "../../components/ui";
+import { HoverTip, SERIES, TipHead, TipRow } from "../../components/viz";
 
 // ------------------------------------------------------------------ background tasks shared across tabs
 type Tracked = Record<string, string>; // key → job id
@@ -71,12 +72,23 @@ export function ErrorText({ error }: { error: unknown }) {
 }
 
 // ------------------------------------------------------------------ small building blocks
-export function ScoreBar({ value, max = 100, label }: { value: number; max?: number; label?: string }) {
+/** A 0–max score bar with a hover / focus popup: the exact score, its share of the maximum, and any extra rows. */
+export function ScoreBar({ value, max = 100, label, unit = "", detail }: { value: number; max?: number; label?: string; unit?: string; detail?: ReactNode }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
+  const tip = (
+    <>
+      <TipHead>{label ?? "Score"}</TipHead>
+      <TipRow color={SERIES[0]} label="Score" value={unit ? `${value}${unit}` : `${value} / ${max}`} />
+      {!unit && max !== 100 && <TipRow label="Of maximum" value={`${Math.round(pct)}%`} />}
+      {detail}
+    </>
+  );
   return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100" role="meter" aria-valuemin={0} aria-valuemax={max} aria-valuenow={value} aria-label={label}>
-      <div className="h-full rounded-full bg-gradient-to-r from-primary-600 to-secondary-500" style={{ width: `${pct}%` }} />
-    </div>
+    <HoverTip block tip={tip} label={label ? `${label}: ${value}${unit || ` of ${max}`}` : undefined} className="group/bar w-full py-0.5">
+      <span className="block h-1.5 w-full overflow-hidden rounded-full bg-slate-100" role="meter" aria-valuemin={0} aria-valuemax={max} aria-valuenow={value}>
+        <span className="block h-full rounded-full bg-gradient-to-r from-primary-600 to-secondary-500 transition-opacity group-hover/bar:opacity-80" style={{ width: `${pct}%` }} />
+      </span>
+    </HoverTip>
   );
 }
 

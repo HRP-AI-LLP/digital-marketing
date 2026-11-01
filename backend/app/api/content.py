@@ -24,10 +24,11 @@ from app.models import (
     Schedule,
     SocialAccount,
 )
-from app.services import audit, content_actions, scheduler
+from app.services import audit, collab, content_actions, scheduler
 from app.services import content as svc
 from app.services.jobs import enqueue
-from app.services.platforms import PLATFORMS, POST_TYPES, supported_types
+from app.services.platforms import PLATFORMS, POST_TYPES, is_offered, supported_types, unavailable_note
+from app.services.social import manual as manual_social
 
 router = APIRouter(prefix="/content", tags=["content"])
 
@@ -82,7 +83,8 @@ async def meta(ctx: Context = Depends(require("content.view"))):
             {"id": p.id, "label": p.label, "max_chars": p.max_chars, "max_hashtags": p.max_hashtags,
              "title_chars": p.title_chars, "post_types": list(p.post_types), "max_images": p.max_images,
              "image_size": "%dx%d" % p.image_size, "video_size": "%dx%d" % p.video_size,
-             "notes": p.notes, "manual": p.id in svc.MANUAL_PLATFORMS}
+             "notes": p.notes, "manual": p.id in svc.MANUAL_PLATFORMS, "offered": is_offered(p.id),
+             "unavailable_note": unavailable_note(p.id)}
             for p in PLATFORMS.values()
         ],
         "post_types": POST_TYPES,
@@ -427,6 +429,8 @@ class ScheduleIn(BaseModel):
     instructions: str | None = Field(None, max_length=4000)
     interval_days: int = Field(1, ge=1, le=14)
     interval_start: str | None = None
+    time_mode: Literal["fixed", "best"] = "fixed"
+    posts_per_day: int = Field(1, ge=1, le=5)
 
     @field_validator("interval_start")
     @classmethod
@@ -466,6 +470,8 @@ class SchedulePatch(BaseModel):
     instructions: str | None = Field(None, max_length=4000)
     interval_days: int | None = Field(None, ge=1, le=14)
     interval_start: str | None = None
+    time_mode: Literal["fixed", "best"] | None = None
+    posts_per_day: int | None = Field(None, ge=1, le=5)
 
     @field_validator("interval_start")
     @classmethod
@@ -496,6 +502,7 @@ def schedule_out(s: Schedule, account: SocialAccount | None) -> dict:
         "approval_window_hours": s.approval_window_hours, "lead_hours": s.lead_hours,
         "catch_up_grace_hours": s.catch_up_grace_hours, "include_link": s.include_link, "link_url": s.link_url,
         "instructions": s.instructions, "interval_days": s.interval_days or 1, "interval_start": s.interval_start,
+        "time_mode": s.time_mode or "fixed", "posts_per_day": s.posts_per_day or 1,
         "created_at": s.created_at, "updated_at": s.updated_at,
         "account": _account_brief(account),
         "ready": scheduler.account_ready(account),
@@ -628,7 +635,7 @@ async def preview_schedule(sid: uuid.UUID, days: int = Query(7, ge=1, le=60),
     now = svc.now_utc()
     end = now + timedelta(days=days)
     blackout = await scheduler.blackout_dates(ctx.session)
-    all_slots = scheduler.slot_times(s, tz, now, end)
+    all_slots = await scheduler.schedule_slots(ctx.session, s, tz, now, end)
     posts = {p.scheduled_at: p for p in (await ctx.session.scalars(
         select(Post).where(Post.schedule_id == sid, Post.scheduled_at.in_(all_slots or [now]))
     )).all()}
@@ -711,6 +718,7 @@ def post_out(p: Post, accounts: dict, pillars: dict, media: dict, *, compact: bo
         "similarity": p.similarity, "char_count": len(caption), "max_chars": plat.max_chars,
         "media": [media[m] for m in (p.media_ids or []) if m in media],
         "warnings": (p.meta or {}).get("warnings") or [],
+        "evergreen": bool(p.evergreen), "recycled_from": (p.meta or {}).get("recycled_from"),
     }
     if compact:
         d["text"] = (p.text or "")[:280]
@@ -723,7 +731,16 @@ def post_out(p: Post, accounts: dict, pillars: dict, media: dict, *, compact: bo
         "external_id": p.external_id, "attempts": p.attempts, "created_at": p.created_at, "updated_at": p.updated_at,
         "caption": caption, "max_hashtags": plat.max_hashtags, "title_chars": plat.title_chars,
         "brief": {k: (p.meta or {}).get(k) for k in ("image_brief", "alt_text", "slides", "video_script", "angle", "brief")},
+        "share_url": manual_social.share_url(p),
+        "can_auto_publish": bool(a is not None and p.platform not in svc.MANUAL_PLATFORMS
+                                 and a.platform not in svc.MANUAL_PLATFORMS and a.status not in ("manual", "removed")),
     })
+    return d
+
+
+def _with_counts(d: dict, counts: dict) -> dict:
+    c = counts.get(d["id"]) or {}
+    d["comment_count"], d["open_comment_count"] = c.get("total", 0), c.get("open", 0)
     return d
 
 
@@ -746,6 +763,9 @@ async def _out_one(ctx: Context, p: Post) -> dict:
                                       .order_by(PostMetric.fetched_at.desc()).limit(50))).all()
     keys = ("impressions", "reach", "likes", "comments", "shares", "clicks", "saves", "video_views")
     d["metrics"] = [{"fetched_at": m.fetched_at, **{k: getattr(m, k) for k in keys}} for m in mets]
+    _with_counts(d, await collab.comment_counts(ctx.session, [p.id]))
+    last = await collab.latest_version(ctx.session, p.id)
+    d["version"] = last.version if last else 0
     return d
 
 
@@ -786,7 +806,9 @@ async def list_posts(
     )).all())
     accounts, pillars = await _lookups(ctx, rows)
     media = await _media_map(ctx, rows)
-    return {"items": [post_out(p, accounts, pillars, media, compact=True) for p in rows], "total": total or 0}
+    counts = await collab.comment_counts(ctx.session, [p.id for p in rows])
+    return {"items": [_with_counts(post_out(p, accounts, pillars, media, compact=True), counts) for p in rows],
+            "total": total or 0}
 
 
 @router.get("/posts/{pid}")
@@ -888,6 +910,8 @@ async def create_post(body: PostCreate, ctx: Context = Depends(require("content.
             raise _bad("Pick a future date and time to schedule this post.")
     if body.status == "in_review" and at is not None and at <= now:
         raise _bad("Pick a future date and time, or save it as a draft.")
+    if body.status != "draft" and body.post_type not in ("text", "link") and not body.media_ids:
+        raise _bad("Add the image or video first: save it as a draft, add media on the post page, then schedule it.")
     if body.pillar_id:
         await _pillar(ctx, body.pillar_id)
     p = Post(
@@ -905,6 +929,7 @@ async def create_post(body: PostCreate, ctx: Context = Depends(require("content.
     ctx.session.add(p)
     await ctx.session.flush()
     await svc.recheck_post(ctx.session, p)
+    await collab.record_change(ctx.session, p, None, "Written by hand", ctx.user)
     svc.add_activity(ctx.session, p, "created", f"Written by hand ({svc.STATUSES[p.status].lower()})", user=ctx.user)
     audit.record(ctx.session, action="post.created", organization_id=ctx.org_id, actor=ctx.user, entity_type="post",
                  entity_id=p.id, summary=f"Created a {account.name} post", ip=ctx.ip)
@@ -958,6 +983,7 @@ async def update_post(pid: uuid.UUID, body: PostPatch, ctx: Context = Depends(re
     data = body.model_dump(exclude_unset=True)
     tz = _tz(ctx)
     now = svc.now_utc()
+    before = collab.snapshot(p)
     changed: list[str] = []
     if data.get("post_type"):
         _check_type(p.platform, data["post_type"])
@@ -1009,6 +1035,9 @@ async def update_post(pid: uuid.UUID, body: PostPatch, ctx: Context = Depends(re
         svc.add_warning(p, "Edited after approval, so it needs approving again.")
     if content_changed:
         await svc.recheck_post(ctx.session, p)
+    fields = collab.changed_fields(before, collab.snapshot(p))
+    if fields:
+        await collab.record_change(ctx.session, p, before, collab.edit_reason(fields), ctx.user)
     svc.add_activity(ctx.session, p, "edited", "Changed " + ", ".join(changed), user=ctx.user)
     audit.record(ctx.session, action="post.edited", organization_id=ctx.org_id, actor=ctx.user, entity_type="post",
                  entity_id=p.id, summary="Edited a post: " + ", ".join(changed), ip=ctx.ip)
@@ -1164,6 +1193,7 @@ async def duplicate(pid: uuid.UUID, body: DuplicateIn, ctx: Context = Depends(re
     ctx.session.add(p)
     await ctx.session.flush()
     await svc.recheck_post(ctx.session, p)
+    await collab.record_change(ctx.session, p, None, f"Copied from a {svc.platform_of(src.platform).label} post", ctx.user)
     svc.add_activity(ctx.session, p, "created", f"Copied from a {svc.platform_of(src.platform).label} post", user=ctx.user)
     audit.record(ctx.session, action="post.duplicated", organization_id=ctx.org_id, actor=ctx.user, entity_type="post",
                  entity_id=p.id, summary=f"Copied a post to {account.name}", ip=ctx.ip)
@@ -1180,7 +1210,8 @@ async def approvals(ctx: Context = Depends(require("content.view"))):
     )).all())
     accounts, pillars = await _lookups(ctx, rows)
     media = await _media_map(ctx, rows)
-    return [post_out(p, accounts, pillars, media) for p in rows]
+    counts = await collab.comment_counts(ctx.session, [p.id for p in rows])
+    return [_with_counts(post_out(p, accounts, pillars, media), counts) for p in rows]
 
 
 class BulkIn(BaseModel):
@@ -1208,13 +1239,14 @@ async def bulk(body: BulkIn, ctx: Context = Depends(require("content.approve")))
 
 class PostsBulkIn(BaseModel):
     ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
-    action: Literal["approve", "reject", "publish", "delete"]
+    action: Literal["approve", "reject", "publish", "delete", "evergreen_on", "evergreen_off"]
     reason: str | None = Field(None, max_length=1000)
 
 
 BULK_PERMS = {"approve": "content.approve", "reject": "content.approve", "publish": "content.publish",
-              "delete": "content.create"}
-BULK_DONE = {"approve": "Approved", "reject": "Rejected", "publish": "Publishing now", "delete": "Deleted"}
+              "delete": "content.create", "evergreen_on": "content.create", "evergreen_off": "content.create"}
+BULK_DONE = {"approve": "Approved", "reject": "Rejected", "publish": "Publishing now", "delete": "Deleted",
+             "evergreen_on": "Marked evergreen", "evergreen_off": "No longer evergreen"}
 
 
 @router.post("/posts/bulk")
@@ -1237,6 +1269,9 @@ async def posts_bulk(body: PostsBulkIn, ctx: Context = Depends(require("content.
                 elif body.action == "publish":
                     await _publish_now(ctx, p)
                     msg = BULK_DONE["publish"]
+                elif body.action in ("evergreen_on", "evergreen_off"):
+                    _set_evergreen(ctx, p, body.action == "evergreen_on")
+                    msg = BULK_DONE[body.action]
                 else:
                     await _delete_post(ctx, p)
                     msg = BULK_DONE["delete"]
@@ -1285,3 +1320,143 @@ async def calendar(
             "pillar_name": pl.name if pl else None, "color": pl.color if pl else "#64748b",
         })
     return out
+
+
+# ================================================================== smart scheduling: best times
+@router.get("/best-times")
+async def best_times(account_id: uuid.UUID, count: int = Query(5, ge=1, le=10), days: int = Query(7, ge=1, le=14),
+                     ctx: Context = Depends(require("content.view"))):
+    """The next best times to post on an account (learned from its results, blended with platform defaults), plus
+    the weekday × hour scores behind them for the heatmap."""
+    from app.services import best_time
+
+    account = await _account(ctx, account_id)
+    tz = _tz(ctx)
+    now = svc.now_utc()
+    best = await best_time.for_account(ctx.session, account, tz, now)
+    slots = await best_time.next_slots(ctx.session, account, tz, now=now, count=count, days=days, best=best,
+                                       blackout=await scheduler.blackout_dates(ctx.session))
+    return {"account": _account_brief(account), "timezone": str(tz), **best.summary(), "slots": slots,
+            "heatmap": best.heatmap(), "window": {"start": best_time.DAY_START, "end": best_time.DAY_END},
+            "top": [{"weekday": wd, "day": best_time.WEEKDAYS[wd], "hours": best.pick_hours(wd, 3)} for wd in range(7)]}
+
+
+# ================================================================== evergreen recycling
+class EvergreenIn(BaseModel):
+    evergreen: bool
+
+
+def _set_evergreen(ctx: Context, p: Post, on: bool) -> None:
+    if p.status in ("planned", "generating"):
+        raise ValueError("This post is still being written.")
+    if bool(p.evergreen) == on:
+        return
+    p.evergreen = on
+    svc.add_activity(ctx.session, p, "evergreen_on" if on else "evergreen_off",
+                     "Marked evergreen: it can be reshared later" if on else "No longer evergreen", user=ctx.user)
+
+
+@router.post("/posts/{pid}/evergreen")
+async def set_evergreen(pid: uuid.UUID, body: EvergreenIn, ctx: Context = Depends(require("content.create"))):
+    """Mark a post (published or not) as evergreen so recycling can reshare a fresh version of it later."""
+    p = await _post(ctx, pid)
+    try:
+        _set_evergreen(ctx, p, body.evergreen)
+    except ValueError as e:
+        raise _bad(str(e), 409) from None
+    await ctx.session.commit()
+    return await _out_one(ctx, p)
+
+
+class EvergreenSettingsIn(BaseModel):
+    enabled: bool | None = None
+    min_days_between: int | None = Field(None, ge=7, le=365)
+    per_week: int | None = Field(None, ge=1, le=14)
+    accounts: list[uuid.UUID] | None = None
+    mode: Mode | None = None
+
+
+async def _evergreen_out(ctx: Context) -> dict:
+    from app.services import evergreen
+
+    tz = _tz(ctx)
+    now = svc.now_utc()
+    cfg = evergreen.settings(ctx.org)
+    cands = await evergreen.candidates(ctx.session, ctx.org, now)
+    ok, why = await evergreen.due(ctx.session, ctx.org, now)
+    history = await evergreen.recycled_posts(ctx.session)
+    history = history[:30]
+    accounts, pillars = await _lookups(ctx, [c.post for c in cands] + history)
+    media = await _media_map(ctx, [c.post for c in cands[:30]])
+    originals = {str(c.post.id): c.post for c in cands}
+    missing = [svc.as_uuid((h.meta or {}).get("recycled_from")) for h in history
+               if str((h.meta or {}).get("recycled_from")) not in originals]
+    if [m for m in missing if m]:
+        for o in (await ctx.session.scalars(select(Post).where(Post.id.in_([m for m in missing if m])))).all():
+            originals[str(o.id)] = o
+    queue = []
+    for c in cands[:30]:
+        m = c.metric
+        queue.append({
+            **post_out(c.post, accounts, pillars, media, compact=True), "eligible": c.eligible, "reason": c.reason,
+            "last_shared": c.last_shared, "engagements": None if m is None else int(m.likes + m.comments + m.shares + m.saves + m.clicks),
+            "impressions": None if m is None else int(m.impressions or 0),
+        })
+    hist = []
+    for h in history:
+        o = originals.get(str((h.meta or {}).get("recycled_from")))
+        hist.append({**post_out(h, accounts, pillars, {}, compact=True), "created_at": h.created_at,
+                     "original": {"id": o.id, "title": (o.title or o.text or o.topic or "")[:120]} if o else None})
+    return {"settings": cfg, "timezone": str(tz), "due": ok, "due_reason": why or None, "queue": queue,
+            "eligible": sum(1 for c in cands if c.eligible), "total": len(cands), "history": hist}
+
+
+@router.get("/evergreen")
+async def get_evergreen(ctx: Context = Depends(require("schedule.view"))):
+    return await _evergreen_out(ctx)
+
+
+@router.put("/evergreen")
+async def put_evergreen(body: EvergreenSettingsIn, ctx: Context = Depends(require("schedule.manage"))):
+    from app.services import evergreen
+
+    data = body.model_dump(exclude_unset=True)
+    if "mode" in data:
+        _check_mode_permission(ctx, data["mode"])
+    if data.get("accounts") is not None:
+        for aid in data["accounts"]:
+            await _account(ctx, aid)
+        data["accounts"] = [str(a) for a in data["accounts"]]
+    from app.models import Organization
+
+    org = await ctx.session.get(Organization, ctx.org_id)
+    cfg = evergreen.save_settings(org, data)
+    audit.record(ctx.session, action="evergreen.updated", organization_id=ctx.org_id, actor=ctx.user,
+                 entity_type="organization", entity_id=ctx.org_id,
+                 summary=f"Evergreen recycling {'on' if cfg['enabled'] else 'off'}", details={"fields": sorted(data)}, ip=ctx.ip)
+    await ctx.session.commit()
+    ctx.org = org
+    return await _evergreen_out(ctx)
+
+
+@router.post("/evergreen/run-now")
+async def evergreen_run_now(ctx: Context = Depends(require("schedule.manage", "content.create"))):
+    """Reshare the best eligible evergreen post now (ignores the weekly pace, keeps the gap between reshares)."""
+    from app.models import Organization
+    from app.services import evergreen
+    from app.services.llm.router import NoProviderError
+
+    org = await ctx.session.get(Organization, ctx.org_id)
+    try:
+        res = await evergreen.run(ctx.session, org, force=True)
+    except NoProviderError:
+        raise _bad("Add an AI text model in Settings → Integrations first.") from None
+    except ValueError as e:
+        raise _bad(f"The AI couldn't write a fresh version: {e}") from None
+    post = res["created"]
+    if post is None:
+        raise _bad(res["reason"] or "Nothing to reshare yet.")
+    await ctx.session.commit()
+    if post.status == "in_review":
+        await svc.notify_review(post, _tz(ctx))
+    return {"post_id": post.id, "status": post.status, "scheduled_at": post.scheduled_at}

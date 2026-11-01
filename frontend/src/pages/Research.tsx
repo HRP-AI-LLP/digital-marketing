@@ -35,7 +35,7 @@ function Briefing({ o, canRun }: { o: Overview; canRun: boolean }) {
   return (
     <section className="ai-mesh-dark relative mb-6 overflow-hidden rounded-2xl p-5 text-white shadow-[0_24px_80px_rgba(6,47,89,0.22)] sm:p-7">
       <div className="ai-grid-overlay pointer-events-none absolute inset-0 opacity-40" aria-hidden />
-      <div className="relative grid gap-6 lg:grid-cols-[1fr_380px]">
+      <div className="relative grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div>
           <p className="flex items-center gap-1.5 text-sm text-secondary-300"><Sparkles size={15} /> Daily briefing</p>
           <h2 className="mt-1 text-[26px] font-bold leading-tight sm:text-[30px]">{day}</h2>

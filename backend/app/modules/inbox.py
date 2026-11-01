@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.core.db import platform_session
 from app.models import SocialAccount
 from app.models.inbox import InboxSettings
-from app.services.inbox import listening, sentiment
+from app.services.inbox import autoreply, listening, sentiment
 from app.services.inbox.base import SYNC_PLATFORMS
 from app.services.inbox.sync import get_settings, notify_new, sync_accounts
 from app.services.jobs import JobContext, enqueue_now, handler, org_ids_active, periodic
@@ -26,7 +26,12 @@ async def inbox_sync(ctx: JobContext) -> dict:
     r = await sync_accounts(ctx.session, ctx.org_id, uuid.UUID(str(aid)) if aid else None)
     sent = await notify_new(ctx.session, ctx.org_id, r["notify"])
     accounts = r["accounts"]
-    return {"new": len([c for c in r["created"] if not c.is_own]), "notified": sent,
+    try:
+        auto = await autoreply.process(ctx.session, ctx.org_id)
+    except Exception:  # noqa: BLE001 - replies are extra; never fail the sync over them
+        log.exception("auto-replies failed for org %s", ctx.org_id)
+        auto = {"error": True}
+    return {"new": len([c for c in r["created"] if not c.is_own]), "notified": sent, "auto_replies": auto,
             "problems": [v.get("message") for v in accounts.values() if not v.get("ok", True) and v.get("message")][:5]}
 
 

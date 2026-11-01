@@ -2,10 +2,14 @@
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends
+import uuid
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 
-from app.core.deps import Context, get_context
+from app.core.deps import Context, get_context, require
+from app.services import dashboard_insights, system_map
 from app.services.platforms import PLATFORMS
 from app.models import (
     CompanyProfile, Job, Membership, PresenceAudit, Post, ProviderConfig, Schedule, SocialAccount,
@@ -95,3 +99,28 @@ async def dashboard(ctx: Context = Depends(get_context)):
                              "at": social_runs[0].created_at} if social_runs else None),
         "failing_jobs": failing_jobs,
     }
+
+
+@router.get("/dashboard/insights")
+async def insights(
+    days: int = Query(30, ge=1, le=365), start: date | None = None, end: date | None = None,
+    platforms: str | None = Query(None, description="Comma-separated platform ids"), account_id: uuid.UUID | None = None,
+    post_type: str | None = None, pillar_id: uuid.UUID | None = None, ctx: Context = Depends(require("content.view")),
+):
+    """Everything the dashboard charts show, for one filtered slice, compared with the period just before it."""
+    if ctx.org is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose an organization first.")
+    if start and end and (end - start).days > 366:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Pick a range of a year or less.")
+    plats = [p.strip() for p in (platforms or "").split(",") if p.strip()] or None
+    return await dashboard_insights.insights(ctx.session, ctx.org.timezone, days=days, start=start, end=end,
+                                             platforms=plats, account_id=account_id, post_type=post_type or None,
+                                             pillar_id=pillar_id)
+
+
+@router.get("/system/map")
+async def map_(ctx: Context = Depends(require("content.view"))):
+    """Agents, services and connected accounts with their live state, for the spatial system view."""
+    if ctx.org is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose an organization first.")
+    return await system_map.build(ctx.session, ctx.org)

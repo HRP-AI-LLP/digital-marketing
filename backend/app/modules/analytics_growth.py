@@ -76,6 +76,15 @@ async def h_report(ctx: JobContext) -> dict:
     await ctx.progress("Building the report")
     result = await reports.produce(ctx.session, uuid.UUID(str(rid)))
     report = await ctx.session.get(AnalyticsReport, uuid.UUID(str(rid)))
+    if report is not None and report.status == "ready":
+        from app.services import webhooks
+
+        await webhooks.emit(ctx.org_id, "report.ready", lambda: {
+            "id": report.id, "title": report.title, "trigger": report.trigger, "recipients": list(report.recipients or []),
+            "sent_at": report.sent_at, "app_url": webhooks.app_link("/analytics?tab=reports"),
+            "api_url": f"/api/v1/analytics/reports/{report.id}",
+            "download_url": reports.file_url(report.id, report.organization_id) if report.path else None},
+            session=ctx.session)
     if report is not None and report.status == "ready" and report.trigger == "schedule":
         await ctx.session.commit()
         from app.services.notify import notify_org

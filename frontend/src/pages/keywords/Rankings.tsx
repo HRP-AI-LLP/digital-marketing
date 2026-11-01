@@ -217,7 +217,7 @@ export function RankingsTab() {
                       <td className="px-3 py-2"><Change r={x} /></td>
                       <td className="px-3 py-2 tabular-nums">{x.best_position ? `#${x.best_position}` : "—"}</td>
                       <td className="px-3 py-2 tabular-nums">{x.gsc_position ?? "—"}</td>
-                      <td className="px-3 py-2"><Sparkline values={x.spark} invert label={`Positions: ${x.spark.map((v) => v ?? "–").join(", ")}`} /></td>
+                      <td className="px-3 py-2"><Sparkline values={x.spark} invert title="Position" format={(v) => `#${v}`} labels={x.spark.map((_, i) => `Check ${i + 1} of ${x.spark.length}`)} label={`Positions: ${x.spark.map((v) => v ?? "–").join(", ")}`} /></td>
                       <td className="max-w-[220px] px-3 py-2 text-xs [overflow-wrap:anywhere]">
                         {x.url ? <a className="text-primary-700 hover:underline" href={x.url} target="_blank" rel="noreferrer">{x.url.replace(/^https?:\/\/(www\.)?/, "")}</a> : <span className="text-muted">—</span>}
                         {x.target_url && x.target_ranking === false && x.url && <span className="block text-amber-800">Not your target page</span>}

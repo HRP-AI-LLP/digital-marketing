@@ -272,6 +272,8 @@ def _category(asset: MediaAsset) -> str:
 async def _upload(c: httpx.AsyncClient, tok: str, asset: MediaAsset) -> str:
     data = common.read_bytes(asset)
     mime = asset.mime or ("video/mp4" if common.is_video(asset) else "image/png")
+    if not common.is_video(asset) and not common.is_gif(asset):
+        data, mime = common.fit_image(data, mime, 5 * 1024 * 1024)  # X: images up to 5 MB
     init = ok_json(await c.post(f"{API}/media/upload/initialize", headers=_bearer(tok), json={
         "media_type": mime, "total_bytes": len(data), "media_category": _category(asset)}), "X media upload")
     mid = str((init.get("data") or {}).get("id") or "")

@@ -6,6 +6,11 @@ import "@fontsource-variable/inter";
 import "./index.css";
 import App from "./App";
 import { AuthProvider } from "./auth/AuthContext";
+import { PrefsProvider } from "./prefs/PrefsContext";
+import { applyAppearance, loadLocal } from "./prefs/appearance";
+
+// Theme and fonts before the first paint, so the page never flashes the wrong colours.
+applyAppearance(loadLocal());
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
 
@@ -14,7 +19,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
-          <App />
+          <PrefsProvider>
+            <App />
+          </PrefsProvider>
         </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>

@@ -7,25 +7,43 @@ import { Alert, Button, Card, EmptyState, Select, Spinner } from "../../componen
 import { BarChart, Kpi, fmtNum } from "../analytics/charts";
 import { SERIES, TrendChart, shortDay } from "../analytics/vizkit";
 import { ago } from "../inbox/shared";
+import { TipHead, TipRow, useTip } from "../../components/viz";
 import type { Overview as Data, Query, Theme } from "./types";
 
 const SENT_COLORS = { positive: "#1baf7a", neutral: "#94a3b8", negative: "#e34948" };
 
-function TermCloud({ terms }: { terms: Data["top_terms"] }) {
+function TermCloud({ terms, mentions }: { terms: Data["top_terms"]; mentions: number }) {
+  const t = useTip();
+  const [hover, setHover] = useState<string | null>(null);
   if (!terms.length) return <p className="py-6 text-center text-sm text-muted">Not enough mentions yet.</p>;
-  const max = Math.max(...terms.map((t) => t.count));
-  const min = Math.min(...terms.map((t) => t.count));
+  const max = Math.max(...terms.map((x) => x.count));
+  const min = Math.min(...terms.map((x) => x.count));
+  const ranked = [...terms].sort((a, b) => b.count - a.count);
+  const tipFor = (x: Data["top_terms"][number]) => (
+    <>
+      <TipHead sub={`#${ranked.indexOf(x) + 1} of ${terms.length} words`}>{x.term}</TipHead>
+      <TipRow color={SERIES[0]} label="Mentions using it" value={fmtNum(x.count)} />
+      {mentions > 0 && <TipRow label="Share of all mentions" value={`${((x.count / mentions) * 100).toFixed(1)}%`} />}
+      <TipRow label="vs most used word" value={`${Math.round((x.count / max) * 100)}%`} />
+    </>
+  );
+  const clear = () => { setHover(null); t.hide(); };
   return (
-    <ul aria-label="Most used words" className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
-      {terms.map((t) => {
-        const w = max === min ? 0.5 : (t.count - min) / (max - min);
-        return (
-          <li key={t.term} title={`${t.term}: in ${t.count} mentions`}
-            style={{ fontSize: `${0.8 + w * 0.9}rem`, opacity: 0.55 + w * 0.45 }}
-            className={`leading-tight ${w > 0.6 ? "font-semibold text-brand-deep" : "text-ink"}`}>{t.term}</li>
-        );
-      })}
-    </ul>
+    <div ref={t.ref} className="relative">
+      <ul aria-label="Most used words" className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
+        {terms.map((x) => {
+          const w = max === min ? 0.5 : (x.count - min) / (max - min);
+          return (
+            <li key={x.term} tabIndex={0} aria-label={`${x.term}: in ${x.count} mentions`}
+              style={{ fontSize: `${0.8 + w * 0.9}rem`, opacity: hover && hover !== x.term ? 0.3 : 0.55 + w * 0.45 }}
+              className={`cursor-default rounded leading-tight outline-none transition-opacity focus-visible:ring-2 focus-visible:ring-primary-500/40 ${w > 0.6 ? "font-semibold text-brand-deep" : "text-ink"}`}
+              onPointerMove={(e) => { setHover(x.term); t.show(e, tipFor(x)); }} onPointerLeave={clear}
+              onFocus={(e) => { setHover(x.term); t.show(e.currentTarget, tipFor(x)); }} onBlur={clear}>{x.term}</li>
+          );
+        })}
+      </ul>
+      {t.tip}
+    </div>
   );
 }
 
@@ -172,7 +190,7 @@ export default function Overview({ queries }: { queries: Query[] }) {
               <Card className="lg:col-span-2">
                 <h3 className="text-sm font-semibold">Words people use</h3>
                 <p className="mb-3 text-xs text-muted">The bigger the word, the more mentions it appears in. Your own tracked words are left out.</p>
-                <TermCloud terms={d.top_terms} />
+                <TermCloud terms={d.top_terms} mentions={d.totals.mentions} />
               </Card>
             </div>
           )}

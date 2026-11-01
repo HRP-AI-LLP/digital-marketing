@@ -18,7 +18,7 @@ from app.services import audit
 from app.services.jobs import enqueue
 from app.services.listening import assist, engine, insights
 from app.services.listening import sources as src
-from app.services.listening.text import clean_terms
+from app.services.listening.text import clean_terms, weak_term
 from app.services.llm.router import AllProvidersFailed, NoProviderError
 
 router = APIRouter(prefix="/listening", tags=["listening"])
@@ -200,6 +200,10 @@ class QueryIn(BaseModel):
             raise ValueError("Add at least one word or phrase to listen for.")
         if any(len(t.lstrip("#@")) < 2 for t in out):
             raise ValueError("Each word to listen for needs at least 2 letters.")
+        weak = [t for t in out if weak_term(t)]
+        if weak:
+            raise ValueError(f"“{weak[0]}” is an everyday word, so it would match thousands of unrelated posts. "
+                             "Use a name, product, #hashtag, @handle or a longer phrase instead.")
         return out
 
 
@@ -264,6 +268,14 @@ async def update_query(qid: uuid.UUID, body: QueryIn, ctx: Context = Depends(req
     _apply_query(q, body)
     if before != (q.terms, q.context_terms, q.exclude):
         q.state = {**(q.state or {}), "sources": {}}  # changed words: search again from a week back
+        removed = {t.lower() for t in before[0]} - {t.lower() for t in q.terms}
+        if removed:
+            # Mentions this topic found only through words that were just removed no longer belong to it.
+            rows = (await ctx.session.scalars(select(ListeningMention).where(ListeningMention.query_id == q.id))).all()
+            for m in rows:
+                hits = {t.lower() for t in (m.matched_terms or [])}
+                if hits and hits <= removed and len(m.query_ids or []) <= 1:
+                    m.relevant, m.needs_response = False, False
     audit.record(ctx.session, action="listening.query_updated", organization_id=ctx.org_id, actor=ctx.user,
                  entity_type="listening_query", entity_id=q.id, summary=f"Changed listening topic “{q.name}”")
     await ctx.session.commit()

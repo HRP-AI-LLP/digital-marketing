@@ -18,6 +18,7 @@ from app.core.crypto import decrypt_json
 from app.models import LlmUsage, ProviderConfig, TaskRoute
 from app.services.llm import client as llm
 from app.services.llm import health, pricing
+from app.services.llm import keys
 from app.services.llm.catalog import BY_ID
 
 
@@ -38,7 +39,7 @@ class LlmResult:
 
 
 def conn_from(cfg: ProviderConfig) -> llm.Conn:
-    secrets = decrypt_json(cfg.secrets_enc)
+    secrets = keys.secrets_of(cfg)  # the key currently in use when the connection has several
     spec = BY_ID.get(cfg.provider)
     base = cfg.base_url or (spec.base_url if spec else "")
     return llm.Conn(provider=cfg.provider, base_url=base, api_key=secrets.get("api_key"), extra={**(cfg.settings or {}), **secrets})
@@ -81,12 +82,21 @@ async def resolve_chain(session: AsyncSession, task: str, kind: str = "llm") -> 
                 cfg = None
             if cfg and cfg.enabled and step.get("model"):
                 chain.append((cfg, step["model"]))
-        if chain:
-            return chain
     key = "embed_model" if task == "embed" else "default_model"
     enabled = [c for c in cfgs.values() if c.enabled and (c.settings or {}).get(key)]
     enabled.sort(key=lambda c: (BY_ID.get(c.provider).local if BY_ID.get(c.provider) else False, c.created_at))
+    if chain:
+        # After the task's own models, fall back to any other free or local connection, so a task keeps working
+        # when every model in its route is out of credits. Paid connections are only used when the route names them.
+        used = {c.id for c, _ in chain}
+        spare = [(c, c.settings[key]) for c in enabled if c.id not in used and not _paid(c)]
+        return chain + spare
     return [(c, c.settings[key]) for c in enabled]
+
+
+def _paid(cfg: ProviderConfig) -> bool:
+    spec = BY_ID.get(cfg.provider)
+    return bool(spec and not spec.local and (spec.free or "").lower().startswith("paid"))
 
 
 def _log(session: AsyncSession, cfg: ProviderConfig, model: str, task: str, kind: str, *, tin=0, tout=0, units=0,
@@ -116,8 +126,8 @@ async def complete(
             errors.append(f"{cfg.name}: monthly budget reached")
             continue
         try:
-            r = await llm.chat(conn_from(cfg), model, msgs, system=system, json_mode=json_mode,
-                               temperature=temperature, max_tokens=max_tokens)
+            r = await keys.with_keys(cfg, lambda: llm.chat(conn_from(cfg), model, msgs, system=system, json_mode=json_mode,
+                                                           temperature=temperature, max_tokens=max_tokens))
         except Exception as e:  # noqa: BLE001 - try the next model in the chain
             _log(session, cfg, model, task, "chat", ok=False, error=health.describe(e)[:1000])
             v = await health.record_failure(cfg, model, e)
@@ -180,7 +190,8 @@ async def embed_texts(session: AsyncSession, texts: list[str]) -> tuple[list[lis
         try:
             vecs: list[list[float]] = []
             for i in range(0, len(texts), 32):
-                batch, tokens = await llm.embed(conn_from(cfg), model, [t[:8000] for t in texts[i:i + 32]])
+                part = [t[:8000] for t in texts[i:i + 32]]
+                batch, tokens = await keys.with_keys(cfg, lambda: llm.embed(conn_from(cfg), model, part))
                 vecs.extend(batch)
                 _log(session, cfg, model, "embed", "embed", tin=tokens or sum(len(t) // 4 for t in texts[i:i + 32]))
         except Exception as e:  # noqa: BLE001

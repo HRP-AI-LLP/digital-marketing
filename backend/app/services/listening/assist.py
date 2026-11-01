@@ -12,7 +12,7 @@ from app.models import BrandProfile, CompanyEntity, CompanyProfile, Competitor, 
 from app.models.listening import ListeningMention, ListeningQuery
 from app.services.inbox.suggest import EMOJI, _clean
 from app.services.listening.sources import COUNTRY_CODES, SOURCES
-from app.services.listening.text import as_hashtag, clean_terms, domain_of
+from app.services.listening.text import as_hashtag, clean_terms, domain_of, weak_term
 from app.services.llm import router as llm_router
 
 log = logging.getLogger("listening")
@@ -38,9 +38,12 @@ def _handle(url: str | None) -> str | None:
         p = urlsplit(url if "//" in url else f"https://{url}")
     except ValueError:
         return None
-    parts = [x for x in p.path.split("/") if x and x not in ("company", "in", "c", "user", "channel", "@", "profile")]
-    h = parts[-1].lstrip("@") if parts else None
-    return h if h and re.fullmatch(r"[\w.\-]{3,40}", h) else None
+    skip = {"company", "in", "c", "user", "channel", "@", "profile", "home", "about", "posts", "videos", "featured",
+            "pages", "page", "people", "reels", "shorts", "feed", "timeline", "info", "p", "pg", "showcase", "school",
+            "groups", "photos", "community", "streams", "playlists"}
+    parts = [x for x in p.path.split("/") if x and x.lower() not in skip]
+    h = parts[0].lstrip("@") if parts else None  # the account name comes first (/company/<name>/home)
+    return h if h and re.fullmatch(r"[\w.\-]{3,40}", h) and not weak_term(h) else None
 
 
 async def starter_queries(session: AsyncSession) -> list[dict]:

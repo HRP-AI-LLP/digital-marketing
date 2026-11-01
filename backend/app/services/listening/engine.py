@@ -269,6 +269,12 @@ async def detect_spikes(session: AsyncSession, org_id: uuid.UUID, settings: List
         state["spikes"] = spikes
         settings.state = state
         await session.commit()
+        from app.services import webhooks
+
+        for sp in sent:
+            await webhooks.emit(org_id, "listening.spike", lambda sp=sp: {
+                "kind": sp["kind"], "title": sp["title"], "body": sp["body"], "mentions_24h": recent,
+                "negative_24h": recent_neg, "usual_per_day": round(avg, 2), "app_url": webhooks.app_link(sp["link"])})
     return sent
 
 

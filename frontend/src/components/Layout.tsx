@@ -1,20 +1,24 @@
 import { useState } from "react";
+import { usePrefs } from "../prefs/PrefsContext";
+import { langInfo } from "../prefs/i18n";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import {
+import { Network,
   CalendarDays, CheckCheck, ChevronsUpDown, FileText, Gauge, History, Image, KeyRound,
   LineChart, LogOut, Menu, Plug, Coins, Radar, Settings, ShieldCheck, Bell, Users as UsersIcon, X, Globe2, ListChecks,
-  Palette, Clock, Share2, Inbox as InboxIcon, Lightbulb, Megaphone, Bot, Ear, ScanSearch, KeySquare, Link2,
-} from "lucide-react";
+  Palette, Clock, Share2, FileDown, Inbox as InboxIcon, Lightbulb, Megaphone, Bot, Ear, ScanSearch, KeySquare, Link2, MousePointerClick, Webhook,
+  DatabaseBackup, Lock, UserPlus } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import NotificationBell from "./NotificationBell";
 import InboxBadge from "./InboxBadge";
 import SystemBanner from "./SystemBanner";
+import ExportPdf from "./ExportPdf";
+import { FileEmailOffer } from "./EmailDialog";
 
 type Item = { to: string; label: string; icon: typeof Gauge; perm?: string; soon?: boolean; badge?: "inbox" };
 type Group = { label: string; items: Item[]; platformOnly?: boolean };
 
 export const NAV: Group[] = [
-  { label: "Overview", items: [{ to: "/", label: "Dashboard", icon: Gauge }] },
+  { label: "Overview", items: [{ to: "/", label: "Dashboard", icon: Gauge }, { to: "/system", label: "System map", icon: Network, perm: "content.view" }, { to: "/reports", label: "Reports", icon: FileDown, perm: "content.view" }] },
   {
     label: "Plan and publish",
     items: [
@@ -31,6 +35,7 @@ export const NAV: Group[] = [
     items: [
       { to: "/inbox", label: "Inbox", icon: InboxIcon, perm: "inbox.view", badge: "inbox" },
       { to: "/listening", label: "Listening", icon: Ear, perm: "listening.view" },
+      { to: "/grow", label: "Grow followers", icon: UserPlus, perm: "links.view" },
     ],
   },
   {
@@ -42,6 +47,7 @@ export const NAV: Group[] = [
       { to: "/site-audit", label: "Site audit", icon: ScanSearch, perm: "siteaudit.view" },
       { to: "/ai-visibility", label: "AI visibility", icon: Bot, perm: "aivis.view" },
       { to: "/analytics", label: "Analytics", icon: LineChart, perm: "analytics.view" },
+      { to: "/links", label: "Link clicks", icon: MousePointerClick, perm: "links.view" },
       { to: "/presence", label: "Social presence", icon: Megaphone, perm: "presence.view" },
     ],
   },
@@ -53,6 +59,7 @@ export const NAV: Group[] = [
       { to: "/settings/schedules", label: "Posting schedules", icon: Clock, perm: "schedule.view" },
       { to: "/settings/accounts", label: "Social accounts", icon: Share2, perm: "integration.view" },
       { to: "/settings/integrations", label: "Integrations", icon: Plug, perm: "integration.view" },
+      { to: "/settings/connections", label: "Connections", icon: Webhook, perm: "connections.view" },
       { to: "/settings/ai-usage", label: "AI usage and costs", icon: Coins, perm: "integration.view" },
       { to: "/settings/notifications", label: "Notifications", icon: Bell },
       { to: "/settings/users", label: "Users", icon: UsersIcon, perm: "user.view" },
@@ -60,7 +67,13 @@ export const NAV: Group[] = [
       { to: "/settings/activity", label: "Activity log", icon: History, perm: "audit.view" },
     ],
   },
-  { label: "Platform", platformOnly: true, items: [{ to: "/platform/organizations", label: "All organizations", icon: Globe2 }] },
+  {
+    label: "Platform", platformOnly: true,
+    items: [
+      { to: "/platform/organizations", label: "All organizations", icon: Globe2 },
+      { to: "/platform/backups", label: "Backups", icon: DatabaseBackup },
+    ],
+  },
 ];
 
 function OrgSwitcher() {
@@ -83,7 +96,7 @@ function OrgSwitcher() {
             <img src={session.organization.logo_dark_url || session.organization.logo_url || ""} alt="" className="h-full w-full object-contain p-0.5" />
           </span>
         ) : (
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-blue-700 to-cyan-500 font-bold text-white">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-grad1 to-grad2 font-bold text-white">
             {(session.organization?.name ?? "P").slice(0, 1)}
           </span>
         )}
@@ -126,6 +139,7 @@ function OrgSwitcher() {
 
 export default function Layout() {
   const { session, can, logout } = useAuth();
+  const { prefs } = usePrefs();
   const [mobileOpen, setMobileOpen] = useState(false);
   if (!session) return null;
 
@@ -156,7 +170,7 @@ export default function Layout() {
                 onClick={() => setMobileOpen(false)}
                 className={({ isActive }) =>
                   `flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[14px] ${
-                    isActive ? "bg-gradient-to-r from-blue-600/40 to-cyan-500/20 text-white font-medium ring-1 ring-inset ring-white/10" : "hover:bg-white/10 hover:text-white"
+                    isActive ? "bg-gradient-to-r from-grad1/40 to-grad2/20 text-white font-medium ring-1 ring-inset ring-white/10" : "hover:bg-white/10 hover:text-white"
                   }`
                 }
               >
@@ -172,9 +186,19 @@ export default function Layout() {
       <div className="border-t border-white/10 px-3 py-3">
         <div className="px-2 text-sm text-white truncate">{session.user.full_name}</div>
         <div className="px-2 text-xs text-white/55 truncate">{session.user.email}</div>
-        <div className="mt-2 flex gap-1">
+        <div className="mt-2 flex flex-wrap gap-1">
           <NavLink to="/account/password" className="flex items-center gap-1.5 rounded px-2 py-1 text-xs hover:bg-white/10">
             <KeyRound size={13} /> Password
+          </NavLink>
+          <NavLink to="/account/security" onClick={() => setMobileOpen(false)} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs hover:bg-white/10">
+            <Lock size={13} /> Security
+          </NavLink>
+          <NavLink to="/account/appearance" onClick={() => setMobileOpen(false)} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs hover:bg-white/10">
+            <Palette size={13} /> Appearance
+          </NavLink>
+          <NavLink to="/account/appearance" onClick={() => setMobileOpen(false)} title="Language"
+            className="flex items-center gap-1.5 rounded px-2 py-1 text-xs hover:bg-white/10" translate="no">
+            <Globe2 size={13} /> {langInfo(prefs.language ?? "en", prefs.language_name).native}
           </NavLink>
           <button onClick={logout} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs hover:bg-white/10">
             <LogOut size={13} /> Sign out
@@ -202,7 +226,9 @@ export default function Layout() {
         <main className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-[1120px] px-4 py-8 sm:px-8">
             <SystemBanner />
+            <div className="relative z-20 -mb-2 flex justify-end empty:hidden"><ExportPdf /></div>
             <Outlet />
+            <FileEmailOffer />
           </div>
         </main>
       </div>

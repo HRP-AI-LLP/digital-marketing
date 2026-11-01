@@ -6,6 +6,7 @@ import { api } from "../../api/client";
 import { useJob } from "../../api/hooks";
 import { useAuth } from "../../auth/AuthContext";
 import { Alert, Button, Card, Field, Input, PageHeader, Select, Spinner, Tabs, Textarea } from "../../components/ui";
+import { BestTimeSuggest } from "./BestTime";
 import {
   CharCounter, caption, fromLocalInput, parseTags, tzLabel, useContentAccounts, useMeta, usePillars, useTz,
   type AccountBrief, type PostDetail,
@@ -70,7 +71,14 @@ export default function Composer() {
   }, [prefill.data]);
   const strictest = chosen.length ? Math.min(...chosen.map((a) => platforms.find((p) => p.id === a.platform)?.max_chars ?? 3000)) : 3000;
   const needsTitle = chosen.some((a) => (platforms.find((p) => p.id === a.platform)?.title_chars ?? 0) > 0);
-  const manualTypes = commonTypes.filter((t) => t === "text" || t === "link");
+  // Image and video posts can be written by hand too: the media is added on the post page after saving.
+  const manualTypes = commonTypes.filter((t) => ["text", "link", "image", "carousel", "video"].includes(t));
+  const needsMedia = !["text", "link"].includes(m.post_type);
+  useEffect(() => {
+    if (manualTypes.length && !manualTypes.includes(m.post_type)) setM((cur) => ({ ...cur, post_type: manualTypes[0] }));
+    if (needsMedia && m.status !== "draft") setM((cur) => ({ ...cur, status: "draft" }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualTypes.join(","), m.post_type]);
 
   const compose = useMutation({
     mutationFn: () => api<{ posts: Made[] }>(briefId ? `/research/briefs/${briefId}/compose` : "/content/posts/compose", {
@@ -170,9 +178,13 @@ export default function Composer() {
                     {(pillars.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </Select>
                 </Field>
-                <Field label={`When (${tzLabel(tz)}, optional)`}>
-                  <Input type="datetime-local" value={f.when} onChange={(e) => setF({ ...f, when: e.target.value })} />
-                </Field>
+                <div>
+                  <Field label={`When (${tzLabel(tz)}, optional)`}>
+                    <Input type="datetime-local" value={f.when} onChange={(e) => setF({ ...f, when: e.target.value })} />
+                  </Field>
+                  <BestTimeSuggest accountId={chosen[0]?.id} label={chosen.length > 1 ? `Suggest best time (for ${chosen[0].name})` : undefined}
+                    onPick={(v) => setF({ ...f, when: v })} />
+                </div>
                 <Field label="Link (optional)"><Input type="url" placeholder="https://" value={f.link_url} onChange={(e) => setF({ ...f, link_url: e.target.value })} /></Field>
               </div>
               <Field label="When it's written">
@@ -203,21 +215,25 @@ export default function Composer() {
                     {(manualTypes.length ? manualTypes : ["text"]).map((t) => <option key={t} value={t}>{meta.data?.post_types[t] ?? t}</option>)}
                   </Select>
                 </Field>
-                <Field label={`When (${tzLabel(tz)})`}><Input type="datetime-local" value={m.when} onChange={(e) => setM({ ...m, when: e.target.value })} /></Field>
+                <div>
+                  <Field label={`When (${tzLabel(tz)})`}><Input type="datetime-local" value={m.when} onChange={(e) => setM({ ...m, when: e.target.value })} /></Field>
+                  <BestTimeSuggest accountId={chosen[0]?.id} label={chosen.length > 1 ? `Suggest best time (for ${chosen[0].name})` : undefined}
+                    onPick={(v) => setM({ ...m, when: v })} />
+                </div>
               </div>
               <Field label="First comment (optional)"><Textarea rows={2} value={m.first_comment} onChange={(e) => setM({ ...m, first_comment: e.target.value })} /></Field>
-              <Field label="Then">
+              <Field label="Then" hint={needsMedia ? "Save it, add the image or video on the next page, then schedule it or send it for approval." : undefined}>
                 <Select value={m.status} onChange={(e) => setM({ ...m, status: e.target.value })}>
-                  <option value="draft">Save as draft</option>
-                  <option value="in_review">Send for approval</option>
-                  {can("content.approve") && <option value="scheduled">Schedule it (no approval needed)</option>}
+                  <option value="draft">{needsMedia ? "Save and add media" : "Save as draft"}</option>
+                  {!needsMedia && <option value="in_review">Send for approval</option>}
+                  {!needsMedia && can("content.approve") && <option value="scheduled">Schedule it (no approval needed)</option>}
                 </Select>
               </Field>
               {chosen.some((a) => !typesFor(a).includes(m.post_type)) && (
-                <Alert tone="warn">{chosen.filter((a) => !typesFor(a).includes(m.post_type)).map((a) => a.name).join(", ")} can't take text-only posts. Use Write with AI to create an image post instead.</Alert>
+                <Alert tone="warn">{chosen.filter((a) => !typesFor(a).includes(m.post_type)).map((a) => a.name).join(", ")} can't take {(meta.data?.post_types[m.post_type] ?? m.post_type).toLowerCase()} posts. Choose fewer accounts, or use Write with AI.</Alert>
               )}
               <Button type="submit" disabled={!picked.length || create.isPending || !m.text.trim()}>
-                {create.isPending ? "Saving…" : m.status === "scheduled" ? "Schedule" : m.status === "in_review" ? "Send for approval" : "Save draft"}
+                {create.isPending ? "Saving…" : needsMedia ? "Save and add media" : m.status === "scheduled" ? "Schedule" : m.status === "in_review" ? "Send for approval" : "Save draft"}
               </Button>
             </form>
           )}

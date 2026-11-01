@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from app.core.db import SessionLocal, set_tenant
 from app.models import NotificationPref, Organization, Post, PostMetric, SocialAccount
 from app.services import content as svc
-from app.services import scheduler
+from app.services import scheduler, uptime
 from app.services.jobs import (
     JobContext,
     PermanentError,
@@ -41,6 +41,18 @@ async def _notify(org_id: uuid.UUID, event: str, title: str, body: str | None = 
         await notify_org(org_id, event, title, body, link=link, permission=permission, actions=actions)
     except Exception:
         log.exception("notification %s failed", event)
+
+
+async def _hook(event: str, post: Post, **extra) -> None:
+    """Outgoing webhooks (never raises)."""
+    from app.services import webhooks
+
+    try:
+        data = webhooks.post_data(post, **extra)
+    except Exception:  # noqa: BLE001
+        log.exception("webhook payload for %s failed", event)
+        return
+    await webhooks.emit(post.organization_id, event, data)
 
 
 async def _load_post(ctx: JobContext) -> Post | None:
@@ -136,6 +148,7 @@ async def publish(ctx: JobContext) -> dict | None:
         svc.add_activity(s, post, "publish_failed", post.error)
         await s.commit()
         await _notify(org_id, "post_failed", f"A {label} post couldn't be published", post.error, link=f"/posts/{post.id}")
+        await _hook("post.failed", post)
         return {"status": "failed"}
 
     # Platforms without an API (or accounts set to manual): hand over to a person.
@@ -149,6 +162,7 @@ async def publish(ctx: JobContext) -> dict | None:
         await s.commit()
         await _notify(org_id, "account_issue", f"Reconnect {account.name}", post.error, link="/settings/accounts",
                       permission="integration.manage")
+        await _hook("post.failed", post, reconnect=True)
         return {"status": "failed"}
 
     try:
@@ -171,9 +185,18 @@ async def publish(ctx: JobContext) -> dict | None:
     post.meta = {**(post.meta or {}), "publish_job": job_key}
     post.attempts = (post.attempts or 0) + 1
     await s.commit()
+    needs_link = _needs_public_link(post)
+    if needs_link and await uptime.public_link_ok() is False:
+        await _wait_public_link(s, post, label)
     try:
         external_id, external_url = await publishing.publish(s, post, account)
     except Exception as e:
+        if needs_link and type(e).__name__ == "PublishError" and await uptime.public_link_ok(force=True) is False:
+            await s.rollback()
+            post = await s.get(Post, post_id)
+            if post is None:
+                return {"skipped": "The post no longer exists."}
+            await _wait_public_link(s, post, label)
         is_pub_err = type(e).__name__ == "PublishError" or isinstance(e, getattr(publishing, "PublishError", ()))
         reconnect = bool(getattr(e, "reconnect", False)) if is_pub_err else False
         # Unexpected errors may happen after the platform accepted the post: don't retry blindly.
@@ -188,6 +211,12 @@ async def publish(ctx: JobContext) -> dict | None:
         if post is None:
             return {"skipped": "The post no longer exists."}
         post.error = msg
+        if getattr(e, "manual_fallback", False) and account is not None:
+            # The platform won't take it automatically right now (e.g. Pinterest Trial access): a person posts it.
+            account.status_message = msg[:500]
+            account.settings = {**(account.settings or {}), "manual_fallback": True}
+            post.meta = {**{k: v for k, v in (post.meta or {}).items() if k != "publish_job"}, "manual_reason": "platform_limit"}
+            return await _to_manual(ctx, post, account, msg)
         if reconnect:
             if account is not None:
                 account.status, account.status_message = "expired", msg[:500]
@@ -198,6 +227,7 @@ async def publish(ctx: JobContext) -> dict | None:
             await _notify(org_id, "account_issue", f"Reconnect {name}",
                           f"Publishing failed because the connection expired: {msg}\nReconnect it in Social accounts, "
                           "then press Publish now on the post.", link="/settings/accounts", permission="integration.manage")
+            await _hook("post.failed", post, reconnect=True)
             return {"status": "failed", "reconnect": True}
         if retryable and await offline_now(e if not is_pub_err else None):
             # No internet: wait (status stays 'publishing', owned by this job) and post once it's back.
@@ -215,9 +245,12 @@ async def publish(ctx: JobContext) -> dict | None:
         await s.commit()
         await _notify(org_id, "post_failed", f"A {label} post couldn't be published",
                       f"{msg}\n\nFix the problem, then press Publish now on the post.", link=f"/posts/{post.id}")
+        await _hook("post.failed", post)
         return {"status": "failed", "error": msg}
 
     post.status = "published"
+    post.meta = {k: v for k, v in (post.meta or {}).items() if k != "waiting_for"}
+    resumed = await _resume_handed_over(s, account) if _was_handed_over(account) else 0
     post.published_at = datetime.now(UTC)
     post.external_id = str(external_id) if external_id is not None else None
     post.external_url = external_url
@@ -226,7 +259,66 @@ async def publish(ctx: JobContext) -> dict | None:
     await s.commit()
     await _notify(org_id, "post_published", f"Published on {account.name}",
                   (post.title or post.text or "")[:300], link=external_url or f"/posts/{post.id}")
-    return {"status": "published", "external_id": post.external_id, "external_url": external_url}
+    await _hook("post.published", post, account_name=account.name)
+    return {"status": "published", "external_id": post.external_id, "external_url": external_url,
+            **({"resumed": resumed} if resumed else {})}
+
+
+RESUME_WITHIN = timedelta(days=7)
+
+
+def _was_handed_over(account: SocialAccount) -> bool:
+    return bool((account.settings or {}).get("manual_fallback")) or \
+        (account.status_message or "").startswith("Pinterest only lets apps with Trial access")
+
+
+async def _resume_handed_over(s, account: SocialAccount) -> int:
+    """The platform takes posts automatically again (e.g. Pinterest approved Standard access): clear the old note and
+    send the recent posts that were handed to a person for that reason, spaced out like any catch-up. Older ones stay
+    with a person, since they may have been posted by hand without being marked."""
+    account.status_message = None
+    account.settings = {k: v for k, v in (account.settings or {}).items() if k != "manual_fallback"}
+    now = datetime.now(UTC)
+    waiting = (await s.scalars(select(Post).where(
+        Post.social_account_id == account.id, Post.status == "manual_pending"))).all()
+    n = 0
+    for p in waiting:
+        if (p.meta or {}).get("manual_reason") != "platform_limit":
+            continue
+        if p.scheduled_at is not None and now - p.scheduled_at > RESUME_WITHIN:
+            continue
+        p.status, p.error = "scheduled", None
+        p.scheduled_at = now
+        p.meta = {k: v for k, v in (p.meta or {}).items() if k != "manual_reason"}
+        svc.add_activity(s, p, "resumed", f"{account.name} takes posts automatically again, so this is posted for you.")
+        n += 1
+    await s.commit()
+    if n:
+        await _notify(account.organization_id, "post_published", f"{account.name} posts automatically again",
+                      f"{n} post{'s' if n != 1 else ''} waiting to be posted by hand will now go out automatically.",
+                      link="/posts?status=scheduled")
+    return n
+
+
+def _needs_public_link(post: Post) -> bool:
+    """Instagram, Threads, Google Business, Reddit images (and TikTok, when switched on) fetch media from our
+    public address."""
+    from app.services.platforms import PLATFORMS
+
+    spec = PLATFORMS.get(post.platform)
+    return bool(post.media_ids) and (bool(getattr(spec, "needs_public_media", False)) or post.platform in
+                                     ("instagram", "threads", "gbp", "tiktok")) and bool(uptime.public_base())
+
+
+async def _wait_public_link(s, post: Post, label: str) -> None:
+    """The tunnel is down: keep the post waiting (no failure) and try again in 5 minutes."""
+    msg = uptime.PUBLIC_LINK_DOWN.format(base=uptime.public_base(), platform=label)
+    if (post.meta or {}).get("waiting_for") != "public_link":
+        svc.add_activity(s, post, "publish_waiting", msg)
+        post.meta = {**(post.meta or {}), "waiting_for": "public_link"}
+    post.error = None
+    await s.commit()
+    raise WaitForNetwork(300, "Waiting for the public address (Cloudflare Tunnel)")
 
 
 async def _to_manual(ctx: JobContext, post: Post, account: SocialAccount, why: str) -> dict:
