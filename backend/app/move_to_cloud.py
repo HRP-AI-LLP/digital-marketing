@@ -265,6 +265,51 @@ def to_clipboard(values: list[tuple[str, str]]) -> None:
 
 
 # ------------------------------------------------------------------ main
+def hand_off(owner: str, app_url: str, key_id: str, secret_key: str) -> None:
+    step("Values for the cloud (Secret Manager, environment uat)")
+    values = [("dm-uat-migrator-url", owner), ("dm-uat-database-url", app_url),
+              ("dm-uat-r2-access-key-id", key_id), ("dm-uat-r2-secret-access-key", secret_key),
+              ("dm-uat-encryption-key", encryption_key())]
+    gc = gcloud()
+    project = os.environ.get("GCP_PROJECT_ID", "") or "hrp-digital-marketing"
+    if gc and input("    gcloud is installed here. Store the values directly? [Y/n] ").strip().lower() != "n":
+        project = input(f"    Google Cloud project [{project}]: ").strip() or project
+        to_secret_manager(gc, project, values)
+        say("    Then, in Cloud Shell, run: bash ./infra/gcp/secrets.sh uat (it keeps these and adds the generated ones).")
+    else:
+        say("    FIRST, in Cloud Shell, start:  cd ~/digital-marketing && bash ./infra/gcp/secrets.sh uat")
+        say("    and leave it waiting at its first question (\"Owner connection string\").")
+        while input("    Type READY here once it's waiting: ").strip().upper() != "READY":
+            pass
+        to_clipboard(values)
+
+
+def handoff_main() -> None:
+    """Only step 4 again (the database and media are already in UAT): a new password for dm_app, then the values."""
+    say("Hand the UAT values to Google Secret Manager again (the data and media stay as they are).")
+    say("Neon console → project dm-uat → Connect → role dm_owner, database digital_marketing, pooling OFF.")
+    owner = libpq_url(getpass.getpass("Paste the connection string (hidden) and press Enter: "))
+    try:
+        st = asyncio.run(target_state(owner))
+    except Exception as e:  # noqa: BLE001
+        fail(f"Couldn't connect to Neon: {str(e)[:300]}")
+    if not st["users"]:
+        fail("That database is empty: run infra\\move-to-uat.ps1 first.")
+    say(f"    connected: {st['tables']} tables, {st['users']} users")
+    app_pw = secrets.token_urlsafe(30)
+    asyncio.run(make_app_role(owner, app_pw))  # new password: the old one was never stored
+    app_url = with_user(owner, APP_ROLE, app_pw)
+    asyncio.run(sql(app_url, ["SELECT 1"]))
+    say("    dm_app has a new password, and it can sign in")
+    key_id = getpass.getpass("dm-uat-media R2 Access Key ID (hidden): ").strip()
+    secret_key = getpass.getpass("dm-uat-media R2 Secret Access Key (hidden): ").strip()
+    if not (key_id and secret_key):
+        fail("Both R2 values are needed.")
+    hand_off(owner, app_url, key_id, secret_key)
+    step("Done")
+    say("    Check in Cloud Shell that all 9 dm-uat values say 'set', then push to GitHub for the first UAT deploy.")
+
+
 def main() -> None:
     say(__doc__)
     if input("Type MOVE to start: ").strip() != "MOVE":
@@ -325,18 +370,7 @@ def main() -> None:
         fail("All three are needed. Run the script again (type RESET when asked).")
     upload_storage(f"https://{account}.r2.cloudflarestorage.com", bucket, key_id, secret_key)
 
-    step("Values for the cloud (Secret Manager, environment uat)")
-    values = [("dm-uat-migrator-url", owner), ("dm-uat-database-url", app_url),
-              ("dm-uat-r2-access-key-id", key_id), ("dm-uat-r2-secret-access-key", secret_key),
-              ("dm-uat-encryption-key", encryption_key())]
-    gc = gcloud()
-    project = os.environ.get("GCP_PROJECT_ID", "")
-    if gc and input("    gcloud is installed here. Store the values directly? [Y/n] ").strip().lower() != "n":
-        project = input(f"    Google Cloud project [{project or 'hrp-hrms'}]: ").strip() or project or "hrp-hrms"
-        to_secret_manager(gc, project, values)
-        say("    Then, in Cloud Shell, run ./infra/gcp/secrets.sh uat (it keeps these and adds the generated ones).")
-    else:
-        to_clipboard(values)
+    hand_off(owner, app_url, key_id, secret_key)
 
     step("Done")
     say("    The laptop's data is in UAT. Automatic work on this laptop is switched off (AUTOMATION_ENABLED=false).")
