@@ -127,10 +127,10 @@ the laptop is off, give that name to UAT:
 - **Logs**: Cloud Run → `dm-api-uat` → Logs. Jobs and errors also show in the app (Activity, the jobs indicator).
 - **Pause all automatic work** in one environment: Cloud Scheduler → `dm-tick-uat` → Pause, and Cloud Tasks →
   `dm-tick-uat` → Pause queue.
-- **Backups**: Neon's free plan keeps only a short restore window, so the studio also makes its own backups. Every night at 02:30
-  IST it takes a `pg_dump` and stores it in the environment's R2 bucket under `backups/`. It keeps 14 daily and 8 weekly
-  copies, about 0.5 GB. Platform → Backups lists them, offers **Back up now** and lets you download any copy.
-  To restore one, run `pg_restore --clean --no-owner -d "<owner connection string>" <file>` with a PostgreSQL 17
-  client (the backups are made with pg_dump 17).
+- **Backups**: there is no nightly job in the cloud for now; Neon keeps a short restore window. To take a copy
+  yourself, use Platform → Backups → **Back up now**. It stores a `pg_dump` in the environment's R2 bucket under
+  `backups/`, and you can download it there. To switch the nightly backup on later, add `CLOUD_NIGHTLY_BACKUP=true`
+  to the Cloud Run settings in `.github/workflows/deploy.yml`. Restore with `pg_restore --clean --no-owner -d "<owner
+  connection string>" <file>` using a PostgreSQL 17 client.
 - **Back to the laptop** (emergency only): first pause UAT as above, then set `AUTOMATION_ENABLED=true` in the
   laptop's `.env` and run `start.ps1`. The laptop's data is from the day of the move.

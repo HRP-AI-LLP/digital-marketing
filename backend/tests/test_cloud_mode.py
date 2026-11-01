@@ -280,3 +280,12 @@ async def test_cloud_backup_goes_to_the_bucket(cloud, monkeypatch, tmp_path):
     d = backups.disk_usage()
     assert d["files"] >= 1 and d["folder"].startswith("R2 bucket dm-test")
     assert backups.resolve_file(run.file_name).read_bytes().startswith(b"PGDMP")  # downloads come from the bucket
+
+
+async def test_nightly_backup_off_in_the_cloud_by_default(cloud):
+    assert "backups.daily" in jobs.cloud_skip()
+    cloud.cloud_nightly_backup = True
+    try:
+        assert "backups.daily" not in jobs.cloud_skip()
+    finally:
+        cloud.cloud_nightly_backup = False

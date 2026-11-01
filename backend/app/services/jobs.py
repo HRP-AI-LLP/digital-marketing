@@ -195,7 +195,12 @@ async def record_periodic(name: str, seconds: int, ok: bool, error: str | None, 
 
 
 # Periodic tasks that make no sense in the cloud (the database host keeps its own backups).
-CLOUD_SKIP: frozenset[str] = frozenset()  # every periodic task runs in the cloud too (backups go to R2)
+def cloud_skip() -> set[str]:
+    """Periodic tasks the cloud doesn't run. The nightly backup is off unless CLOUD_NIGHTLY_BACKUP=true (then it goes
+    to R2); "Back up now" on Platform -> Backups works either way."""
+    from app.core.config import get_settings
+
+    return set() if get_settings().cloud_nightly_backup else {"backups.daily"}
 
 
 async def _run_periodic_if_due(name: str, seconds: int, fn, now: datetime) -> bool:
@@ -512,7 +517,7 @@ class Worker:
             log.exception("stale job recovery failed")
         ran: list[str] = []
         for name, seconds, fn in PERIODIC:
-            if name in CLOUD_SKIP or (self.watchdog.paused and not getattr(fn, "_offline_ok", False)):
+            if name in cloud_skip() or (self.watchdog.paused and not getattr(fn, "_offline_ok", False)):
                 continue
             if await _run_periodic_if_due(name, seconds, fn, started):
                 ran.append(name)

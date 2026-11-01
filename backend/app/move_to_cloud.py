@@ -298,7 +298,7 @@ def main() -> None:
     podman(["exec", CONTAINER, "sh", "-c",
             "pg_restore -l /tmp/dm-uat.dump | grep -v -e 'COMMENT - EXTENSION' > /tmp/dm-uat.list"])
     r = podman(["exec", "-i", CONTAINER, "sh", "-c",
-                'read -r U; pg_restore --no-owner --no-privileges --single-transaction --exit-on-error '
+                'read -r U; U=$(printf %s "$U" | tr -d "\\r"); pg_restore --no-owner --no-privileges --single-transaction --exit-on-error '
                 '-L /tmp/dm-uat.list -d "$U" /tmp/dm-uat.dump'], stdin=owner + "\n", check=False)
     podman(["exec", CONTAINER, "rm", "-f", "/tmp/dm-uat.dump", "/tmp/dm-uat.list"], check=False)
     if r.returncode != 0:

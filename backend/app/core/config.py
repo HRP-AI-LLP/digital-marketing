@@ -115,6 +115,7 @@ class Settings(BaseSettings):
     # Stops every automatic action (posting, replies, metrics, crawls) on this copy of the app. Set to false on the
     # laptop once the cloud environment has taken over, so the same accounts are never driven twice.
     automation_enabled: bool = True
+    cloud_nightly_backup: bool = False  # cloud: nightly pg_dump to R2 (off for now; Back up now still works)
 
     @property
     def cloud(self) -> bool:
