@@ -232,7 +232,16 @@ def upload_storage(endpoint: str, bucket: str, key_id: str, secret_key: str) -> 
 
 # ------------------------------------------------------------------ hand-off of the values
 def gcloud() -> str | None:
-    return shutil.which("gcloud") or shutil.which("gcloud.cmd")
+    """The Google Cloud CLI: on PATH, or where its Windows installer puts it."""
+    found = shutil.which("gcloud.cmd") or shutil.which("gcloud")
+    if found:
+        return found
+    if sys.platform == "win32":
+        for base in (os.environ.get("LOCALAPPDATA"), os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles")):
+            exe = Path(base or "") / "Google" / "Cloud SDK" / "google-cloud-sdk" / "bin" / "gcloud.cmd"
+            if base and exe.is_file():
+                return str(exe)
+    return None
 
 
 def _gc(gc: str, args: list[str], value: str | None = None) -> subprocess.CompletedProcess:
