@@ -235,13 +235,36 @@ def gcloud() -> str | None:
     return shutil.which("gcloud") or shutil.which("gcloud.cmd")
 
 
-def to_secret_manager(gc: str, project: str, values: list[tuple[str, str]]) -> None:
+def _gc(gc: str, args: list[str], value: str | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run([gc, *args], input=value, capture_output=True, text=True)
+
+
+def _has(gc: str, project: str, name: str) -> bool:
+    r = _gc(gc, ["secrets", "versions", "list", name, f"--project={project}", "--limit=1", "--format=value(name)"])
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
+def to_secret_manager(gc: str, project: str, values: list[tuple[str, str]], env: str = "uat") -> None:
     for name, value in values:
-        r = subprocess.run([gc, "secrets", "versions", "add", name, f"--project={project}", "--data-file=-"],
-                           input=value, capture_output=True, text=True, shell=sys.platform == "win32")
+        r = _gc(gc, ["secrets", "versions", "add", name, f"--project={project}", "--data-file=-"], value)
         if r.returncode != 0:
             fail(f"Couldn't store {name}: {(r.stderr or '')[-400:]}")
         say(f"    stored {name}")
+    # the values the cloud generates for itself (only when missing: changing them later would sign everyone out)
+    generated = {
+        f"dm-{env}-secret-key": secrets.token_urlsafe(48),
+        f"dm-{env}-cron-secret": secrets.token_urlsafe(32),
+        f"dm-{env}-origin-verify-secret": secrets.token_urlsafe(32),
+        f"dm-{env}-admin-password": secrets.token_urlsafe(18) + "Aa1!",
+    }
+    for name, value in generated.items():
+        if _has(gc, project, name):
+            say(f"    {name} already set (kept)")
+            continue
+        r = _gc(gc, ["secrets", "versions", "add", name, f"--project={project}", "--data-file=-"], value)
+        if r.returncode != 0:
+            fail(f"Couldn't store {name}: {(r.stderr or '')[-400:]}")
+        say(f"    generated {name}")
 
 
 def _clip(value: str) -> None:
@@ -275,7 +298,7 @@ def hand_off(owner: str, app_url: str, key_id: str, secret_key: str) -> None:
     if gc and input("    gcloud is installed here. Store the values directly? [Y/n] ").strip().lower() != "n":
         project = input(f"    Google Cloud project [{project}]: ").strip() or project
         to_secret_manager(gc, project, values)
-        say("    Then, in Cloud Shell, run: bash ./infra/gcp/secrets.sh uat (it keeps these and adds the generated ones).")
+        say("    All 9 dm-uat values are in Secret Manager.")
     else:
         say("    FIRST, in Cloud Shell, start:  cd ~/digital-marketing && bash ./infra/gcp/secrets.sh uat")
         say("    and leave it waiting at its first question (\"Owner connection string\").")
