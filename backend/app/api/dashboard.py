@@ -20,6 +20,34 @@ router = APIRouter(tags=["dashboard"])
 HIDDEN_ACCOUNT_PLATFORMS = ("google",)
 
 
+def _dismissed_at(org) -> datetime | None:
+    v = ((org.publishing if org is not None else None) or {}).get("alerts_dismissed_at")
+    try:
+        return datetime.fromisoformat(v) if v else None
+    except ValueError:
+        return None
+
+
+@router.post("/dashboard/alerts/dismiss")
+async def dismiss_alerts(ctx: Context = Depends(require("content.view"))):
+    """Hide the failed-posts / failed-tasks warning for what has failed so far. Expired accounts keep showing."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.models import Organization
+    from app.services import audit
+
+    org = await ctx.session.get(Organization, ctx.org_id)
+    pub = dict(org.publishing or {})
+    pub["alerts_dismissed_at"] = datetime.now(UTC).isoformat()
+    org.publishing = pub
+    flag_modified(org, "publishing")
+    audit.record(ctx.session, action="dashboard.alerts_dismissed", organization_id=ctx.org_id, actor=ctx.user,
+                 entity_type="organization", entity_id=ctx.org_id, summary="Dismissed the failure warning on the dashboard",
+                 ip=ctx.ip)
+    await ctx.session.commit()
+    return {"dismissed_at": pub["alerts_dismissed_at"]}
+
+
 @router.get("/dashboard")
 async def dashboard(ctx: Context = Depends(get_context)):
     if ctx.org is None:
@@ -30,11 +58,16 @@ async def dashboard(ctx: Context = Depends(get_context)):
     async def count(*where) -> int:
         return await s.scalar(select(func.count()).select_from(Post).where(*where)) or 0
 
+    # failures from before "Dismiss" was pressed on the warning no longer count (new ones show again)
+    dismissed = _dismissed_at(ctx.org)
+    since_failed = max(now - timedelta(days=14), dismissed) if dismissed else now - timedelta(days=14)
+    since_jobs = max(now - timedelta(days=2), dismissed) if dismissed else now - timedelta(days=2)
+
     counts = {
         "in_review": await count(Post.status == "in_review"),
         "scheduled_7d": await count(Post.status == "scheduled", Post.scheduled_at <= now + timedelta(days=7)),
         "published_7d": await count(Post.status == "published", Post.published_at >= now - timedelta(days=7)),
-        "failed": await count(Post.status == "failed", Post.updated_at >= now - timedelta(days=14)),
+        "failed": await count(Post.status == "failed", Post.updated_at >= since_failed),
         "manual_pending": await count(Post.status == "manual_pending"),
     }
     upcoming_rows = (await s.execute(
@@ -60,7 +93,7 @@ async def dashboard(ctx: Context = Depends(get_context)):
 
     social_runs = (await s.scalars(select(PresenceRun).order_by(PresenceRun.created_at.desc()).limit(2))).all()
     failing_jobs = await s.scalar(select(func.count()).select_from(Job).where(
-        Job.status == "failed", Job.finished_at >= now - timedelta(days=2))) or 0
+        Job.status == "failed", Job.finished_at >= since_jobs)) or 0
 
     setup = [
         {"key": "org", "title": "Add your organization details", "body": "Website and time zone. Posting times use this time zone.",

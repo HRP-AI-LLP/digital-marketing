@@ -210,6 +210,15 @@ async def _openai_image(cfg, model, prompt, negative, width, height, seed) -> by
             body["negative_prompt"] = negative
     elif cfg.provider == "xai_images":
         body["response_format"] = "b64_json"
+    elif cfg.provider == "nebius_images":
+        w, h = _gen_dims(width, height, 1024, 64)
+        body.update(width=w, height=h, response_format="b64_json", response_extension="png")
+        if negative:
+            body["negative_prompt"] = negative
+    elif cfg.provider in ("deepinfra_images", "zai_images"):
+        body["size"] = "%dx%d" % _closest(width, height, [(1024, 1024), (1344, 768), (768, 1344), (1152, 864), (864, 1152)])
+        if cfg.provider == "deepinfra_images":
+            body["response_format"] = "b64_json"
     else:
         if model.startswith("dall-e-3"):
             body["size"] = "%dx%d" % _closest(width, height, [(1024, 1024), (1792, 1024), (1024, 1792)])

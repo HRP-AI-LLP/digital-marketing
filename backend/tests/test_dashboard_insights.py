@@ -77,3 +77,16 @@ async def test_system_map_states(client):
     assert {a["platform"] for a in d["accounts"]} == {"linkedin_org", "pinterest"}
     assert any(s["id"] == "ai" for s in d["services"]) and d["flows"]
     assert uuid.UUID(d["accounts"][0]["id"])
+
+
+async def test_dismiss_hides_past_failures_only(client):
+    o = await new_org(client)
+    oid = o["id"]
+    await add(oid, Job(organization_id=oid, kind="post.generate", status="failed", error="Boom", finished_at=datetime.now(UTC)))
+    d = (await client.get("/dashboard", headers=o["h"])).json()
+    assert d["failing_jobs"] == 1
+    assert (await client.post("/dashboard/alerts/dismiss", headers=o["h"])).status_code == 200
+    assert (await client.get("/dashboard", headers=o["h"])).json()["failing_jobs"] == 0
+    await add(oid, Job(organization_id=oid, kind="post.publish", status="failed", error="New",
+                       finished_at=datetime.now(UTC) + timedelta(seconds=2)))
+    assert (await client.get("/dashboard", headers=o["h"])).json()["failing_jobs"] == 1  # a new failure shows again

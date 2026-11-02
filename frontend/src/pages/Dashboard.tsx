@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Check, ChevronRight } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, Check, ChevronRight, X } from "lucide-react";
 import { Gauge, Panel, TipRow } from "../components/viz";
 import DashboardInsights from "./dashboard/Insights";
 import SystemMap from "./dashboard/SystemMap";
@@ -77,6 +77,11 @@ function ScoresRow({ d, canAnalytics, canPresence }: { d: Dash; canAnalytics: bo
 export default function Dashboard() {
   const { session, can } = useAuth();
   const q = useQuery({ queryKey: ["dashboard"], queryFn: () => api<Dash>("/dashboard"), refetchInterval: 60000 });
+  const qc = useQueryClient();
+  const dismiss = useMutation({
+    mutationFn: () => api("/dashboard/alerts/dismiss", { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["dashboard"] }),
+  });
   const org = session?.organization;
 
   if (!org) {
@@ -111,6 +116,13 @@ export default function Dashboard() {
                 {d.accounts.filter((a) => a.status === "expired").map((a) => <div key={a.id}>{a.name} needs reconnecting. <Link className="underline" to="/settings/accounts">Reconnect</Link>.</div>)}
                 {d.failing_jobs > 0 && <div>{d.failing_jobs} background task(s) failed recently. Details are in the notifications.</div>}
               </div>
+              {(d.counts.failed > 0 || d.failing_jobs > 0) && (
+                <button type="button" onClick={() => dismiss.mutate()} disabled={dismiss.isPending}
+                  title="Hide these failures (new ones will show again). Accounts that need reconnecting keep showing."
+                  className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium hover:bg-danger/10 disabled:opacity-50">
+                  <X size={14} /> Dismiss
+                </button>
+              )}
             </div>
           )}
 

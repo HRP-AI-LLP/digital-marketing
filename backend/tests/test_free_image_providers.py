@@ -119,3 +119,25 @@ async def test_openverse_search_without_key(monkeypatch):
     items = await stock._search_one(c, "desk", "photo", "landscape", 5)
     assert items[0]["provider"] == "openverse" and items[0]["download_url"] == "https://img/x.jpg"
     assert "CC BY 4.0" in items[0]["attribution"]
+
+
+async def test_more_free_providers_in_the_catalog():
+    from app.services.llm import pricing
+
+    for pid in ("ollama_cloud", "ollama_remote", "zai", "dashscope", "siliconflow", "scaleway", "ovh_ai", "nebius", "llm7",
+                "voyage", "deepinfra_images", "nebius_images", "zai_images"):
+        assert pid in BY_ID and pricing.default_billing(pid) == "free", pid
+    assert BY_ID["ollama_cloud"].base_url == "https://ollama.com/v1" and BY_ID["ollama_cloud"].key
+    assert not BY_ID["llm7"].key and not BY_ID["ovh_ai"].key  # work without a key
+
+
+async def test_nebius_and_deepinfra_images(http):
+    calls, routes = http
+    b64 = base64.b64encode(PNG).decode()
+    routes.append(("api.studio.nebius.com/v1/images/generations", lambda r: httpx.Response(200, json={"data": [{"b64_json": b64}]})))
+    assert await image_gen._openai_image(cfg("nebius_images"), "black-forest-labs/flux-schnell", "x", "bad", 1080, 1350, 1) == PNG
+    body = json.loads(calls[-1].content)
+    assert body["response_format"] == "b64_json" and body["width"] % 64 == 0 and body["negative_prompt"] == "bad"
+    routes.append(("api.deepinfra.com/v1/openai/images/generations", lambda r: httpx.Response(200, json={"data": [{"b64_json": b64}]})))
+    assert await image_gen._openai_image(cfg("deepinfra_images"), "black-forest-labs/FLUX-1-schnell", "x", "", 1080, 1350, 1) == PNG
+    assert json.loads(calls[-1].content)["size"] == "864x1152"
