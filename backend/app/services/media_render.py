@@ -274,8 +274,15 @@ async def render_video(html: str, width: int, height: int, duration: float, out_
             proc.kill()
         raise
     if proc.returncode != 0:
-        raise RenderError(f"ffmpeg failed: {err.decode(errors='ignore')[-600:]}")
+        raise RenderError(f"ffmpeg failed ({_exit(proc.returncode)}): {err.decode(errors='ignore')[-600:]}")
     return out_path
+
+
+def _exit(code: int | None) -> str:
+    """'exit code 1', or 'killed (out of memory?)' for a signal kill (negative code / 137)."""
+    if code is not None and (code < 0 or code == 137):
+        return "killed by the system, probably out of memory"
+    return f"exit code {code}"
 
 
 async def render_alpha_video(html: str, width: int, height: int, duration: float, out_path: Path, *, fps: int = 30,
@@ -348,7 +355,8 @@ async def run_ffmpeg(args: list[str], timeout_s: float = 300) -> str:
     code, text = await _exec([ffmpeg_exe(), "-hide_banner", "-nostdin", "-y", *args], timeout_s)
     if code != 0:
         tail = "\n".join(line for line in text.splitlines()[-12:] if line.strip())
-        raise RenderError(f"ffmpeg failed: {tail[-800:]}")
+        errs = [ln for ln in text.splitlines() if "error" in ln.lower() or "invalid" in ln.lower()][-3:]
+        raise RenderError(f"ffmpeg failed ({_exit(code)}): " + ("; ".join(errs)[:400] + " | " if errs else "") + tail[-600:])
     return text
 
 

@@ -77,7 +77,7 @@ jobs:
           gcloud run deploy "$SVC" --image "$IMAGE" --region "$REGION" \
             --service-account "dm-api-$ENV_NAME@$PROJECT.iam.gserviceaccount.com" \
             --allow-unauthenticated --ingress all --port 8080 \
-            --cpu 1 --memory 2Gi --concurrency 20 --min-instances "$MIN" --max-instances "$MAX" \
+            --cpu 2 --memory 4Gi --concurrency 20 --min-instances "$MIN" --max-instances "$MAX" \
             --cpu-boost --timeout 3600 --execution-environment gen2 \
             --set-env-vars "^##^DEPLOY_MODE=cloud##ENVIRONMENT=$APP_ENV##PUBLIC_BASE_URL=$APP_URL##APP_URL=$APP_URL##CORS_ORIGINS=$APP_URL##OAUTH_HTTPS_PROVIDERS=*##STORAGE_DIR=/tmp/storage##S3_ENDPOINT=$R2_ENDPOINT##S3_BUCKET=$BUCKET##S3_REGION=auto##PLATFORM_ADMIN_EMAIL=$PLATFORM_ADMIN_EMAIL##DB_NULL_POOL=true##BOOTSTRAP_ORG=false##TASKS_QUEUE=dm-tick-$ENV_NAME##TICK_EVERY_MINUTES=20##GCP_PROJECT=$PROJECT##GCP_REGION=$REGION##TZ=Asia/Kolkata" \
             --set-secrets "DATABASE_URL=$S-database-url:latest,SECRET_KEY=$S-secret-key:latest,ENCRYPTION_KEY=$S-encryption-key:latest,ORIGIN_VERIFY_SECRET=$S-origin-verify-secret:latest,CRON_SECRET=$S-cron-secret:latest,S3_ACCESS_KEY_ID=$S-r2-access-key-id:latest,S3_SECRET_ACCESS_KEY=$S-r2-secret-access-key:latest,PLATFORM_ADMIN_PASSWORD=$S-admin-password:latest,MIGRATION_DATABASE_URL=$S-migrator-url:latest" \

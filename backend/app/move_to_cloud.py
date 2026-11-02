@@ -342,6 +342,55 @@ def handoff_main() -> None:
     say("    Check in Cloud Shell that all 9 dm-uat values say 'set', then push to GitHub for the first UAT deploy.")
 
 
+def set_secret_main(name: str) -> None:
+    """Replace one value in Google Secret Manager (typed into a hidden prompt), e.g. dm-uat-r2-secret-access-key."""
+    gc = gcloud()
+    if not gc:
+        fail("Install the Google Cloud CLI first (winget install --id Google.CloudSDK -e), then: gcloud auth login")
+    project = os.environ.get("GCP_PROJECT_ID", "") or "hrp-digital-marketing"
+    value = getpass.getpass(f"New value for {name} (hidden): ").strip()
+    if not value:
+        fail("Nothing typed. Nothing was changed.")
+    r = _gc(gc, ["secrets", "versions", "add", name, f"--project={project}", "--data-file=-"], value)
+    if r.returncode != 0:
+        fail(f"Couldn't store {name}: {(r.stderr or '')[-400:]}")
+    say(f"    stored a new version of {name} ({len(value)} characters)")
+
+
+def set_password_main(email: str) -> None:
+    """Set a new sign-in password for one user in a cloud database (typed twice into hidden prompts)."""
+    import asyncpg
+
+    from app.core.security import hash_password
+
+    email = email.strip().lower()
+    say(f"New password for {email} in a cloud database.")
+    say("Neon console → the project (dm-uat or dm-prod) → Connect → role dm_owner, database digital_marketing, pooling OFF.")
+    owner = libpq_url(getpass.getpass("Paste the connection string (hidden) and press Enter: "))
+    pw = getpass.getpass("New password (hidden, at least 10 characters): ")
+    if len(pw) < 10:
+        fail("Use at least 10 characters.")
+    if getpass.getpass("Type it again (hidden): ") != pw:
+        fail("The two passwords don't match. Nothing was changed.")
+
+    async def run() -> str:
+        conn = await asyncpg.connect(asyncpg_url(owner).replace("postgresql+asyncpg://", "postgresql://"))
+        try:
+            return await conn.execute(
+                "UPDATE users SET password_hash = $1, must_change_password = false, is_active = true, "
+                "token_version = token_version + 1 WHERE lower(email) = $2", hash_password(pw), email)
+        finally:
+            await conn.close()
+
+    try:
+        res = asyncio.run(run())
+    except Exception as e:  # noqa: BLE001
+        fail(f"Couldn't update the password: {str(e)[:300]}")
+    if res.endswith(" 0"):
+        fail(f"There's no user {email} in that database. Nothing was changed.")
+    say(f"    done: {email} can sign in with the new password (other signed-in sessions were signed out).")
+
+
 def main() -> None:
     say(__doc__)
     if input("Type MOVE to start: ").strip() != "MOVE":

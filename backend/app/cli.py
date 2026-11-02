@@ -4,6 +4,8 @@
   python -m app.cli app-role <password>     create or update the dm_app login role (first setup of a database)
   python -m app.cli ensure-app-role         same, with the user and password in DATABASE_URL (the deploy runs it)
   python -m app.cli check                   print what the database holds (organizations, accounts, posts)
+  python -m app.cli set-secret <name>       replace one Secret Manager value (hidden prompt), e.g. dm-uat-r2-secret-access-key
+  python -m app.cli set-password <email>    new sign-in password for one user in a cloud database (hidden prompts)
   python -m app.cli handoff-uat             give the UAT values to Secret Manager again (after move-to-uat)
   python -m app.cli move-to-uat             one-time move of the laptop's data to the cloud UAT (infra/move-to-uat.ps1)
 
@@ -114,6 +116,14 @@ def main(argv: list[str]) -> None:
         asyncio.run(ensure_app_role())
     elif cmd == "check":
         asyncio.run(check())
+    elif cmd == "set-secret" and len(argv) == 2:
+        from app.move_to_cloud import set_secret_main
+
+        set_secret_main(argv[1])
+    elif cmd == "set-password" and len(argv) == 2:
+        from app.move_to_cloud import set_password_main
+
+        set_password_main(argv[1])
     elif cmd == "handoff-uat":
         from app.move_to_cloud import handoff_main
 
