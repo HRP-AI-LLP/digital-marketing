@@ -540,3 +540,20 @@ async def test_tenant_isolation(client, hrp):
         assert "Acme" not in await knowledge.company_context(s)
     async with await tenant_session(org_of(hrp)) as s:
         assert (await s.scalars(select(Opportunity))).all()
+
+
+async def test_competitor_crawl_survives_embedding_failure(client, hrp, monkeypatch):
+    """No embedding model (e.g. in the cloud): the crawl's rollback must not break the analysis (MissingGreenlet)."""
+    from app.modules import intelligence as intel_mod
+
+    async def boom(session):
+        from sqlalchemy import text
+
+        await session.execute(text("SELECT 1"))  # like the real one: reads pending documents, then the model call fails
+        raise RuntimeError("no embedding model")
+
+    monkeypatch.setattr(intel_mod.knowledge, "embed_pending", boom)
+    comps = (await client.get("/intel/competitors", headers=auth(hrp))).json()
+    rival = next(c for c in comps if c["domain"] == "rival1.test")
+    out = await run_inline("intel.competitor_crawl", org_of(hrp), {"competitor_id": rival["id"]})
+    assert out["pages"] >= 1 and out["embedded"] == 0

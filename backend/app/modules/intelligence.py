@@ -240,6 +240,7 @@ async def crawl_source(ctx: JobContext, source: KnowledgeSource, max_pages: int 
     except Exception as e:
         log.warning("embedding failed: %s", e)
         await s.rollback()
+        await s.refresh(source)  # the rollback expired it; callers keep using it (async can't lazy-load: MissingGreenlet)
     return out
 
 
@@ -739,6 +740,9 @@ async def h_competitor_crawl(ctx: JobContext) -> dict:
     source = await competitor_source(s, comp)
     await s.commit()
     stats = await crawl_source(ctx, source, int(ctx.payload.get("max_pages") or COMPETITOR_MAX_PAGES))
+    # crawl_source rolls back when the optional embedding step fails, which expires every loaded row (it reloads the
+    # source itself): reload the competitor too, since async sessions can't lazy-load later (MissingGreenlet)
+    await s.refresh(comp)
     return {**stats, **(await analyze_competitor(ctx, comp, source, stats))}
 
 

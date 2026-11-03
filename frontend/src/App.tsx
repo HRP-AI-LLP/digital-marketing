@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import Layout from "./components/Layout";
 import Activity from "./pages/Activity";
+import Tasks from "./pages/Tasks";
 import ChangePassword from "./pages/ChangePassword";
 import ComingSoon from "./pages/ComingSoon";
 import Dashboard from "./pages/Dashboard";
@@ -63,6 +64,7 @@ export default function App() {
         <Route path="settings/users" element={<Guard perm="user.view"><Users /></Guard>} />
         <Route path="settings/roles" element={<Guard perm="role.view"><Roles /></Guard>} />
         <Route path="settings/activity" element={<Guard perm="audit.view"><Activity /></Guard>} />
+        <Route path="tasks" element={<Guard perm="content.view"><Tasks /></Guard>} />
         <Route path="platform/organizations" element={<Guard platform><PlatformOrganizations /></Guard>} />
         <Route path="settings/integrations" element={<Guard perm="integration.view"><Integrations /></Guard>} />
         <Route path="settings/connections" element={<Guard perm="connections.view"><Connections /></Guard>} />

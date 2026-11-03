@@ -564,9 +564,11 @@ async def _on_job_failed(job: Job, err: str) -> None:
         from app.services.notify import notify_org
 
         if job.organization_id and job.kind in {"post.publish", "post.generate", "intel.crawl", "seo.write"}:
+            from app.api.jobs import job_label
+
             await notify_org(
-                job.organization_id, "job_failed", f"Background task failed: {job.kind}", err[:500],
-                link="/settings/activity", permission="content.view",
+                job.organization_id, "job_failed", f"Background task failed: {job_label(job.kind)}", err[:500],
+                link=f"/tasks?status=failed&job={job.id}", permission="content.view",
             )
     except Exception:  # noqa: BLE001
         log.exception("failed to notify about job failure")

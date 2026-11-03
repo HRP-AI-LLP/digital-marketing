@@ -4,7 +4,7 @@ import { langInfo } from "../prefs/i18n";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { Network,
   CalendarDays, CheckCheck, ChevronsUpDown, FileText, Gauge, History, Image, KeyRound,
-  LineChart, LogOut, Menu, Plug, Coins, Radar, Settings, ShieldCheck, Bell, Users as UsersIcon, X, Globe2, ListChecks,
+  LineChart, LogOut, Menu, Plug, Coins, Radar, Settings, ShieldCheck, Bell, Users as UsersIcon, X, Globe2, ListChecks, Cpu,
   Palette, Clock, Share2, FileDown, Inbox as InboxIcon, Lightbulb, Megaphone, Bot, Ear, ScanSearch, KeySquare, Link2, MousePointerClick, Webhook,
   DatabaseBackup, Lock, UserPlus } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
@@ -65,6 +65,7 @@ export const NAV: Group[] = [
       { to: "/settings/users", label: "Users", icon: UsersIcon, perm: "user.view" },
       { to: "/settings/roles", label: "Roles and access", icon: ShieldCheck, perm: "role.view" },
       { to: "/settings/activity", label: "Activity log", icon: History, perm: "audit.view" },
+      { to: "/tasks", label: "Background tasks", icon: Cpu, perm: "content.view" },
     ],
   },
   {

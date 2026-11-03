@@ -131,6 +131,7 @@ async def dashboard(ctx: Context = Depends(get_context)):
                              if len(social_runs) > 1 and social_runs[0].score is not None and social_runs[1].score is not None else None,
                              "at": social_runs[0].created_at} if social_runs else None),
         "failing_jobs": failing_jobs,
+        "failing_since": since_jobs.isoformat(),
     }
 
 

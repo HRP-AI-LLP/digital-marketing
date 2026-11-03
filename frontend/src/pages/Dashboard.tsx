@@ -17,6 +17,7 @@ type Dash = {
   audit_score: number | null;
   social_presence: { score: number | null; grade: string; change: number | null; at: string } | null;
   failing_jobs: number;
+  failing_since?: string;
 };
 
 function Pill({ label, value, to, tone }: { label: string; value: number; to: string; tone?: "warn" }) {
@@ -114,7 +115,7 @@ export default function Dashboard() {
               <div>
                 {d.counts.failed > 0 && <div>{d.counts.failed} post(s) failed to publish in the last two weeks. <Link className="underline" to="/posts?status=failed">Review them</Link>.</div>}
                 {d.accounts.filter((a) => a.status === "expired").map((a) => <div key={a.id}>{a.name} needs reconnecting. <Link className="underline" to="/settings/accounts">Reconnect</Link>.</div>)}
-                {d.failing_jobs > 0 && <div>{d.failing_jobs} background task(s) failed recently. Details are in the notifications.</div>}
+                {d.failing_jobs > 0 && <div>{d.failing_jobs} background task(s) failed recently. <Link className="underline" to={`/tasks?status=failed${d.failing_since ? `&since=${encodeURIComponent(d.failing_since)}` : ""}`}>See which</Link>.</div>}
               </div>
               {(d.counts.failed > 0 || d.failing_jobs > 0) && (
                 <button type="button" onClick={() => dismiss.mutate()} disabled={dismiss.isPending}

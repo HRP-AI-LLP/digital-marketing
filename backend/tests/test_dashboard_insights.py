@@ -90,3 +90,23 @@ async def test_dismiss_hides_past_failures_only(client):
     await add(oid, Job(organization_id=oid, kind="post.publish", status="failed", error="New",
                        finished_at=datetime.now(UTC) + timedelta(seconds=2)))
     assert (await client.get("/dashboard", headers=o["h"])).json()["failing_jobs"] == 1  # a new failure shows again
+
+
+async def test_failed_tasks_list_matches_the_dashboard_warning(client):
+    o = await new_org(client)
+    oid = o["id"]
+    old = datetime.now(UTC) - timedelta(hours=5)
+    pid = uuid.uuid4()
+    await add(oid, Job(organization_id=oid, kind="post.generate", status="failed", error="PermanentError: Boom",
+                       payload={"post_id": str(pid)}, finished_at=datetime.now(UTC)),
+              Job(organization_id=oid, kind="inbox.sync", status="failed", error="old", finished_at=old),
+              Job(organization_id=oid, kind="post.publish", status="done", finished_at=datetime.now(UTC)))
+    d = (await client.get("/dashboard", headers=o["h"])).json()
+    assert d["failing_jobs"] == 2 and d["failing_since"]
+    rows = (await client.get("/jobs", params={"status": "failed", "since": d["failing_since"]}, headers=o["h"])).json()
+    assert {r["kind"] for r in rows} == {"post.generate", "inbox.sync"}
+    gen = next(r for r in rows if r["kind"] == "post.generate")
+    assert gen["label"] == "Write a post (text and media)" and gen["link"] == f"/posts/{pid}"
+    recent = (await client.get("/jobs", params={"status": "failed", "since": (datetime.now(UTC) - timedelta(hours=1)).isoformat()},
+                               headers=o["h"])).json()
+    assert [r["kind"] for r in recent] == ["post.generate"]
