@@ -249,10 +249,9 @@ async def test_speakable_text():
 
 async def test_script_is_spoken_in_one_take_and_cut_per_scene(tmp_path, monkeypatch):
     """One natural take, cut at the scene boundaries using the word timings ("in 2026" arrives as one timing)."""
-    import subprocess
-
     full = tmp_path / "vo_full.mp3"
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=300:duration=4", str(full)], check=True)
+    # the bundled ffmpeg (imageio-ffmpeg), like the app: CI machines have no system ffmpeg
+    await media_render.run_ffmpeg(["-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=4", str(full)])
     W = tts.Word
     words = [W(0.1, 0.4, "Payroll"), W(0.4, 0.6, "took"), W(0.6, 0.9, "days"), W(1.3, 1.5, "Now"), W(1.5, 1.8, "it's"),
              W(1.8, 2.1, "done"), W(2.1, 2.6, "in 2026"), W(3.0, 3.3, "See"), W(3.3, 3.8, "hrpai")]
