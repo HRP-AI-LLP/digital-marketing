@@ -873,3 +873,44 @@ async def test_x_posts_leave_links_out():
     assert strip_links("Our HRMS is live. Explore: https://hrpai.in/products\n\n#HRTech") == \
         "Our HRMS is live.\n\n#HRTech\n\nLink in bio."
     assert strip_links("No links here #AI") == "No links here #AI"
+
+
+async def test_rewrite_failed_posts_and_publish_on_their_own(client, fake):
+    """Posts that failed before they were written: "Write again & publish" writes them, spreads the ones whose time has
+    passed an hour apart per account, and schedules them without waiting for approval."""
+    o = await new_org(client)
+    acc = await mk_account(o["id"])
+    other = await mk_account(o["id"], platform="bluesky", name="Bluesky")
+    past = datetime.now(UTC) - timedelta(hours=5)
+    p1 = await mk_post(o["id"], acc, status="failed", error="All AI providers failed", scheduled_at=past)
+    p2 = await mk_post(o["id"], acc, status="failed", error="All AI providers failed", scheduled_at=past + timedelta(hours=1))
+    p3 = await mk_post(o["id"], other, status="failed", error="All AI providers failed", scheduled_at=past)
+    later = datetime.now(UTC) + timedelta(days=2)
+    p4 = await mk_post(o["id"], acc, status="failed", error="x", scheduled_at=later)
+    done = await mk_post(o["id"], acc, status="published", text="Live")
+    r = await client.post("/content/posts/bulk", headers=o["h"],
+                          json={"ids": [str(p2.id), str(p1.id), str(p3.id), str(p4.id), str(done.id)], "action": "rewrite"})
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] == 4 and r.json()["failed"] == 1
+    a, b, c, d = [await get_post(o["id"], p.id) for p in (p1, p2, p3, p4)]
+    now = datetime.now(UTC)
+    for x in (a, b, c, d):
+        assert x.status == "planned" and x.mode == "full_auto" and x.error is None
+    assert timedelta(minutes=10) < a.scheduled_at - now < timedelta(minutes=20)
+    assert b.scheduled_at - a.scheduled_at == timedelta(hours=1)  # same account: an hour apart, oldest first
+    assert abs((c.scheduled_at - a.scheduled_at).total_seconds()) < 5  # another account: its own queue
+    assert abs((d.scheduled_at - later).total_seconds()) < 1  # still ahead: keeps its time
+    jobs_ = await scalars(o["id"], select(Job).where(Job.kind == "post.generate", Job.status == "queued",
+                                                     Job.organization_id == o["id"]))
+    assert {j.payload["post_id"] for j in jobs_} >= {str(p1.id), str(p2.id), str(p3.id), str(p4.id)}
+
+    # written: it's scheduled (not waiting for approval) at its new time
+    await generate(o["id"], p1.id)
+    a = await get_post(o["id"], p1.id)
+    assert a.status == "scheduled" and a.text
+
+    # one post from its page
+    p5 = await mk_post(o["id"], acc, status="failed", error="x", scheduled_at=past)
+    r = await client.post(f"/content/posts/{p5.id}/regenerate", headers=o["h"], json={"publish": True})
+    assert r.status_code == 200 and "publishes on its own" in r.json()["message"]
+    assert (await get_post(o["id"], p5.id)).mode == "full_auto"

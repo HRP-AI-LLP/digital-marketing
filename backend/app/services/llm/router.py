@@ -27,7 +27,12 @@ class NoProviderError(Exception):
 
 
 class AllProvidersFailed(Exception):
-    pass
+    """Every model in the chain failed. retry_after (seconds) is set when every failure was temporary (a rate
+    limit, a timeout, a provider hiccup): the work can simply run again then, instead of failing."""
+
+    def __init__(self, message: str, retry_after: int | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 @dataclass
@@ -120,10 +125,11 @@ async def complete(
         )
     msgs = messages or [{"role": "user", "content": prompt or ""}]
     chain, _ = await health.order_chain(session, chain)
-    errors = []
+    errors, waits = [], []  # waits: seconds until each failed model can be tried again (None: not temporary)
     for cfg, model in chain:
         if await over_budget(session, cfg):
             errors.append(f"{cfg.name}: monthly budget reached")
+            waits.append(None)
             continue
         try:
             r = await keys.with_keys(cfg, lambda: llm.chat(conn_from(cfg), model, msgs, system=system, json_mode=json_mode,
@@ -132,13 +138,17 @@ async def complete(
             _log(session, cfg, model, task, "chat", ok=False, error=health.describe(e)[:1000])
             v = await health.record_failure(cfg, model, e)
             errors.append(f"{cfg.name} ({model}): {_short(e, v)}")
+            waits.append(v.seconds if v.state == "cooldown" else None)
             continue
         _log(session, cfg, model, task, "chat", tin=r.input_tokens, tout=r.output_tokens, latency=r.latency_ms)
         await session.flush()
         await health.record_success(cfg, model)
         return LlmResult(r.text, cfg.provider, cfg.id, model)
     await session.flush()
-    raise AllProvidersFailed("All AI providers failed. " + " | ".join(errors))
+    temporary = [w for w in waits if w is not None]
+    # the soonest any of them can be used again, if at least one is only resting (others may be out for good)
+    retry_after = max(30, min(temporary)) if temporary else None
+    raise AllProvidersFailed("All AI providers failed. " + " | ".join(errors), retry_after)
 
 
 def _short(e: Exception, v: "health.Verdict") -> str:

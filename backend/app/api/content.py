@@ -1056,6 +1056,35 @@ class RejectIn(BaseModel):
 
 class RegenerateIn(BaseModel):
     note: str | None = Field(None, max_length=500)
+    publish: bool = False  # publish on its own once written (needs approve permission; otherwise it waits for review)
+
+
+REWRITABLE = {"failed", "missed", "rejected", "draft", "in_review"}
+REWRITE_NOTE = "The earlier attempt couldn't be finished. Write the post fresh."
+REWRITE_GAP = timedelta(hours=1)    # posts on the same account that were due in the past go out this far apart
+REWRITE_START = timedelta(minutes=15)
+
+
+async def _rewrite(ctx: Context, p: Post, *, publish: bool, note: str | None, slots: dict) -> str:
+    """Write a post again (e.g. one that failed because the AI providers were busy) and, with publish, let it go out on
+    its own once written. A time that has passed moves to the next free slot: REWRITE_START from now, then
+    REWRITE_GAP apart per account (`slots` remembers the last time given to each account in this request)."""
+    if p.status not in REWRITABLE:
+        raise ValueError(f"A post that is {p.status.replace('_', ' ')} can't be written again.")
+    msg = await content_actions.regenerate_by_id(ctx.session, p.id, ctx.user, "app", note=note or REWRITE_NOTE)
+    p = await _post(ctx, p.id)
+    now = svc.now_utc()
+    if p.scheduled_at is None or p.scheduled_at < now + timedelta(minutes=5):
+        key = p.social_account_id or p.platform
+        prev = slots.get(key)
+        p.scheduled_at = max(now + REWRITE_START, prev + REWRITE_GAP if prev else now)
+        slots[key] = p.scheduled_at
+    if publish and "content.approve" in ctx.permissions:
+        p.mode = "full_auto"  # quality checks can still hold it for a person
+        svc.add_activity(ctx.session, p, "rewrite_publish", "Written again; publishes on its own once ready", user=ctx.user)
+        return ("Writing it again. It publishes on its own at "
+                f"{p.scheduled_at.astimezone(_tz(ctx)).strftime('%d %b, %H:%M')} once it's ready.")
+    return msg
 
 
 class MarkPublishedIn(BaseModel):
@@ -1090,8 +1119,15 @@ async def reject(pid: uuid.UUID, body: RejectIn | None = None, ctx: Context = De
 @router.post("/posts/{pid}/regenerate")
 async def regenerate(pid: uuid.UUID, body: RegenerateIn | None = None, ctx: Context = Depends(require("content.create"))):
     p = await _post(ctx, pid)
-    msg = await _run_action(ctx, content_actions.regenerate_by_id, ctx.session, p.id, ctx.user, "app",
-                            note=body.note if body else None)
+    if body is not None and body.publish:
+        try:
+            msg = await _rewrite(ctx, p, publish=True, note=body.note, slots={})
+        except ValueError as e:
+            raise _bad(str(e), 409) from None
+        await ctx.session.commit()
+    else:
+        msg = await _run_action(ctx, content_actions.regenerate_by_id, ctx.session, p.id, ctx.user, "app",
+                                note=body.note if body else None)
     from app.models import Job
 
     job = await ctx.session.scalar(select(Job).where(Job.dedupe_key == f"gen:{pid}", Job.status.in_(["queued", "running"])))
@@ -1239,14 +1275,15 @@ async def bulk(body: BulkIn, ctx: Context = Depends(require("content.approve")))
 
 class PostsBulkIn(BaseModel):
     ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
-    action: Literal["approve", "reject", "publish", "delete", "evergreen_on", "evergreen_off"]
+    action: Literal["approve", "reject", "publish", "delete", "evergreen_on", "evergreen_off", "rewrite"]
     reason: str | None = Field(None, max_length=1000)
 
 
 BULK_PERMS = {"approve": "content.approve", "reject": "content.approve", "publish": "content.publish",
-              "delete": "content.create", "evergreen_on": "content.create", "evergreen_off": "content.create"}
+              "delete": "content.create", "evergreen_on": "content.create", "evergreen_off": "content.create",
+              "rewrite": "content.create"}
 BULK_DONE = {"approve": "Approved", "reject": "Rejected", "publish": "Publishing now", "delete": "Deleted",
-             "evergreen_on": "Marked evergreen", "evergreen_off": "No longer evergreen"}
+             "evergreen_on": "Marked evergreen", "evergreen_off": "No longer evergreen", "rewrite": "Being written again"}
 
 
 @router.post("/posts/bulk")
@@ -1256,7 +1293,13 @@ async def posts_bulk(body: PostsBulkIn, ctx: Context = Depends(require("content.
     if perm not in ctx.permissions:
         raise _bad("You don't have permission to do that.", 403)
     results = []
-    for pid in dict.fromkeys(body.ids):
+    slots: dict = {}  # rewrite: the last time given to each account, so overdue posts are spread out
+    # rewrite: oldest first, so they keep their order
+    ids = list(dict.fromkeys(body.ids))
+    if body.action == "rewrite":
+        when = dict((await ctx.session.execute(select(Post.id, Post.scheduled_at).where(Post.id.in_(ids)))).all())
+        ids.sort(key=lambda i: when.get(i) or datetime.max.replace(tzinfo=UTC))
+    for pid in ids:
         try:
             async with ctx.session.begin_nested():
                 p = await ctx.session.scalar(select(Post).where(Post.id == pid))
@@ -1269,6 +1312,9 @@ async def posts_bulk(body: PostsBulkIn, ctx: Context = Depends(require("content.
                 elif body.action == "publish":
                     await _publish_now(ctx, p)
                     msg = BULK_DONE["publish"]
+                elif body.action == "rewrite":
+                    await _rewrite(ctx, p, publish=True, note=body.reason, slots=slots)
+                    msg = BULK_DONE["rewrite"]
                 elif body.action in ("evergreen_on", "evergreen_off"):
                     _set_evergreen(ctx, p, body.action == "evergreen_on")
                     msg = BULK_DONE[body.action]

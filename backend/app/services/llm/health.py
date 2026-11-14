@@ -96,13 +96,17 @@ def describe(exc: BaseException) -> str:
 def classify(exc: BaseException, *, local: bool = False, now: datetime | None = None) -> Verdict:
     now = now or datetime.now(UTC)
     msg = describe(exc)
-    low = msg.lower()
+    # Links in the message ("Upgrade at https://console.groq.com/settings/billing") say nothing about what went wrong
+    low = re.sub(r"https?://\S+", " ", msg.lower())
     status = getattr(exc, "status", None)
     if status is None:
         m = re.match(r"\s*(?:[\w .()-]+:\s*)?(\d{3})\b", msg)
         status = int(m.group(1)) if m else None
 
-    if status == 402 or re.search(r"credit|billing|insufficient[_ ]quota|payment|prepay|exceeded your current quota|balance", low):
+    out_of_credit = re.search(r"credit|insufficient[_ ]quota|payment required|prepay|exceeded your current quota|balance"
+                              r"|billing (?:is )?not (?:set ?up|active|enabled)|billing details|no billing", low)
+    rate_limited = status == 429 and re.search(r"rate.?limit|too many requests|tokens per minute|requests per minute|\btpm\b|\brpm\b", low)
+    if status == 402 or (out_of_credit and not rate_limited):
         return Verdict("billing", 24 * 3600, "Out of credits or billing not set up")
     if status in (401, 403) or re.search(r"invalid[_ ]api[_ ]key|api key not valid|unauthori[sz]ed|permission denied|incorrect api key", low):
         return Verdict("auth", 24 * 3600, "API key rejected")

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, FlaskConical, Plus, Recycle, Search, Send, Trash2, Upload, X } from "lucide-react";
+import { Check, FlaskConical, Plus, Recycle, RefreshCw, Search, Send, Trash2, Upload, X } from "lucide-react";
 import { ImportWizard } from "./ImportWizard";
 import { api } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
@@ -12,9 +12,9 @@ import { CommentBadge, PostStatus, STATUS_LABELS, fmt, tzLabel, useContentAccoun
 
 const PAGE = 50;
 
-type Action = "approve" | "reject" | "publish" | "delete" | "evergreen_on";
+type Action = "approve" | "reject" | "publish" | "delete" | "evergreen_on" | "rewrite";
 type BulkResult = { results: { id: string; ok: boolean; message: string }[]; ok: number; failed: number };
-const DONE: Record<Action, string> = { approve: "approved", reject: "rejected", publish: "sent for publishing", delete: "deleted", evergreen_on: "marked evergreen" };
+const DONE: Record<Action, string> = { approve: "approved", reject: "rejected", publish: "sent for publishing", delete: "deleted", evergreen_on: "marked evergreen", rewrite: "being written again. Each one publishes on its own once it's ready (overdue ones an hour apart per account)" };
 // Which statuses each action can apply to (the server re-checks every post).
 const ELIGIBLE: Record<Action, string[]> = {
   approve: ["in_review", "draft", "missed", "rejected"],
@@ -22,7 +22,10 @@ const ELIGIBLE: Record<Action, string[]> = {
   publish: ["in_review", "draft", "scheduled", "approved", "missed", "rejected", "failed"],
   delete: ["planned", "in_review", "draft", "scheduled", "approved", "missed", "rejected", "failed", "manual_pending", "cancelled"],
   evergreen_on: ["published", "in_review", "draft", "scheduled", "approved", "missed", "rejected", "failed", "manual_pending"],
+  rewrite: ["failed", "missed", "rejected", "draft", "in_review"],
 };
+/** Failed before anything was written (usually the AI providers were busy): nothing to publish yet. */
+const unwritten = (p: PostSummary) => p.status === "failed" && !(p.text || "").trim() && !p.media?.length;
 
 export default function PostList() {
   const tz = useTz();
@@ -66,16 +69,21 @@ export default function PostList() {
   const toggle = (id: string, on: boolean) => setSel((s) => { const n = new Set(s); if (on) n.add(id); else n.delete(id); return n; });
   const count = (a: Action) => chosen.filter((p) => ELIGIBLE[a].includes(p.status)).length;
   const bulk = useMutation({
-    mutationFn: ({ action, reason }: { action: Action; reason?: string }) =>
-      api<BulkResult>("/content/posts/bulk", { method: "POST", json: { ids: [...sel], action, reason: reason || null } }),
+    mutationFn: ({ action, reason, ids }: { action: Action; reason?: string; ids?: string[] }) =>
+      api<BulkResult>("/content/posts/bulk", { method: "POST", json: { ids: ids ?? [...sel], action, reason: reason || null } }),
     onSuccess: (r, v) => {
       setSummary({ action: v.action, r }); setRejecting(false);
       setSel(new Set(r.results.filter((x) => !x.ok).map((x) => x.id)));  // keep the ones that need attention selected
       for (const k of ["posts", "approvals", "calendar", "post", "dashboard"]) qc.invalidateQueries({ queryKey: [k] });
     },
   });
-  const run = (action: Action) => {
-    const n = sel.size;
+  const run = (action: Action, ids?: string[]) => {
+    const n = ids?.length ?? sel.size;
+    if (action === "rewrite") {
+      if (!confirm(`Write ${n} post${n > 1 ? "s" : ""} again? ${can("content.approve") ? "Each one publishes on its own once it's written" : "They'll wait for approval once written"}; posts whose time has passed go out over the next hours, an hour apart per account.`)) return;
+      bulk.mutate({ action, ids });
+      return;
+    }
     if (action === "reject") { setRejecting(true); return; }
     if (action === "publish" && !confirm(`Publish ${n} post${n > 1 ? "s" : ""} now?`)) return;
     if (action === "delete" && !confirm(`Delete ${n} post${n > 1 ? "s" : ""}? This can't be undone. Published posts are kept.`)) return;
@@ -142,11 +150,28 @@ export default function PostList() {
           </Alert>
         </div>
       )}
+      {can("content.create") && items.filter(unwritten).length > 0 && sel.size === 0 && (
+        <div className="mb-3">
+          <Alert tone="warn">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>
+                {items.filter(unwritten).length === 1 ? "1 post on this page couldn't be written" : `${items.filter(unwritten).length} posts on this page couldn't be written`}
+                {" "}(usually the AI providers were busy or out of credits). Write them again and they'll publish on their own.
+              </span>
+              <Button onClick={() => run("rewrite", items.filter(unwritten).map((p) => p.id))} disabled={bulk.isPending}>
+                <RefreshCw size={15} /> Write again & publish {items.filter(unwritten).length > 1 ? `all ${items.filter(unwritten).length}` : ""}
+              </Button>
+            </div>
+          </Alert>
+        </div>
+      )}
       {sel.size > 0 && (
         <div className="sticky top-2 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-primary-500/40 bg-surface px-3 py-2 shadow-[0_8px_24px_rgba(6,47,89,0.12)]">
           <span className="mr-1 text-sm font-medium">{sel.size} selected</span>
           {can("content.approve") && <Button onClick={() => run("approve")} disabled={bulk.isPending || !count("approve")} title="Posts need a scheduled time to be approved"><Check size={15} />Approve{count("approve") !== sel.size ? ` (${count("approve")})` : ""}</Button>}
           {can("content.approve") && <Button variant="danger" onClick={() => run("reject")} disabled={bulk.isPending || !count("reject")}><X size={15} />Reject{count("reject") !== sel.size ? ` (${count("reject")})` : ""}</Button>}
+          {can("content.create") && count("rewrite") > 0 && <Button variant="secondary" onClick={() => run("rewrite", chosen.filter((p) => ELIGIBLE.rewrite.includes(p.status)).map((p) => p.id))} disabled={bulk.isPending}
+            title="Write these posts again; each publishes on its own once written"><RefreshCw size={15} />Write again & publish{count("rewrite") !== sel.size ? ` (${count("rewrite")})` : ""}</Button>}
           {can("content.publish") && <Button variant="secondary" onClick={() => run("publish")} disabled={bulk.isPending || !count("publish")}><Send size={15} />Publish now{count("publish") !== sel.size ? ` (${count("publish")})` : ""}</Button>}
           {can("content.create") && <Button variant="ghost" onClick={() => run("evergreen_on")} disabled={bulk.isPending || !count("evergreen_on")} title="Evergreen posts can be reshared later as a fresh version"><Recycle size={15} />Mark evergreen</Button>}
           {can("content.create") && <Button variant="ghost" onClick={() => run("delete")} disabled={bulk.isPending || !count("delete")}><Trash2 size={15} />Delete{count("delete") !== sel.size ? ` (${count("delete")})` : ""}</Button>}
@@ -193,6 +218,11 @@ export default function PostList() {
                   <td className="whitespace-nowrap px-3 py-2.5 text-muted">{meta.data?.post_types[p.post_type] ?? p.post_type}</td>
                   <td className="px-3 py-2.5">
                     <div className="flex flex-wrap items-center gap-1.5"><PostStatus status={p.status} /><CommentBadge total={p.comment_count} open={p.open_comment_count} /></div>
+                    {p.status === "failed" && p.error && (
+                      <div className="mt-1 line-clamp-2 max-w-[260px] text-xs text-danger" title={p.error}>
+                        {unwritten(p) ? "Not written: " : ""}{p.error.replace(/^Couldn't write this post:\s*/, "").replace(/^All AI providers failed\.\s*/, "AI providers busy or out of credits. ").slice(0, 140)}
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

@@ -111,6 +111,23 @@ class WaitForNetwork(Exception):
         self.delay, self.reason = delay, reason
 
 
+AI_WAIT_LIMIT = timedelta(days=2)  # after this long waiting for AI rate limits, a task counts its attempts again
+
+
+def ai_wait(e: BaseException | None) -> int | None:
+    """Seconds until an AI provider can be used again, when `e` (or what caused it) is "every AI provider failed"
+    and all of them only hit a rate limit or a hiccup. None for any other error."""
+    from app.services.llm.router import AllProvidersFailed
+
+    seen = 0
+    while e is not None and seen < 6:
+        if isinstance(e, AllProvidersFailed):
+            return e.retry_after
+        e = e.__cause__ or e.__context__
+        seen += 1
+    return None
+
+
 async def offline_now(e: BaseException | None = None) -> bool:
     """In the worker: True when `e` (if given) is a network failure and the internet is confirmed down."""
     from app.services import uptime
@@ -410,6 +427,15 @@ class Worker:
                 await self._finish(job.id, status="queued", attempts=max(0, job.attempts - 1), locked_at=None,
                                    locked_by=None, run_after=datetime.now(UTC) + timedelta(seconds=60),
                                    progress="Waiting for the internet connection")
+                return
+            wait = ai_wait(e)
+            if wait and (job.created_at is None or datetime.now(UTC) - job.created_at < AI_WAIT_LIMIT):
+                # Every AI provider is rate-limited for now: run again when the first one is free, without using up an
+                # attempt (free tiers allow a few thousand tokens a minute, or a daily amount).
+                at = datetime.now(UTC) + timedelta(seconds=wait + 5)
+                await self._finish(job.id, status="queued", attempts=max(0, job.attempts - 1), locked_at=None,
+                                   locked_by=None, run_after=at, error=f"{type(e).__name__}: {e}"[:4000],
+                                   progress=f"Waiting for the AI providers' rate limits (again at {at:%H:%M} UTC)")
                 return
             permanent = isinstance(e, PermanentError) or job.attempts >= job.max_attempts
             err = f"{type(e).__name__}: {e}"

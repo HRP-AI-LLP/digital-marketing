@@ -161,6 +161,7 @@ export default function PostDetail() {
   const approve = useMutation({ mutationFn: () => act("approve"), onSuccess: onAct });
   const reject = useMutation({ mutationFn: (reason: string) => act("reject", { reason }), onSuccess: (r) => { setDialog(null); onAct(r); } });
   const regen = useMutation({ mutationFn: (note: string) => act("regenerate", { note }), onSuccess: (r) => { setDialog(null); onAct(r); } });
+  const rewrite = useMutation({ mutationFn: () => act("regenerate", { publish: true }), onSuccess: onAct });
   const publishNow = useMutation({ mutationFn: () => act("publish-now"), onSuccess: onAct });
   const evergreen = useMutation({
     mutationFn: (on: boolean) => api<Post>(`/content/posts/${id}/evergreen`, { method: "POST", json: { evergreen: on } }),
@@ -183,7 +184,7 @@ export default function PostDetail() {
   const count = caption(d.text, tags).length;
   const preview = { ...p, text: d.text, title: d.title || null, hashtags: tags, link_url: d.link_url || null, media: p.media.filter((m) => d.media_ids.includes(m.id)) };
   const approvable = ["in_review", "draft", "missed", "rejected"].includes(p.status);
-  const err = save.error || approve.error || regen.error || publishNow.error || remove.error || removeRemote.error;
+  const err = save.error || approve.error || regen.error || rewrite.error || publishNow.error || remove.error || removeRemote.error;
   const remoteDeletable = p.status === "published" && REMOTE_DELETE.has(p.platform) && can("content.publish");
   const copyText = async () => {
     const full = [d.title, caption(d.text, tags), d.link_url && !d.text.includes(d.link_url) ? d.link_url : ""].filter(Boolean).join("\n\n");
@@ -383,6 +384,12 @@ export default function PostDetail() {
           </Section>
           <Section title="More actions">
             <div className="flex flex-wrap gap-2">
+              {can("content.create") && p.status === "failed" && !(p.text || "").trim() && (
+                <Button onClick={() => rewrite.mutate()} disabled={rewrite.isPending}
+                  title={can("content.approve") ? "Write it again; it publishes on its own once written" : "Write it again; it waits for approval once written"}>
+                  <RefreshCw size={15} /> {can("content.approve") ? "Write again & publish" : "Write again"}
+                </Button>
+              )}
               {can("content.create") && !locked && <Button variant="secondary" onClick={() => setDialog("regen")}><RefreshCw size={15} /> Write a new version</Button>}
               {can("content.create") && !writing && <Button variant="secondary" onClick={() => setDialog("dup")}><Copy size={15} /> Copy to another account</Button>}
               {can("content.create") && !writing && <Button variant="secondary" onClick={() => nav(`/posts/experiments?from=${p.id}`)} title="Test 2–3 versions of this post"><FlaskConical size={15} /> A/B test</Button>}

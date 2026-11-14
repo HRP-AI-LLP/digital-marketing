@@ -46,6 +46,77 @@ async def test_classify_errors():
     assert health.classify(Exception("400: bad request")).state == "none"
 
 
+async def test_rate_limit_with_billing_link_is_not_out_of_credits():
+    """Groq's per-minute limit ends with an upgrade link to .../settings/billing: that's a short rest, not "no credits"."""
+    groq = ("429: Rate limit reached for model `openai/gpt-oss-120b` in organization `org_01x` service tier `on_demand` "
+            "on tokens per minute (TPM): Limit 8000, Used 7088, Requested 2239. Please try again in 9.981s. Need more "
+            "tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing")
+    v = health.classify(llm.ProviderError(groq, 429))
+    assert v.state == "cooldown" and v.reason == "Rate limit reached" and 30 <= v.seconds <= 60
+    mistral = "429: {'object': 'error', 'message': 'Rate limit exceeded', 'type': 'rate_limited', 'code': '1300'}"
+    assert health.classify(llm.ProviderError(mistral, 429)).state == "cooldown"
+    # real "no credits" answers still are
+    assert health.classify(llm.ProviderError("429: You exceeded your current quota, please check your plan and billing "
+                                             "details.", 429)).state == "billing"
+    assert health.classify(llm.ProviderError("402: Payment required", 402)).state == "billing"
+
+
+async def test_all_rate_limited_says_when_to_retry(client, a, monkeypatch, no_discovery):
+    """Every provider only rate-limited: the error carries when to try again, so a task waits instead of failing."""
+    from app.core.db import SessionLocal, set_tenant
+    from app.services import jobs
+    from app.services.llm import router
+
+    p1 = (await client.post("/integrations/providers", headers=auth(a), json={"provider": "groq", "name": "rl-1",
+          "secrets": {"api_key": "k1"}, "settings": {"default_model": "bad"}})).json()["id"]
+    await client.put("/integrations/routes", headers=auth(a), json={"routes": {"write": [{"provider_id": p1, "model": "bad"}]}})
+
+    async def limited(conn, model, messages, **kw):
+        raise llm.ProviderError("429: Rate limit reached ... tokens per minute (TPM). Please try again in 40s.", 429)
+
+    monkeypatch.setattr(llm, "chat", limited)
+    org = a["organization"]["id"]
+    async with SessionLocal() as s:
+        set_tenant(s, org)
+        monkeypatch.setattr(router, "resolve_chain", _only_chain(s, p1))
+        with pytest.raises(router.AllProvidersFailed) as ei:
+            await router.complete(s, "write", "hi")
+    assert ei.value.retry_after is not None and 30 <= ei.value.retry_after <= 60
+    assert jobs.ai_wait(RuntimeError("wrapped")) is None
+    try:
+        try:
+            raise ei.value
+        except router.AllProvidersFailed as inner:
+            raise jobs.PermanentError("Couldn't write this post") from inner
+    except jobs.PermanentError as outer:
+        assert jobs.ai_wait(outer) == ei.value.retry_after
+
+    async def bad_key(conn, model, messages, **kw):
+        raise llm.ProviderError("401: Invalid API Key", 401)
+
+    monkeypatch.setattr(llm, "chat", bad_key)
+    await client.post("/integrations/model-status/reset", headers=auth(a), json={"provider_id": p1, "model": "bad"})
+    async with SessionLocal() as s:
+        set_tenant(s, org)
+        monkeypatch.setattr(router, "resolve_chain", _only_chain(s, p1))
+        with pytest.raises(router.AllProvidersFailed) as ei:
+            await router.complete(s, "write", "hi")
+    assert ei.value.retry_after is None  # a rejected key won't fix itself
+    await client.put("/integrations/routes", headers=auth(a), json={"routes": {"write": []}})
+    await client.delete(f"/integrations/providers/{p1}", headers=auth(a))
+
+
+def _only_chain(session, pid):
+    import uuid as _uuid
+
+    from app.models import ProviderConfig
+
+    async def chain(s, task):
+        cfg = await session.get(ProviderConfig, _uuid.UUID(pid))
+        return [(cfg, "bad")]
+    return chain
+
+
 async def test_classify_model_types():
     c = discovery.classify_model
     assert c("nomic-embed-text") == "embed"

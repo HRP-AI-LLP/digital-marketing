@@ -19,6 +19,7 @@ from app.services.jobs import (
     JobContext,
     PermanentError,
     WaitForNetwork,
+    ai_wait,
     enqueue,
     offline_now,
     handler,
@@ -114,6 +115,17 @@ async def generate(ctx: JobContext) -> dict | None:
             await _wait_generation(ctx, post_id)
             raise WaitForNetwork() from e
         msg = f"Couldn't write this post: {e}"
+        wait = ai_wait(e)
+        if wait and ctx.attempt < MAX_ATTEMPTS:
+            # only rate limits: the job runner tries again when a provider is free (doesn't use up an attempt)
+            await s.rollback()
+            post = await s.get(Post, post_id)
+            if post is not None:
+                post.status = "planned"
+                post.error = (f"Waiting for the AI providers' rate limits to reset (about {max(1, round(wait / 60))} min). "
+                              f"{e}")[:2000]
+                await s.commit()
+            raise
         if ctx.attempt >= MAX_ATTEMPTS:
             await _fail_generation(ctx, post_id, msg)
             raise PermanentError(msg) from e

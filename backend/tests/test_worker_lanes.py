@@ -87,3 +87,37 @@ async def test_facebook_video_metrics_use_the_page_post_and_video_views(monkeypa
                 external_url="https://www.facebook.com/PAGE/videos/555")
     m = await meta.fetch_metrics(None, post, acc)
     assert m["likes"] == 5 and m["shares"] == 2 and m["video_views"] == 42 and m["impressions"] == 120
+
+
+async def test_rate_limited_ai_waits_without_using_attempts(client, monkeypatch):
+    """Every AI provider rate-limited: the task runs again when the first one is free and keeps its attempts, even on
+    its last attempt; after two days of waiting it fails normally."""
+    from app.services.llm.router import AllProvidersFailed
+
+    org = await new_org(client)
+
+    async def limited(ctx):
+        try:
+            raise AllProvidersFailed("All AI providers failed. Groq: Rate limit reached", 120)
+        except AllProvidersFailed as e:
+            raise jobs.PermanentError("Couldn't write this post") from e
+
+    monkeypatch.setitem(jobs.HANDLERS, "test.ai", limited)
+    j = await _job(org["id"], "test.ai")
+    async with platform_session() as s:
+        await s.execute(update(Job).where(Job.id == j.id).values(status="running", attempts=3))
+        await s.commit()
+    j.attempts = 3
+    await jobs.Worker().run_job(j)
+    async with platform_session() as s:
+        row = await s.get(Job, j.id)
+        assert row.status == "queued" and row.attempts == 2 and "rate limits" in row.progress
+        assert timedelta(minutes=1) < row.run_after - datetime.now(UTC) < timedelta(minutes=3)
+
+    j.created_at = datetime.now(UTC) - timedelta(days=3)
+    async with platform_session() as s:
+        await s.execute(update(Job).where(Job.id == j.id).values(status="running", attempts=3))
+        await s.commit()
+    await jobs.Worker().run_job(j)
+    async with platform_session() as s:
+        assert (await s.get(Job, j.id)).status == "failed"
