@@ -57,6 +57,7 @@ export const SOURCE_LABEL = (s: string) => {
   if (s.startsWith("ai:")) return "AI image";
   if (s.startsWith("stock:")) return `Stock · ${s.slice(6)}`;
   if (s.startsWith("template:")) return "Branded template";
+  if (s.startsWith("demo:")) return "Product demo capture";
   return s;
 };
 

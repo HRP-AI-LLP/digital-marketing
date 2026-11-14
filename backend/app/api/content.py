@@ -188,6 +188,101 @@ async def put_brand_look(body: BrandLookIn, ctx: Context = Depends(require("cont
     return brand_out(b)
 
 
+# ================================================================== visuals (people, product demos, news)
+class DemoIn(BaseModel):
+    product: str = Field(min_length=1, max_length=80)
+    keywords: list[str] = Field(default_factory=list, max_length=12)
+    urls: list[str] = Field(default_factory=list, max_length=6)
+    asset_ids: list[str] = Field(default_factory=list, max_length=40)
+
+    @field_validator("urls")
+    @classmethod
+    def _urls(cls, v: list[str]) -> list[str]:
+        out = []
+        for u in v:
+            u = u.strip()
+            if not u:
+                continue
+            if not re.match(r"^https?://[^\s/]+\.[^\s]+", u):
+                raise ValueError(f"{u} isn't a full web address (start with https://).")
+            out.append(u[:500])
+        return out
+
+
+class VisualsIn(BaseModel):
+    people: Literal["none", "team", "allow"] = "none"
+    news_share: int = Field(20, ge=0, le=60)
+    demos: list[DemoIn] = Field(default_factory=list, max_length=12)
+
+
+def _visuals_out(b) -> dict:
+    from app.services import media_policy
+
+    return media_policy.to_settings(media_policy.from_settings(b.settings))
+
+
+@router.get("/brand/visuals")
+async def get_visuals(ctx: Context = Depends(require("content.view"))):
+    """What generated images and videos may show: people, product demos, and how often posts cover tech news."""
+    from app.models import MediaAsset
+    from app.services import demos, media_policy
+
+    b = await svc.get_brand(ctx.session, ctx.org_id)
+    out = _visuals_out(b)
+    pol = media_policy.from_settings(b.settings)
+    for d, row in zip(pol.demos, out["demos"]):
+        items = await demos.assets(ctx.session, d)
+        row["screens"] = sum(1 for a in items if a.kind == "image")
+        row["recordings"] = sum(1 for a in items if a.kind == "video")
+        row["captured_at"] = max((a.created_at for a in items if (a.meta or {}).get("captured")), default=None)
+    out["team_photos"] = sum(1 for m in (await ctx.session.scalars(
+        select(MediaAsset.meta).where(MediaAsset.kind == "image").limit(2000))).all() if (m or {}).get("team"))
+    await ctx.session.commit()
+    return out
+
+
+@router.put("/brand/visuals")
+async def put_visuals(body: VisualsIn, ctx: Context = Depends(require("content.create"))):
+    from app.services import media_policy
+
+    names = [d.product.strip().lower() for d in body.demos]
+    if len(set(names)) != len(names):
+        raise _bad("Each product can be listed once.")
+    b = await svc.get_brand(ctx.session, ctx.org_id)
+    before = media_policy.from_settings(b.settings)
+    pol = media_policy.Policy(people=body.people, news_share=body.news_share, demos=[
+        media_policy.Demo(product=d.product.strip(), keywords=[k.strip() for k in d.keywords if k.strip()],
+                          urls=d.urls, asset_ids=d.asset_ids) for d in body.demos])
+    b.settings = {**(b.settings or {}), "media": media_policy.to_settings(pol)}
+    audit.record(ctx.session, action="brand.visuals", organization_id=ctx.org_id, actor=ctx.user, entity_type="brand",
+                 entity_id=b.id, summary=f"Visuals: people {body.people}, {len(body.demos)} product demos", ip=ctx.ip)
+    # new or changed pages: capture them now
+    old_urls = {d.product.lower(): d.urls for d in before.demos}
+    for d in pol.demos:
+        if d.urls and old_urls.get(d.product.lower()) != d.urls:
+            await enqueue(ctx.session, "demos.capture", ctx.org_id, {"product": d.product},
+                          dedupe_key=f"demo:{d.product.lower()}", created_by=ctx.user.id)
+    await ctx.session.commit()
+    return await get_visuals(ctx)
+
+
+@router.post("/brand/demos/capture")
+async def capture_demo(body: dict, ctx: Context = Depends(require("content.create"))):
+    from app.services import media_policy
+
+    product = str((body or {}).get("product") or "").strip()
+    pol = media_policy.from_settings((await svc.get_brand(ctx.session, ctx.org_id)).settings)
+    demo = next((d for d in pol.demos if d.product.lower() == product.lower()), None)
+    if demo is None:
+        raise _bad("Save the product in Brand → Visuals first.", 404)
+    if not demo.urls:
+        raise _bad(f"Add a web address for {demo.product} first.")
+    job = await enqueue(ctx.session, "demos.capture", ctx.org_id, {"product": demo.product},
+                        dedupe_key=f"demo:{demo.product.lower()}", created_by=ctx.user.id)
+    await ctx.session.commit()
+    return {"job_id": job.id, "message": f"Capturing {demo.product}. It takes a minute or two."}
+
+
 @router.get("/brand")
 async def get_brand(ctx: Context = Depends(require("content.view"))):
     b = await svc.get_brand(ctx.session, ctx.org_id)

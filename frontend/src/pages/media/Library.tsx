@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, ExternalLink, Search, Trash2, Upload } from "lucide-react";
 import { api } from "../../api/client";
 import { upload } from "../../api/hooks";
@@ -73,6 +73,14 @@ export function AssetDetail({ asset, onClose, onChanged }: { asset: Asset; onClo
     mutationFn: () => api<Asset>(`/media/${asset.id}`, { method: "PATCH", json: { alt_text: alt } }),
     onSuccess: (a) => { setSavedAlt(a.alt_text ?? ""); onChanged(); },
   });
+  const [team, setTeam] = useState(!!asset.meta?.team);
+  const [demo, setDemo] = useState<string>(asset.meta?.demo ?? "");
+  const visuals = useQuery({ queryKey: ["brand-visuals"], queryFn: () => api<{ demos: { product: string }[] }>("/content/brand/visuals"),
+    enabled: can("media.manage") });
+  const tag = useMutation({
+    mutationFn: (json: { team?: boolean; demo?: string }) => api<Asset>(`/media/${asset.id}`, { method: "PATCH", json }),
+    onSuccess: (a) => { setTeam(!!a.meta?.team); setDemo(a.meta?.demo ?? ""); onChanged(); },
+  });
   const del = useMutation({
     mutationFn: () => api(`/media/${asset.id}`, { method: "DELETE" }),
     onSuccess: () => { onChanged(); onClose(); },
@@ -103,6 +111,29 @@ export function AssetDetail({ asset, onClose, onChanged }: { asset: Asset; onClo
             <Textarea rows={3} value={alt} onChange={(e) => setAlt(e.target.value)} disabled={!can("media.manage")} />
           </Field>
           {save.error && <Alert>{(save.error as Error).message}</Alert>}
+          {can("media.manage") && (asset.kind === "image" || asset.kind === "video") && (
+            <div className="space-y-2 rounded-lg border border-line p-3">
+              {asset.kind === "image" && (
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[rgb(var(--brand))]" checked={team} disabled={tag.isPending}
+                    onChange={(e) => tag.mutate({ team: e.target.checked })} />
+                  <span><span className="font-medium">Team photo</span>
+                    <span className="block text-xs text-muted">One of your own people, shared with their consent. Used when Brand → Visuals is set to “Only our team photos”.</span></span>
+                </label>
+              )}
+              <label className="block">
+                <span className="font-medium">Demo of a product</span>
+                <span className="block text-xs text-muted">Screenshots and screen recordings shown in posts about that product.</span>
+                <select value={demo} disabled={tag.isPending} onChange={(e) => tag.mutate({ demo: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm">
+                  <option value="">Not a product demo</option>
+                  {(visuals.data?.demos ?? []).map((d) => <option key={d.product} value={d.product}>{d.product}</option>)}
+                  {demo && !(visuals.data?.demos ?? []).some((d) => d.product === demo) && <option value={demo}>{demo}</option>}
+                </select>
+              </label>
+              {tag.error && <Alert>{(tag.error as Error).message}</Alert>}
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             {can("media.manage") && (
               <Button onClick={() => save.mutate()} disabled={save.isPending || alt.trim() === savedAlt}>

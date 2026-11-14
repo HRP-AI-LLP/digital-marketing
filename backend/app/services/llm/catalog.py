@@ -201,7 +201,13 @@ CATALOG: list[ProviderSpec] = [
 
     # ---------------------------------------------------------------- voice-over
     P("edge_tts", "tts", "Microsoft Edge voices", "edge_tts", key=False, free="Free",
-      examples=("en-IN-NeerjaNeural", "en-IN-PrabhatNeural", "en-US-AriaNeural", "hi-IN-SwaraNeural")),
+      examples=("en-US-AndrewMultilingualNeural", "en-US-AvaMultilingualNeural", "en-IN-NeerjaExpressiveNeural",
+                "en-US-EmmaMultilingualNeural", "en-US-BrianMultilingualNeural", "hi-IN-SwaraNeural")),
+    P("kokoro_tts", "tts", "Kokoro and other natural voices (OpenAI-compatible)", "kokoro_tts", "https://api.deepinfra.com/v1/openai",
+      key=False, free="Kokoro is open source and free for commercial use: run Kokoro-FastAPI yourself (free) or use "
+                      "DeepInfra's hosted Kokoro (low cost, trial credits)",
+      docs="https://github.com/remsky/Kokoro-FastAPI", examples=("hexgrad/Kokoro-82M", "kokoro"),
+      fields=(("api_key", "API key (DeepInfra key; leave empty for your own Kokoro-FastAPI server)", True),)),
     P("openai_tts", "tts", "OpenAI text-to-speech", "openai_tts", "https://api.openai.com/v1", free="Paid",
       examples=("gpt-4o-mini-tts", "tts-1")),
 

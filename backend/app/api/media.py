@@ -164,6 +164,11 @@ async def upload(request: Request, filename: str | None = None, ctx: Context = D
 
 class AssetPatch(BaseModel):
     alt_text: str | None = Field(None, max_length=1000)
+    # "Team photo": one of your own people, shared with their consent. Used when Brand → Visuals is set to
+    # "Only our team photos" and a scene calls for people.
+    team: bool | None = None
+    # "Demo of a product": shown in posts about that product (Brand → Visuals → Product demos). "" clears it.
+    demo: str | None = Field(None, max_length=80)
 
 
 async def _asset(ctx: Context, asset_id: uuid.UUID) -> MediaAsset:
@@ -178,6 +183,18 @@ async def update_media(asset_id: uuid.UUID, body: AssetPatch, ctx: Context = Dep
     a = await _asset(ctx, asset_id)
     if body.alt_text is not None:
         a.alt_text = body.alt_text.strip() or None
+    if body.team is not None:
+        if a.kind != "image":
+            raise _bad("Only photos can be team photos.")
+        meta = dict(a.meta or {})
+        meta["team"] = True if body.team else None
+        a.meta = {k: v for k, v in meta.items() if v is not None}
+    if body.demo is not None:
+        if a.kind not in ("image", "video"):
+            raise _bad("Only screenshots and recordings can be product demos.")
+        meta = dict(a.meta or {})
+        meta["demo"] = body.demo.strip() or None
+        a.meta = {k: v for k, v in meta.items() if v is not None}
     await ctx.session.commit()
     return media_svc.asset_out(a)
 

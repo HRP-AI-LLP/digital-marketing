@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 from app.services.llm import keys as _keys
+import asyncio
 import logging
+from pathlib import Path
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -242,7 +244,12 @@ async def _fetch_item(c: _Cfg, type_: str, item_id: str) -> dict:
     raise StockError(f"Unsupported stock provider: {c.provider}")
 
 
-async def import_item(session: AsyncSession, provider: str, type_: str, item_id: str, *, query: str | None = None) -> MediaAsset:
+class ShowsPeople(StockError):
+    """The file shows a person or a face, and the brand's visuals allow no people."""
+
+
+async def import_item(session: AsyncSession, provider: str, type_: str, item_id: str, *, query: str | None = None,
+                      check_people: bool = False) -> MediaAsset:
     from app.services import media
 
     if type_ not in ("photo", "video"):
@@ -266,6 +273,8 @@ async def import_item(session: AsyncSession, provider: str, type_: str, item_id:
         data = r.content
     if len(data) > MAX_VIDEO_BYTES:
         raise StockError("That file is too large to import.")
+    if check_people and await _shows_people(data, type_):
+        raise ShowsPeople("This shows people, and your visuals are set to show no people.")
     meta = {"attribution": item.get("attribution"), "author": item.get("author"), "author_url": item.get("author_url"),
             "page_url": item.get("page_url"), "stock_id": item.get("id"), "stock_provider": c.provider}
     if query:
@@ -286,25 +295,49 @@ def _img_ext(data: bytes) -> str:
     return "jpg"
 
 
-async def find_image(session: AsyncSession, query: str, orientation: str | None = None) -> MediaAsset | None:
-    res = await search(session, query, "photo", orientation, per_page=6)
-    for item in res["items"][:3]:
+async def _shows_people(data: bytes, type_: str) -> bool:
+    import tempfile
+
+    from app.services import media_policy
+
+    if type_ != "video":
+        return await asyncio.to_thread(media_policy.image_has_people, data)
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "clip.mp4"
+        await asyncio.to_thread(f.write_bytes, data)
+        return await asyncio.to_thread(media_policy.video_has_people, f)
+
+
+async def _pick(session: AsyncSession, query: str, type_: str, orientation: str | None, *, per_page: int,
+                keep=lambda i: True) -> MediaAsset | None:
+    """Search and import the first usable result. With no people allowed (Brand → Visuals): people words are taken
+    out of the search, results described with people are skipped, and each file is checked for faces and people."""
+    from app.services import media_policy
+
+    policy = await media_policy.get(session)
+    if policy.no_people:
+        query = media_policy.strip_people(query)
+    res = await search(session, query, type_, orientation, per_page=per_page + (6 if policy.no_people else 0))
+    items = [i for i in res["items"] if keep(i)] or res["items"]
+    if policy.no_people:
+        items = [i for i in items if not media_policy.describes_people(i)]
+    tries = 5 if policy.no_people else 3
+    for item in items[:tries]:
         try:
-            return await import_item(session, item["provider"], "photo", item["id"], query=query)
+            return await import_item(session, item["provider"], type_, item["id"], query=query,
+                                     check_people=policy.no_people)
         except Exception as e:  # noqa: BLE001
-            log.info("stock image import failed: %s", e)
+            log.info("stock %s import skipped: %s", type_, e)
     return None
+
+
+async def find_image(session: AsyncSession, query: str, orientation: str | None = None) -> MediaAsset | None:
+    return await _pick(session, query, "photo", orientation, per_page=6)
 
 
 async def find_video(session: AsyncSession, query: str, orientation: str | None = None, min_duration: float = 0) -> MediaAsset | None:
-    res = await search(session, query, "video", orientation, per_page=8)
-    items = [i for i in res["items"] if (i.get("duration") or 0) >= min_duration] or res["items"]
-    for item in items[:3]:
-        try:
-            return await import_item(session, item["provider"], "video", item["id"], query=query)
-        except Exception as e:  # noqa: BLE001
-            log.info("stock video import failed: %s", e)
-    return None
+    return await _pick(session, query, "video", orientation, per_page=8,
+                       keep=lambda i: (i.get("duration") or 0) >= min_duration)
 
 
 async def has_stock(session: AsyncSession) -> bool:

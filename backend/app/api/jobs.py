@@ -27,7 +27,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 # What each task does, in words people use (unknown kinds fall back to the technical name)
 LABELS = {
     "post.generate": "Write a post (text and media)", "post.publish": "Publish a post", "post.metrics": "Refresh post results",
-    "media.generate": "Create an image or video", "account.refresh": "Refresh a connected account",
+    "media.generate": "Create an image or video", "demos.capture": "Capture product demo screens", "account.refresh": "Refresh a connected account",
     "inbox.sync": "Fetch new comments and messages", "inbox.listen": "Listen for mentions",
     "intel.crawl": "Read the company website", "intel.competitor_crawl": "Read a competitor's website",
     "intel.competitors": "Find competitors", "intel.extract": "Build the company profile", "intel.ideas": "Suggest topics",

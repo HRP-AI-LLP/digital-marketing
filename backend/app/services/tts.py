@@ -1,4 +1,4 @@
-"""Voice-over: Microsoft Edge voices (free, default) or OpenAI text-to-speech.
+"""Voice-over: Microsoft Edge voices (free, default), Kokoro / other OpenAI-compatible voice servers, or OpenAI.
 
 `synthesize(session, text, out_path, voice=None)` writes an MP3 and returns duration plus word timings
 (Edge voices report word boundaries; for OpenAI the timings are estimated from the text).
@@ -24,8 +24,12 @@ from app.services.llm.catalog import BY_ID
 
 log = logging.getLogger("media.tts")
 
-DEFAULT_VOICE = "en-IN-NeerjaNeural"
+# The newest Edge voices ("Multilingual" and "Expressive") sound far more like a person than the older ones.
+DEFAULT_VOICE = "en-US-AndrewMultilingualNeural"
+OLD_DEFAULT = "en-IN-NeerjaNeural"  # the default until Nov 2026: treated as "not chosen", so it moves to the new one
+NATURAL = re.compile(r"Multilingual|Expressive|-(?:Ava|Andrew|Emma|Brian)Neural$")
 VOICE_LOCALES = ("en-IN", "en-US", "en-GB", "hi-IN")
+KOKORO_DEFAULT = ("hexgrad/Kokoro-82M", "af_heart")
 OPENAI_VOICES = ("alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer")
 
 
@@ -59,10 +63,31 @@ async def default_voice(session: AsyncSession) -> tuple[str, str]:
     for c in await _tts_configs(session):
         v = (c.settings or {}).get("voice") or (c.settings or {}).get("default_model")
         if c.provider == "edge_tts":
-            return "edge_tts", v if v and "Neural" in v else DEFAULT_VOICE
+            return "edge_tts", _edge_voice(v)
         if c.provider == "openai_tts" and decrypt_json(c.secrets_enc).get("api_key"):
             return "openai_tts", (c.settings or {}).get("voice") or "alloy"
     return "edge_tts", DEFAULT_VOICE
+
+
+def _edge_voice(v: str | None) -> str:
+    return v if v and "Neural" in v and v != OLD_DEFAULT else DEFAULT_VOICE
+
+
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200d]+")
+
+
+def speakable(text: str) -> str:
+    """Text as a person would read it aloud: no hashtags, emojis, links or symbols that voices spell out."""
+    t = _EMOJI.sub(" ", text or "")
+    t = re.sub(r"https?://(?:www\.)?([^/\s]+)\S*", r"\1", t)        # links: just the site name
+    t = re.sub(r"\b([a-z0-9-]+)\.(in|com|io|ai|org|net|co)\b", r"\1 dot \2", t, flags=re.I)
+    t = re.sub(r"(^|\s)#(\w+)", r"\1\2", t)                          # hashtags: the word
+    t = re.sub(r"(^|\s)@(\w+)", r"\1\2", t)
+    t = t.replace("&", " and ").replace("%", " percent").replace("→", ",").replace("/", " or ")
+    t = re.sub(r"[*_~`|<>\[\]{}]", " ", t)
+    t = re.sub(r"\s*[-–—]{1,2}\s*", ", ", t) if re.search(r"\s[-–—]{1,2}\s", t) else t
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
 
 def _estimate_words(text: str, duration: float) -> list[Word]:
@@ -102,18 +127,24 @@ async def _edge(text: str, voice: str, out: Path, rate: str = "+0%") -> list[Wor
 
 
 async def _openai(cfg: ProviderConfig, text: str, voice: str, out: Path) -> None:
+    """OpenAI's /audio/speech, also spoken by Kokoro-FastAPI, DeepInfra and other OpenAI-compatible voice servers."""
     key = _keys.secrets_of(cfg).get("api_key")
     spec = BY_ID.get(cfg.provider)
     base = (cfg.base_url or (spec.base_url if spec else "")).rstrip("/")
-    model = (cfg.settings or {}).get("default_model") or "gpt-4o-mini-tts"
-    body = {"model": model, "input": text[:4000], "voice": voice if voice in OPENAI_VOICES else "alloy", "response_format": "mp3"}
+    kokoro = cfg.provider == "kokoro_tts"
+    model = (cfg.settings or {}).get("default_model") or (KOKORO_DEFAULT[0] if kokoro else "gpt-4o-mini-tts")
+    if not kokoro:
+        voice = voice if voice in OPENAI_VOICES else "alloy"
+    body = {"model": model, "input": text[:4000], "voice": voice, "response_format": "mp3"}
     instructions = (cfg.settings or {}).get("instructions")
     if instructions and "tts-1" not in model:
         body["instructions"] = instructions
     async with http_client(120) as http:
-        r = await http.post(f"{base}/audio/speech", json=body, headers={"Authorization": f"Bearer {key}"})
+        r = await http.post(f"{base}/audio/speech", json=body, headers={"Authorization": f"Bearer {key}"} if key else {})
         if r.status_code >= 400:
-            raise TtsError(f"OpenAI text-to-speech: {r.status_code} {r.text[:200]}")
+            raise TtsError(f"{cfg.name}: {r.status_code} {r.text[:200]}")
+        if not r.content or r.headers.get("content-type", "").startswith(("application/json", "text/")):
+            raise TtsError(f"{cfg.name} returned no audio: {r.text[:200]}")
         out.write_bytes(r.content)
 
 
@@ -152,8 +183,9 @@ def _cfg_voice(cfg: ProviderConfig) -> str:
     st = cfg.settings or {}
     if cfg.provider == "openai_tts":
         return st.get("voice") or "alloy"
-    v = st.get("voice") or st.get("default_model")
-    return v if v and "Neural" in v else DEFAULT_VOICE
+    if cfg.provider == "kokoro_tts":
+        return st.get("voice") or KOKORO_DEFAULT[1]
+    return _edge_voice(st.get("voice") or st.get("default_model"))
 
 
 async def synthesize(session: AsyncSession, text: str, out_path: Path, *, voice: str | None = None,
@@ -163,7 +195,7 @@ async def synthesize(session: AsyncSession, text: str, out_path: Path, *, voice:
     from app.services.llm import health
     from app.services.media_render import probe
 
-    text = re.sub(r"\s+", " ", (text or "")).strip()
+    text = speakable(text)
     if not text:
         raise TtsError("There's no voice-over text.")
     steps = await tts_chain(session, voice, provider)
@@ -181,9 +213,9 @@ async def synthesize(session: AsyncSession, text: str, out_path: Path, *, voice:
         t0 = time.perf_counter()
         words: list[Word] = []
         try:
-            if prov == "openai_tts":
+            if prov in ("openai_tts", "kokoro_tts"):
                 if cfg is None:
-                    raise TtsError("OpenAI text-to-speech isn't set up.")
+                    raise TtsError(f"{prov} isn't set up.")
                 await _openai(cfg, text, v, out_path)
             else:
                 words = await _edge(text, v, out_path, rate)
@@ -233,7 +265,9 @@ async def list_voices() -> list[dict]:
                                   "label": f"{v.get('ShortName', '').split('-')[-1].replace('Neural', '')} ({loc}, {v.get('Gender', '').lower()})"})
         except Exception as e:  # noqa: BLE001 - offline: offer a fixed list
             log.info("edge voice list unavailable: %s", e)
-            for vid, loc, g in [("en-IN-NeerjaNeural", "en-IN", "Female"), ("en-IN-PrabhatNeural", "en-IN", "Male"),
+            for vid, loc, g in [("en-US-AndrewMultilingualNeural", "en-US", "Male"), ("en-US-AvaMultilingualNeural", "en-US", "Female"),
+                                ("en-IN-NeerjaExpressiveNeural", "en-IN", "Female"),
+                                ("en-IN-NeerjaNeural", "en-IN", "Female"), ("en-IN-PrabhatNeural", "en-IN", "Male"),
                                 ("en-US-AriaNeural", "en-US", "Female"), ("en-US-GuyNeural", "en-US", "Male"),
                                 ("en-GB-SoniaNeural", "en-GB", "Female"), ("en-GB-RyanNeural", "en-GB", "Male"),
                                 ("hi-IN-SwaraNeural", "hi-IN", "Female"), ("hi-IN-MadhurNeural", "hi-IN", "Male")]:
@@ -241,7 +275,11 @@ async def list_voices() -> list[dict]:
                               "label": f"{vid.split('-')[-1].replace('Neural', '')} ({loc}, {g.lower()})"})
             _VOICES.update(items=items, at=time.time() - 86400 + 600)  # retry in 10 minutes
             return list(items)
-        items.sort(key=lambda v: (VOICE_LOCALES.index(v["locale"]), v["id"]))
+        for v in items:
+            if NATURAL.search(v["id"] or ""):
+                v["natural"] = True
+                v["label"] += " · most natural"
+        items.sort(key=lambda v: (not v.get("natural"), VOICE_LOCALES.index(v["locale"]), v["id"]))
         _VOICES.update(items=items, at=time.time())
     return list(_VOICES["items"])
 
@@ -272,3 +310,66 @@ async def _test_openai_tts(cfg: ProviderConfig) -> str:
         if r.status_code >= 400:
             raise TtsError(f"{r.status_code} {r.text[:200]}")
     return f"Connected. Voice-overs will use {(cfg.settings or {}).get('default_model') or 'gpt-4o-mini-tts'}."
+
+
+@tester("kokoro_tts")
+async def _test_kokoro(cfg: ProviderConfig) -> str:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "t.mp3"
+        await _openai(cfg, "Hello from the studio.", _cfg_voice(cfg), out)
+        n = out.stat().st_size
+    return f"Connected. Spoke a test line ({n // 1024} KB) with voice {_cfg_voice(cfg)}."
+
+
+# ----------------------------------------------------------------------------- whole-script voice-over
+async def synthesize_lines(session: AsyncSession, lines: list[str], work: Path, *, voice: str | None = None) -> list["TtsResult | None"]:
+    """Voice-over for a video's scenes, spoken as ONE take so the voice keeps its natural flow and intonation from
+    scene to scene (one take per scene sounds like a robot restarting). The take is cut at the scene boundaries using
+    the word timings. Falls back to one take per scene when the voice gives no word timings."""
+    from app.services.media_render import probe, run_ffmpeg
+
+    spoken = [speakable(x) for x in lines]
+    idx = [i for i, x in enumerate(spoken) if x]
+    out: list[TtsResult | None] = [None] * len(lines)
+    if not idx:
+        return out
+    parts = [spoken[i] if spoken[i][-1] in ".!?…" else spoken[i] + "." for i in idx]
+    full_text = " ".join(parts)
+    full = await synthesize(session, full_text, work / "vo_full.mp3", voice=voice)
+    if len(idx) == 1:
+        out[idx[0]] = full
+        return out
+    # each scene's character span in the spoken text, then each word timing placed by where its text is found
+    spans, pos = [], 0
+    for x in parts:
+        spans.append((pos, pos + len(x)))
+        pos += len(x) + 1
+    groups: list[list[Word]] = [[] for _ in idx]
+    cursor, placed = 0, 0
+    low = full_text.lower()
+    for w in full.words if full.provider == "edge_tts" else []:
+        at = low.find((w.text or "").lower().strip(), cursor)
+        if at < 0:
+            continue
+        cursor = at + max(1, len(w.text.strip()))
+        j = next((k for k, (a, b) in enumerate(spans) if a <= at < b), None)
+        if j is not None:
+            groups[j].append(w)
+            placed += 1
+    if not full.words or placed < len(full.words) * 0.8 or any(not g for g in groups):
+        for i in idx:  # no usable word timings: one take per scene
+            out[i] = await synthesize(session, spoken[i], work / f"vo_{i:02d}.mp3", voice=voice)
+        return out
+    for j, i in enumerate(idx):
+        start = max(0.0, groups[j][0].start - 0.06)
+        end = (groups[j + 1][0].start - 0.04) if j + 1 < len(idx) else full.duration
+        end = max(end, groups[j][-1].end + 0.05)
+        path = work / f"vo_{i:02d}.mp3"
+        await run_ffmpeg(["-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(full.path), "-c:a", "libmp3lame", "-q:a", "2", str(path)])
+        info = await probe(path)
+        d = float(info.get("duration") or (end - start))
+        out[i] = TtsResult(path, d, full.provider, full.voice,
+                           [Word(round(w.start - start, 3), round(w.end - start, 3), w.text) for w in groups[j]])
+    return out

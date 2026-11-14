@@ -116,9 +116,16 @@ async def build_prompt(session: AsyncSession, brief: str, *, brand_hint: str = "
     """Turn a content brief into an image prompt (LLM task 'image_prompt'); falls back to a template prompt."""
     from app.services.llm import router
 
+    from app.services import media_policy
+
+    no_people = (await media_policy.get(session)).no_people
     brief = (brief or "").strip()[:1500]
     if not brief:
         brief = "abstract modern technology background"
+    if no_people:
+        brief = media_policy.strip_people(brief) if media_policy.mentions_people(brief) else brief
+    people_rule = (media_policy.AI_RULE + " ") if no_people else "Inclusive, no real people's likeness. "
+    people_neg = media_policy.NEGATIVE if no_people else ""
     try:
         data = await router.complete_json(
             session, "image_prompt",
@@ -128,16 +135,21 @@ async def build_prompt(session: AsyncSession, brief: str, *, brand_hint: str = "
             + f"Orientation: {orientation}.\n"
             "Rules: photographic or clean editorial illustration; describe subject, setting, lighting, composition and mood; "
             "leave calm negative space for a headline; absolutely no text, letters, numbers, logos or watermarks in the image; "
-            "brand-safe, inclusive, no real people's likeness, no trademarks. Under 70 words.\n"
+            "brand-safe, no trademarks. " + people_rule + "Under 70 words.\n"
             'Return JSON: {"prompt": "...", "negative": "comma separated things to avoid"}',
             system="You write concise, safe, vivid prompts for image models.", temperature=0.6, max_tokens=400,
         )
         prompt = str((data or {}).get("prompt") or "").strip()
         negative = str((data or {}).get("negative") or "").strip()
         if prompt:
-            return f"{prompt}, {STYLE_SUFFIX}", ", ".join(x for x in [negative, NEGATIVE] if x)
+            if no_people:
+                prompt = f"{prompt}. No people, no faces, no hands"
+            return f"{prompt}, {STYLE_SUFFIX}", ", ".join(x for x in [negative, NEGATIVE, people_neg] if x)
     except Exception as e:  # noqa: BLE001 - no text model configured or it failed: use the brief directly
         log.info("image_prompt fallback: %s", e)
+    if no_people:
+        return (f"{brief}, editorial photograph of objects and places, no people, no faces, no hands, {STYLE_SUFFIX}",
+                f"{NEGATIVE}, {people_neg}")
     return f"{brief}, editorial photograph, {STYLE_SUFFIX}", NEGATIVE
 
 
@@ -509,9 +521,16 @@ def _log_usage(session: AsyncSession, cfg: ProviderConfig, model: str, task: str
 
 
 async def generate(session: AsyncSession, prompt: str, width: int, height: int, *, negative: str | None = None,
-                   task: str = "image", seed: int | None = None) -> GeneratedImage:
-    """Generate one image with the first provider in the chain that succeeds. Raises ImageGenError."""
+                   task: str = "image", seed: int | None = None, check_people: bool | None = None) -> GeneratedImage:
+    """Generate one image with the first provider in the chain that succeeds. Raises ImageGenError.
+
+    check_people (default: when Brand → Visuals allows no people): an image that shows a face or a person is thrown
+    away and tried once more with another seed, then with the next provider."""
+    from app.services import media_policy
     from app.services.llm.router import over_budget
+
+    if check_people is None:
+        check_people = (await media_policy.get(session)).no_people
 
     chain = await image_chain(session)
     if not chain:
@@ -533,8 +552,18 @@ async def generate(session: AsyncSession, prompt: str, width: int, height: int, 
         try:
             from app.services.llm import keys
 
-            raw = await keys.with_keys(cfg, lambda: fn(cfg, model, prompt, negative, width, height, seed))
-            data = await asyncio.to_thread(cover_fit, raw, width, height)
+            data = None
+            for attempt in range(2 if check_people else 1):
+                s_ = seed + attempt * 7919
+                raw = await keys.with_keys(cfg, lambda: fn(cfg, model, prompt, negative, width, height, s_))
+                data = await asyncio.to_thread(cover_fit, raw, width, height)
+                if not check_people or not await asyncio.to_thread(media_policy.image_has_people, data):
+                    break
+                log.info("%s drew people (attempt %s); not used", cfg.name, attempt + 1)
+                data = None
+            if data is None:
+                errors.append(f"{cfg.name}: the image showed people")
+                continue
         except Exception as e:  # noqa: BLE001
             log.warning("image provider %s failed: %s", cfg.name, e)
             _log_usage(session, cfg, model, task, ok=False, error=str(e)[:1000], latency=int((time.perf_counter() - t0) * 1000))

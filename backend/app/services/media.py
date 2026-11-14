@@ -565,6 +565,11 @@ async def background(session: AsyncSession, org_id, brief: str, width: int, heig
     if mode in ("gradient", "none", "brand"):
         return None, None, "gradient"
     notes = []
+    team = await _team_visual(session, brief)
+    if team is not None:
+        raw = await _asset_bytes(team)
+        if raw:
+            return await asyncio.to_thread(_jpeg_data_uri, raw, width, height), team, "team"
     if mode in ("auto", "ai") and await image_gen.has_image_provider(session):
         try:
             orient = "portrait" if height > width * 1.1 else "landscape" if width > height * 1.1 else "square"
@@ -817,6 +822,10 @@ async def template_preview(org_id, style: BrandStyle, name: str, size: str = "10
 async def _make_image(session, post: Post, meta: dict, style: BrandStyle, size: tuple[int, int],
                       template: str | None = None, theme: str | None = None) -> MediaAsset:
     w, h = size
+    if template is None and not meta.get("background_asset_id"):
+        demo_img = await _demo_image(session, post, meta, style, w, h)
+        if demo_img is not None:
+            return demo_img
     tname = template or await _choose(session, post, meta, "image")
     fields = _image_fields(post, meta, tname)
     spec = TEMPLATES[tname]
@@ -849,6 +858,28 @@ async def _make_image(session, post: Post, meta: dict, style: BrandStyle, size: 
     return await store_bytes(session, post.organization_id, png, "png", source=f"template:{tname}", kind="image",
                              alt_text=_alt(post, meta, alt_fallback), meta=m, width=w, height=h,
                              prompt=bg_asset.prompt if bg_asset else None)
+
+
+async def _demo_image(session, post: Post, meta: dict, style: BrandStyle, w: int, h: int) -> MediaAsset | None:
+    """A post about one of your products: its real screen in a device frame under the headline."""
+    from app.services import demos
+
+    _, shots = await _demo_footage(session, post, "phone" if h > w * 1.2 else "laptop")
+    if not shots:
+        return None
+    shot = shots[0]
+    vis = meta.get("visual") or {}
+    headline = plain(vis.get("headline") or meta.get("headline") or post.title or _first_sentence(post.text or "", 70) or "")
+    headline = headline.replace("*", "")
+    try:
+        png = await demos.framed_png(style, shot, w, h, headline=headline[:90], eyebrow=plain(vis.get("eyebrow") or "")[:30])
+    except Exception as e:  # noqa: BLE001
+        log.info("demo image failed: %s", e)
+        return None
+    return await store_bytes(session, post.organization_id, png, "png", source="template:demo", kind="image",
+                             alt_text=_alt(post, meta, f"{headline}. Screenshot of {(shot.meta or {}).get('demo') or 'the product'}"),
+                             meta={"template": "demo", "demo_of": (shot.meta or {}).get("demo"), "screen_asset_id": str(shot.id),
+                                   "platform": post.platform}, width=w, height=h)
 
 
 # ---------------------------------------------------------------------------- carousel / document
@@ -1030,11 +1061,43 @@ async def _mesh_png(style: BrandStyle, w: int, h: int, key: str, path: Path, var
     return path
 
 
+async def _demo_footage(session, post: Post, view: str) -> tuple[list[MediaAsset], list[MediaAsset]]:
+    """(recordings, screenshots) of the product this post is about, if Brand → Visuals lists it."""
+    from app.services import demos, media_policy
+
+    try:
+        demo = demos.find(await media_policy.get(session), post.topic, post.title, post.text)
+        if demo is None:
+            return [], []
+        items = [a for a in await demos.ensure_captured(session, post.organization_id, demo) if _abs(a.path)]
+    except Exception as e:  # noqa: BLE001
+        log.info("product demo lookup failed: %s", e)
+        return [], []
+    seed = str(post.id)
+    vids = demos.pick(items, kind="video", view=view, seed=seed)
+    shots = demos.pick(items, kind="image", view=view, seed=seed) or demos.pick(items, kind="image", seed=seed)
+    return vids, shots
+
+
+async def _team_visual(session, text: str) -> MediaAsset | None:
+    """Brand → Visuals "Only our team photos": a scene that needs people gets one of the uploaded team photos."""
+    from app.services import media_policy
+
+    pol = await media_policy.get(session)
+    if pol.people != "team" or not media_policy.mentions_people(text):
+        return None
+    a = await media_policy.team_photo(session, seed=text)
+    return a if a is not None and _abs(a.path) else None
+
+
 async def _scene_visual(session, org_id, query: str, w: int, h: int, mode: str, tmp: Path, i: int,
                         min_duration: float) -> tuple[Path | None, str, str]:
     """(file, 'image'|'video', source) for a scene."""
     from app.services import image_gen, stock
 
+    team = await _team_visual(session, query)
+    if team is not None:
+        return _abs(team.path), "image", "team"
     orient = stock.orientation_for(w, h)
     if mode in ("auto", "stock") and await stock.has_stock(session):
         try:
@@ -1096,10 +1159,8 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
         clips: list[tts.TtsResult | None] = [None] * len(script)
         voice_note = None
         if voice_on and any(s["voiceover"] for s in script):
-            try:
-                for i, s in enumerate(script):
-                    if s["voiceover"]:
-                        clips[i] = await tts.synthesize(session, s["voiceover"], tmp / f"vo_{i:02d}.mp3", voice=voice)
+            try:  # one natural take for the whole script, cut per scene
+                clips = await tts.synthesize_lines(session, [s["voiceover"] or "" for s in script], tmp, voice=voice)
             except Exception as e:  # noqa: BLE001
                 voice_note = f"Voice-over unavailable: {str(e)[:200]}"
                 log.info(voice_note)
@@ -1134,9 +1195,27 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
         ai_clip_budget = 3 if meta.get("ai_video") else 0
         three_budget = 2
         used_icons: list[str] = []
+        demo_videos, demo_shots = await _demo_footage(session, post, "phone" if h > w else "laptop")
         for i, (s, d) in enumerate(zip(script, durations)):
             query = s["query"] or keywords(f"{s['caption']} {s['voiceover']} {meta.get('image_brief') or ''}")
             vis, vkind, src = None, "image", "gradient"
+            if i > 0 and i % 2 == 1 and (demo_videos or demo_shots) and mode != "gradient":
+                # a post about one of your products shows it working (Brand → Visuals → Product demos)
+                try:
+                    if demo_videos and (i // 2) % 2 == 0 or not demo_shots:
+                        a = demo_videos[(i // 2) % len(demo_videos)]
+                        vis, vkind, src = _abs(a.path), "video", "demo"
+                    else:
+                        from app.services import demos
+
+                        a = demo_shots[(i // 2) % len(demo_shots)]
+                        png = await demos.framed_png(style, a, w, h)
+                        vis = tmp / f"demo_{i:02d}.png"
+                        vis.write_bytes(png)
+                        vkind, src = "image", "demo"
+                except Exception as e:  # noqa: BLE001
+                    log.info("demo scene failed: %s", e)
+                    vis = None
             if ai_clip_budget and await video.video_provider(session):
                 try:
                     vis = await video.replicate_generate(session, f"{query}. Cinematic, no text.", tmp / f"ai_{i:02d}.mp4",

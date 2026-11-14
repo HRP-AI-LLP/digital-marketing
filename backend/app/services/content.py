@@ -328,6 +328,37 @@ async def next_opportunity(session: AsyncSession, pillar_id: uuid.UUID | None):
         return None
 
 
+NEWS_THEMES = ("tech_ai", "market_news", "studios", "thought_leadership")
+
+
+async def news_topic(session: AsyncSession, post: Post):
+    """Brand → Visuals "Tech & AI news" share: about that many posts in a hundred take a fresh researched news item
+    (AI, technology and industry updates from the daily research, with its facts and sources) as their topic. The
+    choice is stable per post. Returns a planner topic (Opportunity) or None."""
+    from app.models import IdeaBrief
+    from app.services import media_policy, research
+
+    share = (await media_policy.get(session)).news_share
+    if share <= 0 or random.Random(f"news:{post.id}").random() * 100 >= share:
+        return None
+    since = now_utc() - timedelta(days=7)
+    b = (await session.scalars(select(IdeaBrief).where(
+        IdeaBrief.theme.in_(NEWS_THEMES), IdeaBrief.status.in_(("new", "saved")), IdeaBrief.occasion.is_(None),
+        IdeaBrief.created_at >= since).order_by(IdeaBrief.score.desc(), IdeaBrief.created_at.desc()).limit(1))).first()
+    if b is None:
+        return None
+    opp = await research.add_to_topics(session, b)
+    if opp.status != "new":
+        return None
+    opp.status = "used"
+    opp.used_count = (opp.used_count or 0) + 1
+    data = dict(opp.data or {})
+    data["news"] = True
+    opp.data = data
+    await session.flush()
+    return opp
+
+
 async def plan_post(session: AsyncSession, post: Post, schedule: Schedule | None, cfg: GenSettings,
                     tz: ZoneInfo) -> None:
     """Fill pillar, post type, campaign and topic (only the ones not already set)."""
@@ -352,7 +383,15 @@ async def plan_post(session: AsyncSession, post: Post, schedule: Schedule | None
         return
     pillar = await session.get(ContentPillar, post.pillar_id) if post.pillar_id else None
     if campaign is None:
-        opp = await next_opportunity(session, post.pillar_id)
+        opp = None
+        try:
+            opp = await news_topic(session, post)
+        except Exception:  # noqa: BLE001 - research is optional
+            log.exception("news topic failed")
+        if opp is not None:
+            set_meta(post, news=True)
+        else:
+            opp = await next_opportunity(session, post.pillar_id)
         if opp is not None and getattr(opp, "title", None):
             post.opportunity_id = opp.id
             post.topic = opp.title
@@ -502,7 +541,11 @@ def normalize_draft(raw: Any, platform: str, post_type: str) -> dict:
             if isinstance(s, dict):
                 c, v = plain(_str(s.get("caption"), 200), True), plain(_str(s.get("voiceover"), 600))
                 if c or v:
-                    script.append({"caption": c or "", "voiceover": v or ""})
+                    item = {"caption": c or "", "voiceover": v or ""}
+                    q = plain(_str(s.get("query"), 80) or "")
+                    if q:
+                        item["query"] = q
+                    script.append(item)
         draft["video_script"] = script[:12]
     return draft
 
@@ -558,9 +601,14 @@ def build_system_prompt(brand: BrandProfile, platform: str, post_type: str, cfg:
     if avoid:
         parts.append("Avoid these (feedback on earlier posts):\n- " + "\n- ".join(a[:300] for a in avoid))
 
+    from app.services import media_policy
+
+    pol = media_policy.from_settings(brand.settings)
+    brief_rule = ("no text inside AI images; no people, faces or hands: show the product, technology, devices, "
+                  "objects, places or abstract shapes") if pol.no_people else "no text inside AI images"
     shape = ['"text": "<post body without hashtags>"', '"hashtags": ["NoHashSign", ...]',
              '"first_comment": "<optional first comment or null>"',
-             '"image_brief": "<one paragraph describing the visual; no text inside AI images>"',
+             f'"image_brief": "<one paragraph describing the visual; {brief_rule}>"',
              '"alt_text": "<image description for screen readers>"']
     if p.title_chars:
         shape.insert(0, f'"title": "<under {p.title_chars} characters>"')
@@ -571,7 +619,10 @@ def build_system_prompt(brand: BrandProfile, platform: str, post_type: str, cfg:
                      '"eyebrow": "<2-3 word label>", optional only when true and supported by the facts: "stat", "stat_label", "quote", "author", '
                      '"bullets": ["<max 6 words each>"], "left"/"right" (myth vs fact), "date"/"time"/"place" (events), "cta"}')
     if post_type in SCRIPT_TYPES:
-        shape.append('"video_script": [{"caption": "<on-screen text>", "voiceover": "<spoken line>"}]  (4 to 8 scenes, under 45 seconds total)')
+        shape.append('"video_script": [{"caption": "<on-screen text>", "voiceover": "<spoken line: natural, conversational, '
+                     'like a person talking to a friend; short sentences, contractions, no lists or symbols>", '
+                     '"query": "<2-4 words for the footage of this scene' + ('; things, screens or places, never people' if pol.no_people else '')
+                     + '>"}]  (4 to 8 scenes, under 45 seconds total)')
     parts.append("Reply with ONLY a JSON object: {" + ", ".join(shape) + "}")
     return "\n\n".join(parts)
 
@@ -595,6 +646,10 @@ async def write_draft(session: AsyncSession, post: Post, brand: BrandProfile, cf
         lines.append(f"Campaign: {campaign.name}. {campaign.brief or ''}")
     if meta.get("brief"):
         lines.append(f"Brief from the user: {meta['brief']}")
+    if meta.get("news"):
+        lines.append("This post shares a current technology / AI industry update: say what happened (from the facts, "
+                     "naming the source), why it matters to the audience, and the company's practical take. The visual "
+                     "shows the technology itself (chips, AI models, robots, data centres, devices, interfaces, networks).")
     if meta.get("regenerate_note"):
         lines.append(f"This is a new version. Make it clearly different from the previous one. {meta['regenerate_note']}")
         if meta.get("previous_text"):

@@ -123,3 +123,24 @@ async def cleanup_tmp() -> None:
             continue
     if removed:
         log.info("media temp cleanup removed %d entries", removed)
+
+
+@handler("demos.capture")
+async def capture_demo(ctx: JobContext) -> dict:
+    """Brand → Visuals → Product demos → Capture: screenshots and scroll-through recordings of a product's pages."""
+    from app.services import demos, media_policy
+
+    s = ctx.session
+    product = str((ctx.payload or {}).get("product") or "")
+    pol = await media_policy.get(s)
+    demo = next((d for d in pol.demos if d.product.lower() == product.lower()), None)
+    if demo is None:
+        raise PermanentError(f"{product or 'That product'} isn't in Brand → Visuals any more.")
+    await ctx.progress(f"Opening the {demo.product} pages…")
+    try:
+        items = await demos.capture(s, ctx.org_id, demo)
+    except demos.DemoError as e:
+        raise PermanentError(str(e)) from None
+    await s.flush()
+    return {"product": demo.product, "asset_ids": [str(a.id) for a in items],
+            "screenshots": sum(1 for a in items if a.kind == "image"), "recordings": sum(1 for a in items if a.kind == "video")}

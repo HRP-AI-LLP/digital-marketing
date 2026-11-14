@@ -8,6 +8,7 @@ import {
 } from "../components/ui";
 import { usePillars, type Campaign, type Pillar } from "./content/shared";
 import BrandLook from "./content/BrandLook";
+import BrandVisuals from "./content/BrandVisuals";
 import { CampaignSuggest, PillarSuggest, VoiceSuggest, type VoiceValues } from "./content/BrandSuggest";
 
 type Brand = {
@@ -385,16 +386,17 @@ function Campaigns({ canEdit }: { canEdit: boolean }) {
 export default function Brand() {
   const { can } = useAuth();
   const canEdit = can("content.create");
-  const [tab, setTab] = useState<"voice" | "look" | "pillars" | "campaigns">("voice");
+  const [tab, setTab] = useState<"voice" | "look" | "visuals" | "pillars" | "campaigns">("voice");
   return (
     <div>
       <PageHeader title="Brand and topics" description="How your posts sound, what they talk about, and when to stay quiet." />
       {!canEdit && <div className="mb-4"><Alert tone="info">You can view these settings. Ask an administrator for the “Create, edit and regenerate posts” permission to change them.</Alert></div>}
       <Tabs value={tab} onChange={setTab} items={[
-        { id: "voice", label: "Voice and rules" }, { id: "look", label: "Look" }, { id: "pillars", label: "Topic pillars" }, { id: "campaigns", label: "Campaigns" },
+        { id: "voice", label: "Voice and rules" }, { id: "look", label: "Look" }, { id: "visuals", label: "Visuals" }, { id: "pillars", label: "Topic pillars" }, { id: "campaigns", label: "Campaigns" },
       ]} />
       {tab === "voice" && <VoiceForm canEdit={canEdit} />}
       {tab === "look" && <BrandLook canEdit={canEdit} />}
+      {tab === "visuals" && <BrandVisuals canEdit={canEdit} />}
       {tab === "pillars" && <Pillars canEdit={canEdit} />}
       {tab === "campaigns" && <Campaigns canEdit={canEdit} />}
     </div>

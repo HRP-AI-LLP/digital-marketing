@@ -698,4 +698,4 @@ async def test_capabilities_and_voices(client, hrp, monkeypatch):
     caps = (await client.get("/media/capabilities", headers=h)).json()
     assert caps["image"] is False and caps["stock"] == [] and "edge_tts" in caps["tts"]
     v = (await client.get("/media/voices", headers=h)).json()
-    assert v["default"] == "en-IN-NeerjaNeural" and any(x["id"] == "hi-IN-SwaraNeural" for x in v["voices"])
+    assert v["default"] == "en-US-AndrewMultilingualNeural" and any(x["id"] == "hi-IN-SwaraNeural" for x in v["voices"])
