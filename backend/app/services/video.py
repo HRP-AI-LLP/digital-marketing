@@ -102,6 +102,43 @@ async def make_segment(scene: Scene, out: Path, width: int, height: int, *, fps:
 XFADES = {"fade", "smoothleft", "smoothright", "slideup", "slideleft", "zoomin", "hblur", "wipeleft", "wipeup", "circleopen", "fadeblack", "dissolve"}
 
 
+_PIECE = ["-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "15", "-pix_fmt", "yuv420p"]
+
+
+async def _join_scenes(segs: list[Path], scenes: list[Scene], xf: float, w: int, h: int, fps: int, work: Path) -> Path:
+    """The scenes with their transitions as one silent video, built piece by piece so ffmpeg never holds more than
+    two short clips at once. (One graph chaining every xfade decodes all scenes together and queues the later scenes'
+    frames in memory: several GB for a 40 s 1080x1920 video, which got the job killed.)
+
+    Timeline: scene 0 [0, d0], transition 0→1 (tail of 0 + head of 1, xf s), scene 1 [xf, d1], transition 1→2, ...
+    — the same result as the chained xfade."""
+    if len(segs) == 1:
+        return segs[0]
+    pieces: list[Path] = []
+    for i, seg in enumerate(segs):
+        start, end = (xf if i > 0 else 0.0), scenes[i].duration
+        if end - start > 0.04:
+            body = work / f"body_{i:02d}.mp4"
+            await run_ffmpeg(["-i", str(seg), "-vf", f"trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,fps={fps}",
+                              *_PIECE, str(body)], timeout_s=300)
+            pieces.append(body)
+        if i < len(segs) - 1:
+            tr = scenes[i].transition if scenes[i].transition in XFADES else "fade"
+            t = work / f"tr_{i:02d}.mp4"
+            await run_ffmpeg(["-i", str(seg), "-i", str(segs[i + 1]), "-filter_complex",
+                              f"[0:v]trim=start={end:.3f}:duration={xf:.3f},setpts=PTS-STARTPTS,fps={fps}[a];"
+                              f"[1:v]trim=duration={xf:.3f},setpts=PTS-STARTPTS,fps={fps}[b];"
+                              f"[a][b]xfade=transition={tr}:duration={xf:.3f}:offset=0,format=yuv420p[v]",
+                              "-map", "[v]", "-t", f"{xf:.3f}", *_PIECE, str(t)], timeout_s=300)
+            pieces.append(t)
+    lst = work / "pieces.txt"
+    lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in pieces))
+    joined = work / "joined.mp4"
+    # same encoder settings for every piece, so they join without re-encoding
+    await run_ffmpeg(["-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(joined)], timeout_s=300)
+    return joined
+
+
 async def build_video(scenes: list[Scene], out: Path, width: int, height: int, *, work: Path,
                       voice_clips: list[tuple[Path, float]] | None = None, music: Path | None = None,
                       fps: int = 30, xfade: float = XFADE, music_volume: float = 0.32, overlay_video: Path | None = None,
@@ -132,21 +169,10 @@ async def build_video(scenes: list[Scene], out: Path, width: int, height: int, *
         segs.append(seg)
     total = sum(s.duration for s in scenes)
 
-    args: list[str] = []
-    for seg in segs:
-        args += ["-i", str(seg)]
-    parts: list[str] = []
-    if len(segs) == 1:
-        parts.append("[0:v]null[vbase]")
-    else:
-        prev, offset = "[0:v]", 0.0
-        for i in range(1, len(segs)):
-            offset += scenes[i - 1].duration
-            label = "[vbase]" if i == len(segs) - 1 else f"[x{i}]"
-            tr = scenes[i - 1].transition if scenes[i - 1].transition in XFADES else "fade"
-            parts.append(f"{prev}[{i}:v]xfade=transition={tr}:duration={xf:.3f}:offset={offset:.3f}{label}")
-            prev = label
-    n = len(segs)
+    base = await _join_scenes(segs, scenes, xf, w, h, fps, work)
+    args: list[str] = ["-i", str(base)]
+    parts: list[str] = ["[0:v]null[vbase]"]
+    n = 1
     if overlay_video is not None and Path(overlay_video).exists():
         if str(overlay_video).endswith(".ffconcat"):
             args += ["-f", "concat", "-safe", "0", "-i", str(overlay_video)]
