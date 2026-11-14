@@ -27,6 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 log = logging.getLogger("media_policy")
 
 PEOPLE_MODES = ("none", "team", "allow")
+# Where post images and video scenes come from:
+#   team_stock  your team (new photos made from team photos) + stock photos and clips (checked: no people) + your
+#               product demos, 3D scenes and brand graphics. No AI-invented images or AI video clips at all, so no
+#               realistic person can appear other than your team members.
+#   mixed       AI-generated images (told and checked: no people) as well.
+SOURCE_MODES = ("team_stock", "mixed")
 DEFAULT_NEWS_SHARE = 20
 
 PEOPLE_WORDS = (
@@ -52,6 +58,27 @@ class Demo:
     keywords: list[str] = field(default_factory=list)
     urls: list[str] = field(default_factory=list)
     asset_ids: list[str] = field(default_factory=list)  # uploads and captures
+    # A demo behind a sign-in: the studio signs in with this demo account before capturing. The password is kept
+    # encrypted (`secret`) and never sent back to the browser.
+    login_url: str = ""
+    username: str = ""
+    secret: str = ""
+    explore: bool = True  # after signing in, also capture the main pages linked from the app's menu
+
+    @property
+    def password(self) -> str:
+        from app.core.crypto import decrypt_json
+
+        return str(decrypt_json(self.secret).get("password") or "")
+
+    @property
+    def has_login(self) -> bool:
+        return bool(self.login_url and self.username and self.secret)
+
+    def public(self) -> dict:
+        return {"product": self.product, "keywords": self.keywords, "urls": self.urls, "asset_ids": self.asset_ids,
+                "login_url": self.login_url, "username": self.username, "has_password": bool(self.secret),
+                "explore": self.explore}
 
     def matches(self, text: str) -> bool:
         words = [self.product, *self.keywords]
@@ -63,15 +90,24 @@ class Policy:
     people: str = "none"
     news_share: int = DEFAULT_NEWS_SHARE
     demos: list[Demo] = field(default_factory=list)
+    sources: str = "mixed"
 
     @property
     def no_people(self) -> bool:
         return self.people != "allow"
 
+    @property
+    def ai_images(self) -> bool:
+        """May posts use AI-generated images / clips (other than new photos of your own team)?"""
+        return self.sources != "team_stock"
+
 
 def from_settings(settings: dict | None) -> Policy:
     m = (settings or {}).get("media") or {}
     people = m.get("people") if m.get("people") in PEOPLE_MODES else "none"
+    sources = m.get("sources") if m.get("sources") in SOURCE_MODES else "mixed"
+    if sources == "team_stock" and people == "allow":
+        people = "team"  # "team photos and stock" means nobody but the team
     try:
         share = max(0, min(60, int(m.get("news_share", DEFAULT_NEWS_SHARE))))
     except (TypeError, ValueError):
@@ -82,13 +118,22 @@ def from_settings(settings: dict | None) -> Policy:
             demos.append(Demo(product=str(d["product"]).strip()[:80],
                               keywords=[str(k).strip()[:60] for k in d.get("keywords") or [] if str(k).strip()][:12],
                               urls=[str(u).strip()[:500] for u in d.get("urls") or [] if str(u).strip()][:6],
-                              asset_ids=[str(a) for a in d.get("asset_ids") or []][:40]))
-    return Policy(people=people, news_share=share, demos=demos)
+                              asset_ids=[str(a) for a in d.get("asset_ids") or []][:40],
+                              login_url=str(d.get("login_url") or "")[:500], username=str(d.get("username") or "")[:200],
+                              secret=str(d.get("secret") or ""), explore=bool(d.get("explore", True))))
+    return Policy(people=people, news_share=share, demos=demos, sources=sources)
 
 
 def to_settings(p: Policy) -> dict:
-    return {"people": p.people, "news_share": p.news_share,
-            "demos": [{"product": d.product, "keywords": d.keywords, "urls": d.urls, "asset_ids": d.asset_ids} for d in p.demos]}
+    return {"people": p.people, "sources": p.sources, "news_share": p.news_share,
+            "demos": [{"product": d.product, "keywords": d.keywords, "urls": d.urls, "asset_ids": d.asset_ids,
+                       "login_url": d.login_url, "username": d.username, "secret": d.secret, "explore": d.explore}
+                      for d in p.demos]}
+
+
+def to_public(p: Policy) -> dict:
+    """Settings as shown in the app: no password, not even encrypted."""
+    return {"people": p.people, "sources": p.sources, "news_share": p.news_share, "demos": [d.public() for d in p.demos]}
 
 
 async def get(session: AsyncSession) -> Policy:

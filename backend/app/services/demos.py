@@ -5,7 +5,11 @@ attendance") and the public pages that show it working (a product page, a demo l
 in the studio's own browser and saves:
   - screenshots: the top of the page and two further down, on a laptop screen and on a phone screen;
   - a slow scroll-through recording of each, for videos (phone size for Shorts/Reels, laptop size for wide videos).
-You can also add your own screen recordings and screenshots (e.g. of a logged-in demo) from the Media library.
+A demo behind a sign-in works too: give the sign-in page and a DEMO account's username and password (kept
+encrypted). The studio signs in, then captures the listed pages and, if asked, the main pages in the app's menu. It
+only opens links: it never clicks buttons or changes anything (except pressing "sign in"). Screens get posted
+publicly, so use an account with sample data only.
+You can also add your own screen recordings and screenshots from the Media library.
 
 A post whose topic, title or text matches a product then uses these: Shorts/Reels show the recordings and
 screenshots in their scenes, and image posts show a screenshot in a device frame under the headline.
@@ -15,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import uuid
 from pathlib import Path
 
@@ -66,39 +71,71 @@ def pick(items: list[MediaAsset], *, kind: str | None = None, view: str | None =
 
 
 # ----------------------------------------------------------------------------- capture
+MAX_PAGES = 6
+# links never followed while exploring a signed-in demo (only links are opened; nothing is clicked or changed)
+SKIP_LINK = re.compile(r"log.?out|sign.?out|delete|remove|deactivat|destroy|reset|billing|subscription|payment|checkout|"
+                       r"password|security|api.?key|token|export|download|\.(?:pdf|csv|xlsx?|zip)$", re.I)
+
+
 async def capture(session: AsyncSession, org_id, demo: media_policy.Demo) -> list[MediaAsset]:
-    """Screenshots and scroll-through recordings of the demo's pages. Replaces the previous captures."""
+    """Screenshots and scroll-through recordings of the demo's pages, on a laptop and a phone screen. With a sign-in
+    (a demo account), the studio signs in first and, with `explore`, also captures the main pages in the app's menu.
+    Replaces the previous captures."""
     from app.services import media
     from app.services import media_render as render
 
-    if not demo.urls:
-        raise DemoError(f"Add at least one web address for {demo.product}.")
+    if not demo.urls and not demo.has_login:
+        raise DemoError(f"Add at least one web address (or a sign-in page) for {demo.product}.")
+    for url in [*demo.urls, *([demo.login_url] if demo.login_url else [])]:
+        if not url.startswith(("https://", "http://")):
+            raise DemoError(f"{url}: use a full address starting with https://")
     out: list[MediaAsset] = []
-    errors = []
+    errors: list[str] = []
+    pages_done: list[str] = []
     tmp = render.tmp_dir("demo-")
     try:
         browser = await render.get_browser()
-        for url in demo.urls:
-            if not url.startswith(("https://", "http://")):
-                errors.append(f"{url}: use a full address starting with https://")
-                continue
-            for view, (w, h, scale, mobile) in VIEWS.items():
-                try:
-                    shots, video = await _capture_one(browser, url, w, h, scale, mobile, tmp / f"{view}-{len(out)}")
-                except Exception as e:  # noqa: BLE001
-                    errors.append(f"{url} ({view}): {str(e)[:200]}")
-                    continue
-                base = {"demo": demo.product, "url": url, "view": view, "captured": True}
-                for i, png in enumerate(shots):
-                    out.append(await media.store_bytes(session, org_id, png, "png", source="demo:capture", kind="image",
-                                                       alt_text=f"{demo.product}: {url}"[:300],
-                                                       meta={**base, "shot": i}, area="demos"))
-                if video is not None:
-                    info = await render.probe(video)
-                    out.append(await media.store_file(session, org_id, video, "mp4", source="demo:capture", kind="video",
-                                                      mime="video/mp4", alt_text=f"{demo.product}: {url}"[:300],
-                                                      width=info.get("width"), height=info.get("height"),
-                                                      duration=info.get("duration"), meta={**base, "scroll": True}))
+        for view, (w, h, scale, mobile) in VIEWS.items():
+            ctx = await browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=scale,
+                                            is_mobile=mobile, has_touch=mobile)
+            try:
+                page = await ctx.new_page()
+                urls = list(demo.urls)
+                if demo.has_login:
+                    landing = await _sign_in(page, demo)
+                    if not urls:
+                        urls = [landing]
+                    if demo.explore:
+                        for link in await _menu_links(page, landing):
+                            if len(urls) >= MAX_PAGES:
+                                break
+                            if link not in urls:
+                                urls.append(link)
+                for k, url in enumerate(urls[:MAX_PAGES]):
+                    try:
+                        shots, video = await _capture_page(page, url, w, h, tmp / f"{view}-{k}")
+                    except Exception as e:  # noqa: BLE001
+                        errors.append(f"{url} ({view}): {str(e)[:200]}")
+                        continue
+                    pages_done.append(url)
+                    base = {"demo": demo.product, "url": url, "view": view, "captured": True,
+                            **({"signed_in": True} if demo.has_login else {})}
+                    for i, png in enumerate(shots):
+                        out.append(await media.store_bytes(session, org_id, png, "png", source="demo:capture", kind="image",
+                                                           alt_text=f"{demo.product}: {url}"[:300],
+                                                           meta={**base, "shot": i}, area="demos"))
+                    if video is not None:
+                        info = await render.probe(video)
+                        out.append(await media.store_file(session, org_id, video, "mp4", source="demo:capture", kind="video",
+                                                          mime="video/mp4", alt_text=f"{demo.product}: {url}"[:300],
+                                                          width=info.get("width"), height=info.get("height"),
+                                                          duration=info.get("duration"), meta={**base, "scroll": True}))
+            except DemoError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{view}: {str(e)[:200]}")
+            finally:
+                await ctx.close()
     finally:
         render.rm_tree(tmp)
     if not out:
@@ -111,47 +148,102 @@ async def capture(session: AsyncSession, org_id, demo: media_policy.Demo) -> lis
     return out
 
 
-async def _capture_one(browser, url: str, w: int, h: int, scale: float, mobile: bool, work: Path) -> tuple[list[bytes], Path | None]:
-    """Screenshots at three scroll positions, and a smooth scroll-through: frames taken while scrolling, encoded
-    with ffmpeg (Playwright's own recorder needs a separate ffmpeg build)."""
+USER_FIELD = ("input[type=email]:visible, input[autocomplete=username]:visible, input[name*=user i]:visible, "
+              "input[name*=email i]:visible, input[name*=login i]:visible, input[id*=user i]:visible, "
+              "input[id*=email i]:visible, input[type=text]:visible")
+PASSWORD_FIELD = "input[type=password]:visible"
+
+
+async def _sign_in(page, demo: media_policy.Demo) -> str:
+    """Sign in with the demo account; returns the page the app lands on. One-page and two-step (username, then
+    password) sign-ins work; codes sent by SMS/email and CAPTCHAs don't."""
+    await page.goto(demo.login_url, wait_until="networkidle", timeout=45_000)
+    await page.wait_for_timeout(800)
+    await _dismiss_banners(page)
+    user = page.locator(USER_FIELD).first
+    if not await user.count():
+        raise DemoError(f"{demo.product}: no username or email box on {demo.login_url}. Use the address of the sign-in page.")
+    await user.fill(demo.username)
+    pw = page.locator(PASSWORD_FIELD).first
+    if not await pw.count():  # two-step: username first
+        await user.press("Enter")
+        try:
+            await pw.wait_for(state="visible", timeout=10_000)
+        except Exception:  # noqa: BLE001
+            raise DemoError(f"{demo.product}: the sign-in page didn't ask for a password after the username.") from None
+    await pw.fill(demo.password)
+    await pw.press("Enter")
+    try:
+        await page.wait_for_load_state("networkidle", timeout=30_000)
+    except Exception:  # noqa: BLE001, S110 - some apps keep a connection open
+        pass
+    await page.wait_for_timeout(2000)
+    if await page.locator(PASSWORD_FIELD).count():
+        raise DemoError(f"{demo.product}: couldn't sign in with the demo account (check the username and password; "
+                        "sign-ins that need a code or a CAPTCHA can't be automated).")
+    return page.url
+
+
+async def _menu_links(page, landing: str) -> list[str]:
+    """Pages linked from the app's navigation (sidebar, top bar), same site only, nothing risky."""
+    from urllib.parse import urlsplit
+
+    origin = "{0.scheme}://{0.netloc}".format(urlsplit(landing))
+    hrefs: list[str] = await page.evaluate("""() => {
+      const pick = (root) => [...root.querySelectorAll('a[href]')].filter(a => a.offsetParent !== null)
+        .map(a => a.href);
+      const navs = [...document.querySelectorAll('nav, aside, header, [role=navigation], [class*=sidebar], [class*=menu]')];
+      const inNav = navs.flatMap(pick);
+      return inNav.length ? inNav : pick(document);
+    }""")
+    seen, out = {landing.split("#")[0] if "#/" not in landing else landing}, []
+    for href in hrefs:
+        if not href.startswith(origin) or SKIP_LINK.search(href):
+            continue
+        key = href if "#/" in href else href.split("#")[0]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out[:MAX_PAGES]
+
+
+async def _capture_page(page, url: str, w: int, h: int, work: Path) -> tuple[list[bytes], Path | None]:
+    """Screenshots (top, and further down on long pages) and a smooth scroll-through of a long page: frames taken
+    while scrolling, encoded with ffmpeg (Playwright's own recorder needs a separate ffmpeg build)."""
+    import math
+
     from app.services import media_render as render
 
     work.mkdir(parents=True, exist_ok=True)
-    ctx = await browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=scale, is_mobile=mobile,
-                                    has_touch=mobile)
-    shots: list[bytes] = []
     frames = work / "frames"
     frames.mkdir(exist_ok=True)
-    n_frames = 0
-    try:
-        page = await ctx.new_page()
+    if page.url != url:
         await page.goto(url, wait_until="networkidle", timeout=45_000)
-        await page.wait_for_timeout(1200)
-        await _dismiss_banners(page)
-        height = await page.evaluate("() => document.documentElement.scrollHeight")
-        for frac in (0.0, 0.35, 0.7):
-            y = int(max(0, height - h) * frac)
-            await page.evaluate(f"window.scrollTo(0, {y})")
-            await page.wait_for_timeout(700)
-            shots.append(await page.screenshot(type="png"))
-        # scroll-through: hold on the top, glide down (ease in/out), hold at the end
-        await page.evaluate("window.scrollTo(0, 0)")
-        await page.wait_for_timeout(500)
-        dist = max(0, min(height - h, h * 4))
-        hold, glide = int(FPS * 1.0), int(FPS * (SCROLL_SECONDS - 2.0))
-        positions = [0] * hold + [int(dist * (1 - __import__("math").cos(__import__("math").pi * (i + 1) / glide)) / 2)
-                                  for i in range(glide)] + [dist] * hold
-        last = None
-        for y in positions:
-            if y != last:
-                await page.evaluate(f"window.scrollTo(0, {y})")
-                last = y
-            (frames / f"f{n_frames:04d}.jpg").write_bytes(await page.screenshot(type="jpeg", quality=82))
-            n_frames += 1
-    finally:
-        await ctx.close()
-    if n_frames < FPS * 2:
+    await page.wait_for_timeout(1200)
+    await _dismiss_banners(page)
+    height = await page.evaluate("() => document.documentElement.scrollHeight")
+    long_page = height > h * 1.3
+    shots: list[bytes] = []
+    for frac in ((0.0, 0.35, 0.7) if long_page else (0.0,)):
+        await page.evaluate(f"window.scrollTo(0, {int(max(0, height - h) * frac)})")
+        await page.wait_for_timeout(700)
+        shots.append(await page.screenshot(type="png"))
+    if not long_page:  # an app screen that doesn't scroll: the screenshot is enough (videos pan across it)
         return shots, None
+    # scroll-through: hold on the top, glide down (ease in/out), hold at the end
+    await page.evaluate("window.scrollTo(0, 0)")
+    await page.wait_for_timeout(500)
+    dist = max(0, min(height - h, h * 4))
+    hold, glide = int(FPS * 1.0), int(FPS * (SCROLL_SECONDS - 2.0))
+    positions = [0] * hold + [int(dist * (1 - math.cos(math.pi * (i + 1) / glide)) / 2) for i in range(glide)] + [dist] * hold
+    n_frames, last = 0, None
+    for y in positions:
+        if y != last:
+            await page.evaluate(f"window.scrollTo(0, {y})")
+            last = y
+        (frames / f"f{n_frames:04d}.jpg").write_bytes(await page.screenshot(type="jpeg", quality=82))
+        n_frames += 1
     mp4 = work / "scroll.mp4"
     await render.run_ffmpeg(["-framerate", str(FPS), "-i", str(frames / "f%04d.jpg"),
                              "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", "-c:v", "libx264", "-preset", "medium",

@@ -3,16 +3,20 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Camera, Plus, Trash2, UserX, Users } from "lucide-react";
+import { Camera, Images, Plus, ShieldCheck, Sparkles, Trash2, UserX, Users } from "lucide-react";
 import { api } from "../../api/client";
 import { Alert, Button, Card, Field, Input } from "../../components/ui";
 
 type Demo = {
   product: string; keywords: string[]; urls: string[]; asset_ids: string[];
+  login_url?: string; username?: string; has_password?: boolean; explore?: boolean;
   screens?: number; recordings?: number; captured_at?: string | null;
 };
-type Visuals = { people: "none" | "team" | "allow"; news_share: number; demos: Demo[]; team_photos?: number };
-type Row = { product: string; keywords: string; urls: string; asset_ids: string[]; screens?: number; recordings?: number; captured_at?: string | null };
+type Visuals = { people: "none" | "team" | "allow"; sources: "team_stock" | "mixed"; news_share: number; demos: Demo[]; team_photos?: number };
+type Row = {
+  product: string; keywords: string; urls: string; asset_ids: string[]; screens?: number; recordings?: number; captured_at?: string | null;
+  signin: boolean; login_url: string; username: string; password: string; has_password?: boolean; explore: boolean;
+};
 
 const PEOPLE: { id: Visuals["people"]; title: string; body: string; icon: typeof UserX }[] = [
   { id: "none", title: "No people", icon: UserX,
@@ -23,29 +27,42 @@ const PEOPLE: { id: Visuals["people"]; title: string; body: string; icon: typeof
     body: "Stock photos and clips may show people. AI images never copy a real person's likeness." },
 ];
 
-const toRow = (d: Demo): Row => ({ ...d, keywords: d.keywords.join(", "), urls: d.urls.join("\n") });
+const SOURCES: { id: Visuals["sources"]; title: string; body: string; icon: typeof Images }[] = [
+  { id: "team_stock", title: "Team photos and stock only", icon: ShieldCheck,
+    body: "Images and video scenes come only from your team (new photos made from their team photos), stock photos and clips (checked: no people), your product demos and brand graphics. Nothing is invented by AI, so no realistic person other than your team can appear." },
+  { id: "mixed", title: "Also AI-generated images", icon: Sparkles,
+    body: "AI may also create images and clips for scenes (they're told not to show people and checked for faces). More variety, but they're invented pictures." },
+];
+
+const toRow = (d: Demo): Row => ({
+  ...d, keywords: d.keywords.join(", "), urls: d.urls.join("\n"), signin: !!d.login_url, login_url: d.login_url ?? "",
+  username: d.username ?? "", password: "", explore: d.explore ?? true,
+});
 const split = (s: string, by: RegExp) => s.split(by).map((x) => x.trim()).filter(Boolean);
 
 export default function BrandVisuals({ canEdit }: { canEdit: boolean }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["brand-visuals"], queryFn: () => api<Visuals>("/content/brand/visuals") });
   const [people, setPeople] = useState<Visuals["people"]>("none");
+  const [sources, setSources] = useState<Visuals["sources"]>("mixed");
   const [share, setShare] = useState(20);
   const [rows, setRows] = useState<Row[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!q.data) return;
-    setPeople(q.data.people); setShare(q.data.news_share); setRows(q.data.demos.map(toRow));
+    setPeople(q.data.people); setSources(q.data.sources ?? "mixed"); setShare(q.data.news_share); setRows(q.data.demos.map(toRow));
   }, [q.data]);
 
   const save = useMutation({
     mutationFn: () => api<Visuals>("/content/brand/visuals", {
       method: "PUT",
       json: {
-        people, news_share: share,
+        people, sources, news_share: share,
         demos: rows.filter((r) => r.product.trim()).map((r) => ({
           product: r.product.trim(), keywords: split(r.keywords, /[,\n]/), urls: split(r.urls, /[\s,]+/), asset_ids: r.asset_ids,
+          login_url: r.signin ? r.login_url.trim() || null : null, username: r.signin ? r.username.trim() || null : null,
+          password: r.signin && r.password ? r.password : null, clear_login: !r.signin, explore: r.explore,
         })),
       },
     }),
@@ -67,11 +84,28 @@ export default function BrandVisuals({ canEdit }: { canEdit: boolean }) {
       {err && <Alert>{err.message}</Alert>}
 
       <Card>
+        <h3 className="flex items-center gap-2 font-semibold"><Images size={17} /> Where images and video scenes come from</h3>
+        <p className="mt-1 text-sm text-muted">The default for every post the studio makes.</p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {SOURCES.map((o) => (
+            <button key={o.id} type="button" disabled={!canEdit}
+              onClick={() => { setSources(o.id); if (o.id === "team_stock" && people === "allow") setPeople("team"); }}
+              className={`rounded-xl border p-4 text-left transition ${sources === o.id ? "border-brand bg-brand/5 ring-1 ring-brand" : "border-line hover:border-ink/30"}`}>
+              <div className="flex items-center gap-2 font-semibold"><o.icon size={16} /> {o.title}{o.id === "team_stock" && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">Recommended</span>}</div>
+              <p className="mt-1.5 text-xs leading-relaxed text-muted">{o.body}</p>
+            </button>
+          ))}
+        </div>
+      </Card>
+
+      <Card>
         <h3 className="font-semibold">People in images and videos</h3>
         <p className="mt-1 text-sm text-muted">Stock photos and AI images of people can raise questions about consent and likeness. Choose what posts may show.</p>
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           {PEOPLE.map((p) => (
-            <button key={p.id} type="button" disabled={!canEdit} onClick={() => setPeople(p.id)}
+            <button key={p.id} type="button" disabled={!canEdit || (sources === "team_stock" && p.id === "allow")}
+              title={sources === "team_stock" && p.id === "allow" ? "“Team photos and stock only” never shows anyone but your team" : undefined}
+              onClick={() => setPeople(p.id)}
               className={`rounded-xl border p-4 text-left transition ${people === p.id ? "border-brand bg-brand/5 ring-1 ring-brand" : "border-line hover:border-ink/30"}`}>
               <div className="flex items-center gap-2 font-semibold"><p.icon size={16} /> {p.title}</div>
               <p className="mt-1.5 text-xs leading-relaxed text-muted">{p.body}</p>
@@ -101,7 +135,7 @@ export default function BrandVisuals({ canEdit }: { canEdit: boolean }) {
               (product page, live demo). Your own screen recordings work too: upload them to the Media library.
             </p>
           </div>
-          {canEdit && <Button variant="secondary" onClick={() => setRows((r) => [...r, { product: "", keywords: "", urls: "", asset_ids: [] }])}><Plus size={15} /> Add a product</Button>}
+          {canEdit && <Button variant="secondary" onClick={() => setRows((r) => [...r, { product: "", keywords: "", urls: "", asset_ids: [], signin: false, login_url: "", username: "", password: "", explore: true }])}><Plus size={15} /> Add a product</Button>}
         </div>
         {rows.length === 0 && <p className="mt-4 text-sm text-muted">No products yet. Example: “HRP HRMS” with words “HRMS, payroll, attendance” and https://hrpai.in/products/hrms.</p>}
         <div className="mt-4 space-y-4">
@@ -116,16 +150,47 @@ export default function BrandVisuals({ canEdit }: { canEdit: boolean }) {
                 </Field>
               </div>
               <div className="mt-3">
-                <Field label="Pages that show it (one per line, up to 6)" hint="Public pages only: the studio opens them like a visitor would.">
+                <Field label="Pages that show it (one per line, up to 6)"
+                  hint={r.signin ? "Optional with a sign-in: pages inside the app to capture. Leave empty to start from where the sign-in lands." : "Public pages: the studio opens them like a visitor would."}>
                   <textarea rows={2} value={r.urls} disabled={!canEdit} placeholder="https://hrpai.in/products/hrms"
                     onChange={(e) => set(i, { urls: e.target.value })}
                     className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm focus:border-brand focus:outline-none" />
                 </Field>
               </div>
+              <label className="mt-3 flex items-center gap-2 text-sm">
+                <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--brand))]" checked={r.signin} disabled={!canEdit}
+                  onChange={(e) => set(i, { signin: e.target.checked })} />
+                <span className="font-medium">The demo needs a sign-in</span>
+              </label>
+              {r.signin && (
+                <div className="mt-2 space-y-3 rounded-lg bg-ink/[0.03] p-3">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <Field label="Sign-in page">
+                      <Input value={r.login_url} disabled={!canEdit} placeholder="https://demo.hrpai.in/login" onChange={(e) => set(i, { login_url: e.target.value })} />
+                    </Field>
+                    <Field label="Demo username or email">
+                      <Input value={r.username} disabled={!canEdit} autoComplete="off" onChange={(e) => set(i, { username: e.target.value })} />
+                    </Field>
+                    <Field label="Demo password" hint={r.has_password ? "Saved. Type a new one to change it." : undefined}>
+                      <Input type="password" value={r.password} disabled={!canEdit} autoComplete="new-password"
+                        placeholder={r.has_password ? "••••••••" : ""} onChange={(e) => set(i, { password: e.target.value })} />
+                    </Field>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--brand))]" checked={r.explore} disabled={!canEdit}
+                      onChange={(e) => set(i, { explore: e.target.checked })} />
+                    Also capture the main pages in the app's menu (up to 6 pages)
+                  </label>
+                  <p className="text-xs text-muted">
+                    Use a demo account with sample data only: these screens are posted publicly. The password is stored encrypted and never shown again.
+                    The studio only signs in and opens pages; it never clicks buttons or changes anything. Sign-ins that need a one-time code or a CAPTCHA can't be automated.
+                  </p>
+                </div>
+              )}
               <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted">
                 <span>{r.screens ?? 0} screenshots · {r.recordings ?? 0} recordings{r.captured_at ? ` · captured ${new Date(r.captured_at).toLocaleString()}` : ""}</span>
                 <span className="ml-auto flex gap-2">
-                  {canEdit && q.data?.demos.some((d) => d.product === r.product && d.urls.length) && (
+                  {canEdit && q.data?.demos.some((d) => d.product === r.product && (d.urls.length || d.login_url)) && (
                     <Button variant="secondary" onClick={() => capture.mutate(r.product)} disabled={capture.isPending}><Camera size={14} /> Capture again</Button>
                   )}
                   {canEdit && <Button variant="ghost" onClick={() => setRows((rs) => rs.filter((_, k) => k !== i))}><Trash2 size={14} /> Remove</Button>}

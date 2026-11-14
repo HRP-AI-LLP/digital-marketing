@@ -570,7 +570,8 @@ async def background(session: AsyncSession, org_id, brief: str, width: int, heig
         raw = await _asset_bytes(team)
         if raw:
             return await asyncio.to_thread(_jpeg_data_uri, raw, width, height), team, "team"
-    if mode in ("auto", "ai") and await image_gen.has_image_provider(session):
+    ai_ok = await _ai_images_allowed(session)
+    if mode in ("auto", "ai") and ai_ok and await image_gen.has_image_provider(session):
         try:
             orient = "portrait" if height > width * 1.1 else "landscape" if width > height * 1.1 else "square"
             prompt, negative = await image_gen.build_prompt(session, brief, orientation=orient)
@@ -1079,6 +1080,13 @@ async def _demo_footage(session, post: Post, view: str) -> tuple[list[MediaAsset
     return vids, shots
 
 
+async def _ai_images_allowed(session) -> bool:
+    """Brand → Visuals "Team photos and stock only": no AI-invented images or clips in posts."""
+    from app.services import media_policy
+
+    return (await media_policy.get(session)).ai_images
+
+
 async def _team_visual(session, org_id, text: str, w: int, h: int) -> MediaAsset | None:
     """Brand → Visuals "Only our team": a scene that needs people gets a NEW AI photo of one of your team members,
     made from their team photo (the face is kept; pose, clothes and setting are new). The uploaded photo itself is
@@ -1120,7 +1128,7 @@ async def _scene_visual(session, org_id, query: str, w: int, h: int, mode: str, 
                 return _abs(a.path), "video", a.source
         except Exception as e:  # noqa: BLE001
             log.info("stock clip failed: %s", e)
-    if mode in ("auto", "ai") and await image_gen.has_image_provider(session):
+    if mode in ("auto", "ai") and await _ai_images_allowed(session) and await image_gen.has_image_provider(session):
         try:
             prompt, negative = await image_gen.build_prompt(session, query, orientation="portrait" if h > w else "landscape")
             img = await image_gen.generate(session, prompt, w, h, negative=negative)
@@ -1206,7 +1214,7 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
             use_3d = False
         scenes: list[video.Scene] = []
         sources, styles = [], []
-        ai_clip_budget = 3 if meta.get("ai_video") else 0
+        ai_clip_budget = 3 if meta.get("ai_video") and await _ai_images_allowed(session) else 0
         three_budget = 2
         used_icons: list[str] = []
         demo_videos, demo_shots = await _demo_footage(session, post, "phone" if h > w else "laptop")

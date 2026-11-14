@@ -353,3 +353,106 @@ async def test_team_mode_lets_the_writer_ask_for_team_members():
     none = build_system_prompt(b, "youtube", "video", cfg, "", [], [])
     assert "never people" in none and "our team member" not in none
     assert media_policy.mentions_people("our team member presenting dashboard")
+
+
+async def test_team_photos_and_stock_only_never_invents_images(client, monkeypatch):
+    """Brand → Visuals "Team photos and stock only": no AI-generated images or clips anywhere in automatic posts;
+    stock (checked for people) instead, and nobody but the team ("allow people" is turned into "team")."""
+    from app.services import media as media_svc
+
+    o = await new_org(client)
+    r = await client.put("/content/brand/visuals", headers=o["h"], json={"sources": "team_stock", "people": "allow"})
+    assert r.status_code == 200 and r.json()["sources"] == "team_stock" and r.json()["people"] == "team"
+
+    async def no_ai(*a, **k):
+        raise AssertionError("AI image generation must not be used")
+
+    async def yes(*a, **k):
+        return True
+
+    picked = {}
+
+    async def stock_photo(session, query, orientation=None):
+        picked["q"] = query
+        return None
+
+    monkeypatch.setattr(image_gen, "generate", no_ai)
+    monkeypatch.setattr(image_gen, "has_image_provider", yes)
+    monkeypatch.setattr(stock, "has_stock", yes)
+    monkeypatch.setattr(stock, "find_image", stock_photo)
+    async with SessionLocal() as s:
+        set_tenant(s, o["id"])
+        _, _, note = await media_svc.background(s, o["id"], "a dashboard on a laptop in a bright office", 600, 600, "auto")
+        assert await media_policy.get(s) is not None and not (await media_policy.get(s)).ai_images
+    assert note.startswith("gradient") and "laptop" in picked["q"]  # stock was asked; AI never
+
+    r = await client.put("/content/brand/visuals", headers=o["h"], json={"sources": "mixed"})
+    assert r.json()["sources"] == "mixed"
+    async with SessionLocal() as s:
+        set_tenant(s, o["id"])
+        assert (await media_policy.get(s)).ai_images
+
+
+@pytest.fixture
+def signin_site(tmp_path):
+    guard = "<script>if(localStorage.getItem('ok')!=='1')location.href='login.html'</script>"
+    nav = ("<nav><a href='app.html'>Home</a> <a href='reports.html'>Reports</a> <a href='people.html#x'>People</a> "
+           "<a href='logout.html'>Log out</a> <a href='https://elsewhere.example/x'>Out</a></nav>")
+    (tmp_path / "login.html").write_text(
+        "<!doctype html><form id=f><input name=email type=email><input name=pw type=password><button>Sign in</button></form>"
+        "<script>document.getElementById('f').onsubmit=e=>{e.preventDefault();const d=new FormData(e.target);"
+        "if(d.get('email')==='demo@hrpai.in'&&d.get('pw')==='Demo-123'){localStorage.setItem('ok','1');location.href='app.html'}"
+        "else{document.body.insertAdjacentHTML('beforeend','<p>Wrong password</p>')}}</script>")
+    (tmp_path / "app.html").write_text(f"<!doctype html>{guard}{nav}<h1>Dashboard</h1>")
+    rows = "".join(f"<section style='height:420px;background:hsl({i * 40},60%,55%)'>Report {i}</section>" for i in range(8))
+    (tmp_path / "reports.html").write_text(f"<!doctype html>{guard}{nav}{rows}")
+    (tmp_path / "people.html").write_text(f"<!doctype html>{guard}{nav}<h1>People</h1>")
+    (tmp_path / "logout.html").write_text("<!doctype html><script>localStorage.clear()</script>bye")
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}"
+    srv.shutdown()
+
+
+async def test_demo_behind_a_sign_in(client, signin_site):
+    """A demo account: the studio signs in, explores the app's menu (not "Log out", not other sites) and captures it;
+    the password is stored encrypted and never returned."""
+    try:
+        await media_render.render_png("<html><body>ok</body></html>", 32, 32)
+    except Exception as e:  # noqa: BLE001
+        pytest.skip(f"Chromium unavailable: {e}")
+    o = await new_org(client)
+    body = {"demos": [{"product": "HRP HRMS", "keywords": ["payroll"], "login_url": f"{signin_site}/login.html",
+                       "username": "demo@hrpai.in", "password": "Demo-123"}]}
+    r = await client.put("/content/brand/visuals", headers=o["h"], json=body)
+    assert r.status_code == 200, r.text
+    d = r.json()["demos"][0]
+    assert d["has_password"] is True and d["username"] == "demo@hrpai.in" and "Demo-123" not in r.text and "secret" not in d
+    async with SessionLocal() as s:
+        set_tenant(s, o["id"])
+        b = await s.scalar(select(BrandProfile))
+        stored = b.settings["media"]["demos"][0]
+        assert "Demo-123" not in json.dumps(stored) and stored["secret"]
+        demo = (await media_policy.get(s)).demos[0]
+        items = await demos.capture(s, o["id"], demo)
+        await s.commit()
+    urls = {a.meta["url"].rsplit("/", 1)[-1] for a in items}
+    assert urls == {"app.html", "reports.html", "people.html"}  # no log out, no other site
+    assert all(a.meta.get("signed_in") for a in items)
+    assert any(a.kind == "video" and a.meta["url"].endswith("reports.html") for a in items)  # long page: scroll video
+
+    # saving again without a password keeps it; a wrong password is reported clearly
+    body["demos"][0]["password"] = None
+    r = await client.put("/content/brand/visuals", headers=o["h"], json=body)
+    assert r.json()["demos"][0]["has_password"] is True
+    body["demos"][0]["password"] = "wrong"
+    await client.put("/content/brand/visuals", headers=o["h"], json=body)
+    async with SessionLocal() as s:
+        set_tenant(s, o["id"])
+        with pytest.raises(demos.DemoError, match="couldn't sign in"):
+            await demos.capture(s, o["id"], (await media_policy.get(s)).demos[0])
+    # removing the sign-in forgets the password
+    r = await client.put("/content/brand/visuals", headers=o["h"], json={"demos": [{"product": "HRP HRMS", "clear_login": True,
+                                                                                   "urls": [f"{signin_site}/login.html"]}]})
+    assert r.json()["demos"][0]["has_password"] is False

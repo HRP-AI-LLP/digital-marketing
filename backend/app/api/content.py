@@ -194,6 +194,21 @@ class DemoIn(BaseModel):
     keywords: list[str] = Field(default_factory=list, max_length=12)
     urls: list[str] = Field(default_factory=list, max_length=6)
     asset_ids: list[str] = Field(default_factory=list, max_length=40)
+    # demo behind a sign-in (a demo account, never a real one): the password is write-only; leave it empty to keep
+    # the saved one, or set clear_login to remove the sign-in
+    login_url: str | None = Field(None, max_length=500)
+    username: str | None = Field(None, max_length=200)
+    password: str | None = Field(None, max_length=200)
+    clear_login: bool = False
+    explore: bool = True
+
+    @field_validator("login_url")
+    @classmethod
+    def _login_url(cls, v: str | None) -> str | None:
+        v = (v or "").strip()
+        if v and not re.match(r"^https?://[^\s/]+\.[^\s]+", v):
+            raise ValueError(f"{v} isn't a full web address (start with https://).")
+        return v or None
 
     @field_validator("urls")
     @classmethod
@@ -211,6 +226,9 @@ class DemoIn(BaseModel):
 
 class VisualsIn(BaseModel):
     people: Literal["none", "team", "allow"] = "none"
+    # team_stock: images and clips only from your team (new photos made from team photos) and stock (checked for
+    # people); no AI-invented images. mixed: AI images as well.
+    sources: Literal["team_stock", "mixed"] = "mixed"
     news_share: int = Field(20, ge=0, le=60)
     demos: list[DemoIn] = Field(default_factory=list, max_length=12)
 
@@ -218,7 +236,7 @@ class VisualsIn(BaseModel):
 def _visuals_out(b) -> dict:
     from app.services import media_policy
 
-    return media_policy.to_settings(media_policy.from_settings(b.settings))
+    return media_policy.to_public(media_policy.from_settings(b.settings))
 
 
 @router.get("/brand/visuals")
@@ -250,16 +268,33 @@ async def put_visuals(body: VisualsIn, ctx: Context = Depends(require("content.c
         raise _bad("Each product can be listed once.")
     b = await svc.get_brand(ctx.session, ctx.org_id)
     before = media_policy.from_settings(b.settings)
-    pol = media_policy.Policy(people=body.people, news_share=body.news_share, demos=[
-        media_policy.Demo(product=d.product.strip(), keywords=[k.strip() for k in d.keywords if k.strip()],
-                          urls=d.urls, asset_ids=d.asset_ids) for d in body.demos])
+    from app.core.crypto import encrypt_json
+
+    people = "team" if body.sources == "team_stock" and body.people == "allow" else body.people
+    old_by_name = {d.product.lower(): d for d in before.demos}
+    demos = []
+    for d in body.demos:
+        prev = old_by_name.get(d.product.strip().lower())
+        login_url, username, secret = "", "", ""
+        if not d.clear_login and d.login_url:
+            login_url, username = d.login_url, (d.username or "").strip()
+            if d.password:
+                secret = encrypt_json({"password": d.password}) or ""
+            elif prev is not None and prev.secret and prev.login_url:
+                secret = prev.secret  # keep the saved password
+            if not username or not secret:
+                raise _bad(f"{d.product}: enter the demo account's username and password, or remove the sign-in page.")
+        demos.append(media_policy.Demo(product=d.product.strip(), keywords=[k.strip() for k in d.keywords if k.strip()],
+                                       urls=d.urls, asset_ids=d.asset_ids, login_url=login_url, username=username,
+                                       secret=secret, explore=d.explore))
+    pol = media_policy.Policy(people=people, sources=body.sources, news_share=body.news_share, demos=demos)
     b.settings = {**(b.settings or {}), "media": media_policy.to_settings(pol)}
     audit.record(ctx.session, action="brand.visuals", organization_id=ctx.org_id, actor=ctx.user, entity_type="brand",
-                 entity_id=b.id, summary=f"Visuals: people {body.people}, {len(body.demos)} product demos", ip=ctx.ip)
-    # new or changed pages: capture them now
-    old_urls = {d.product.lower(): d.urls for d in before.demos}
+                 entity_id=b.id, summary=f"Visuals: people {people}, sources {body.sources}, {len(body.demos)} product demos", ip=ctx.ip)
+    # new or changed pages or sign-in: capture them now
+    old_key = {d.product.lower(): (d.urls, d.login_url, d.username, d.secret, d.explore) for d in before.demos}
     for d in pol.demos:
-        if d.urls and old_urls.get(d.product.lower()) != d.urls:
+        if (d.urls or d.has_login) and old_key.get(d.product.lower()) != (d.urls, d.login_url, d.username, d.secret, d.explore):
             await enqueue(ctx.session, "demos.capture", ctx.org_id, {"product": d.product},
                           dedupe_key=f"demo:{d.product.lower()}", created_by=ctx.user.id)
     await ctx.session.commit()
@@ -275,8 +310,8 @@ async def capture_demo(body: dict, ctx: Context = Depends(require("content.creat
     demo = next((d for d in pol.demos if d.product.lower() == product.lower()), None)
     if demo is None:
         raise _bad("Save the product in Brand → Visuals first.", 404)
-    if not demo.urls:
-        raise _bad(f"Add a web address for {demo.product} first.")
+    if not demo.urls and not demo.has_login:
+        raise _bad(f"Add a web address or a sign-in page for {demo.product} first.")
     job = await enqueue(ctx.session, "demos.capture", ctx.org_id, {"product": demo.product},
                         dedupe_key=f"demo:{demo.product.lower()}", created_by=ctx.user.id)
     await ctx.session.commit()
