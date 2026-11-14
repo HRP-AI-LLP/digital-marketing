@@ -297,3 +297,44 @@ async def test_some_posts_take_fresh_tech_news(client):
         p3 = await mk_post(o["id"], acc, id=next(u for u in (uuid.uuid4() for _ in range(200))
                                                   if random.Random(f"news:{u}").random() * 100 < 60), topic=None)
         assert await svc.news_topic(s, await s.get(Post, p3.id)) is None
+
+
+async def test_team_photos_are_only_a_reference_for_new_photos(client, monkeypatch):
+    """"Only our team": a scene with people gets a NEW image made from a team photo; the photo itself is never used.
+    Without a service that accepts a reference photo, there are no people at all."""
+    import io
+
+    from app.services import media as media_svc
+
+    o = await new_org(client)
+    await set_visuals(o["id"], people="team")
+    buf = io.BytesIO()
+    Image.new("RGB", (300, 300), (120, 90, 70)).save(buf, "JPEG")
+    async with SessionLocal() as s:
+        set_tenant(s, o["id"])
+        ref = await media_svc.store_bytes(s, o["id"], buf.getvalue(), "jpg", source="upload", kind="image", meta={"team": True})
+        await s.commit()
+        ref_id = ref.id
+
+    # no reference-capable image service: no person, and never the uploaded photo
+    async with SessionLocal() as s:
+        set_tenant(s, o["id"])
+        assert await media_svc._team_visual(s, o["id"], "HR manager welcoming a new employee", 400, 400) is None
+
+    seen = {}
+
+    async def fake_ref(session, scene, ref, mime, w, h, **kw):
+        seen.update(scene=scene, ref_len=len(ref), mime=mime)
+        out = io.BytesIO()
+        Image.new("RGB", (w, h), (10, 120, 200)).save(out, "PNG")
+        return image_gen.GeneratedImage(out.getvalue(), "gemini_images", uuid.uuid4(), "gemini-2.5-flash-image", "p", "")
+
+    monkeypatch.setattr(image_gen, "generate_from_reference", fake_ref)
+    async with SessionLocal() as s:
+        set_tenant(s, o["id"])
+        a = await media_svc._team_visual(s, o["id"], "HR manager welcoming a new employee", 400, 400)
+        assert await media_svc._team_visual(s, o["id"], "server room at night", 400, 400) is None  # no people needed
+        await s.commit()
+    assert a is not None and a.id != ref_id and a.source.startswith("ai:")
+    assert a.meta["ai_person"] is True and a.meta["team_ref"] == str(ref_id)
+    assert seen["ref_len"] == len(buf.getvalue()) and "welcoming" in seen["scene"]

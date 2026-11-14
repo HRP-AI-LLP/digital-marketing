@@ -118,7 +118,7 @@ export function AssetDetail({ asset, onClose, onChanged }: { asset: Asset; onClo
                   <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[rgb(var(--brand))]" checked={team} disabled={tag.isPending}
                     onChange={(e) => tag.mutate({ team: e.target.checked })} />
                   <span><span className="font-medium">Team photo</span>
-                    <span className="block text-xs text-muted">One of your own people, shared with their consent. Used when Brand → Visuals is set to “Only our team photos”.</span></span>
+                    <span className="block text-xs text-muted">One of your own people, shared with their consent. With Brand → Visuals set to “Only our team”, new AI photos of this person are created from it; this photo itself is never posted.</span></span>
                 </label>
               )}
               <label className="block">

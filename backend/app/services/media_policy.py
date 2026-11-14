@@ -3,8 +3,9 @@
 people:
   none  (default) no people at all: AI prompts forbid them, stock searches drop people words and results described with
         people, and every stock photo, stock clip and AI image is checked for faces and people before it is used.
-  team  the same, except your own team photos (media marked "Team photo" in the Media library, uploaded with
-        consent) are used when a scene calls for people.
+  team  the same, except that a scene calling for people gets a NEW AI photo of one of your team members, made
+        from their team photo (media marked "Team photo" in the Media library, uploaded with consent): the face is
+        kept, pose, clothes and setting are new. The uploaded photo itself is never put in a post.
   allow stock and AI may show people (AI never shows a real person's likeness).
 
 demos: products with their demo screenshots/recordings (see services/demos.py), used for posts about that product.

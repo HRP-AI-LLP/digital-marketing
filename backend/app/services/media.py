@@ -565,7 +565,7 @@ async def background(session: AsyncSession, org_id, brief: str, width: int, heig
     if mode in ("gradient", "none", "brand"):
         return None, None, "gradient"
     notes = []
-    team = await _team_visual(session, brief)
+    team = await _team_visual(session, org_id, brief, width, height)
     if team is not None:
         raw = await _asset_bytes(team)
         if raw:
@@ -1079,23 +1079,35 @@ async def _demo_footage(session, post: Post, view: str) -> tuple[list[MediaAsset
     return vids, shots
 
 
-async def _team_visual(session, text: str) -> MediaAsset | None:
-    """Brand → Visuals "Only our team photos": a scene that needs people gets one of the uploaded team photos."""
-    from app.services import media_policy
+async def _team_visual(session, org_id, text: str, w: int, h: int) -> MediaAsset | None:
+    """Brand → Visuals "Only our team": a scene that needs people gets a NEW AI photo of one of your team members,
+    made from their team photo (the face is kept; pose, clothes and setting are new). The uploaded photo itself is
+    never put in a post. Without an image service that accepts a reference photo, the scene shows no people."""
+    from app.services import image_gen, media_policy
 
     pol = await media_policy.get(session)
     if pol.people != "team" or not media_policy.mentions_people(text):
         return None
-    a = await media_policy.team_photo(session, seed=text)
-    return a if a is not None and _abs(a.path) else None
+    ref = await media_policy.team_photo(session, seed=text)
+    raw = await _asset_bytes(ref) if ref is not None and _abs(ref.path) else None
+    if not raw:
+        return None
+    try:
+        img = await image_gen.generate_from_reference(session, plain(text)[:600], raw, ref.mime or "image/jpeg", w, h)
+    except Exception as e:  # noqa: BLE001 - no reference-capable service: fall back to visuals without people
+        log.info("team photo scene not made: %s", e)
+        return None
+    return await store_bytes(session, org_id, img.data, "png", source=f"ai:{img.provider}", kind="image",
+                             prompt=img.prompt, alt_text=plain(text)[:300] or None, area="ai", width=w, height=h,
+                             meta={"model": img.model, "ai_person": True, "team_ref": str(ref.id)})
 
 
 async def _scene_visual(session, org_id, query: str, w: int, h: int, mode: str, tmp: Path, i: int,
-                        min_duration: float) -> tuple[Path | None, str, str]:
+                        min_duration: float, allow_team: bool = True) -> tuple[Path | None, str, str]:
     """(file, 'image'|'video', source) for a scene."""
     from app.services import image_gen, stock
 
-    team = await _team_visual(session, query)
+    team = await _team_visual(session, org_id, query, w, h) if allow_team else None
     if team is not None:
         return _abs(team.path), "image", "team"
     orient = stock.orientation_for(w, h)
@@ -1238,7 +1250,8 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
                     log.info("3D scene failed: %s", e)
                     vis = None
             if vis is None and mode not in ("gradient", "3d"):
-                vis, vkind, src = await _scene_visual(session, post.organization_id, query, w, h, mode, tmp, i, d)
+                vis, vkind, src = await _scene_visual(session, post.organization_id, query, w, h, mode, tmp, i, d,
+                                                      allow_team=sources.count("team") < 2)  # at most 2 per video
             if vis is None:
                 from app.services.media_templates.kit import icon_for
 

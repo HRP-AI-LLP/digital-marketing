@@ -17,8 +17,8 @@ type Row = { product: string; keywords: string; urls: string; asset_ids: string[
 const PEOPLE: { id: Visuals["people"]; title: string; body: string; icon: typeof UserX }[] = [
   { id: "none", title: "No people", icon: UserX,
     body: "Images and videos never show people or faces. AI images are told not to draw them, stock searches leave them out, and every photo and clip is checked for faces before it's used." },
-  { id: "team", title: "Only our team photos", icon: Users,
-    body: "Still no stock or AI people. When a scene needs people, one of your own team photos is used (mark them “Team photo” in the Media library; use them only with each person's consent)." },
+  { id: "team", title: "Only our team", icon: Users,
+    body: "No stock or invented people. When a scene needs people, a new AI photo of one of your team members is created from their team photo: same face, new pose, clothes and setting. Their uploaded photo is never posted itself." },
   { id: "allow", title: "Allow people", icon: Users,
     body: "Stock photos and clips may show people. AI images never copy a real person's likeness." },
 ];
@@ -82,6 +82,11 @@ export default function BrandVisuals({ canEdit }: { canEdit: boolean }) {
           <p className="mt-3 text-sm">
             {q.data?.team_photos ? `${q.data.team_photos} team photo${q.data.team_photos === 1 ? "" : "s"} marked.` : "No team photos marked yet."}{" "}
             Upload them in the <Link to="/media" className="text-brand underline">Media library</Link>, open each photo and tick “Team photo”.
+            <span className="mt-1 block text-muted">
+              Needs an image service that works from a reference photo (Google Gemini image or OpenAI GPT Image in Integrations);
+              without one, those scenes show no people. Get each person's written consent to create images of them, and
+              label posts with these photos as AI-generated where the platform asks (YouTube, Instagram and Facebook do).
+            </span>
           </p>
         )}
       </Card>

@@ -493,6 +493,93 @@ async def _horde(cfg, model, prompt, negative, width, height, seed) -> bytes:
     raise ImageGenError(f"{cfg.name}: no image in the response")
 
 
+# ----------------------------------------------------------------------------- from a reference photo
+REF_PROMPT = (
+    "Create a brand-new, realistic photograph of the same person as in the reference photo: keep their face and "
+    "identity, but use a different pose, expression, clothing and background. Do not copy or crop the reference photo. "
+    "Scene: {scene}. Professional, natural light, candid office or work setting, no text, no logos, no watermark.")
+
+
+def _ref_capable(cfg: ProviderConfig, model: str) -> bool:
+    if _style(cfg) == "gemini_image":
+        return True
+    return cfg.provider == "openai_images" and model.startswith("gpt-image")
+
+
+async def _gemini_ref(cfg, model, prompt, ref: bytes, ref_mime: str, width, height) -> bytes:
+    key = _secrets(cfg).get("api_key")
+    ratio = _ratio_label(width, height, ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"])
+    body = {
+        "contents": [{"parts": [{"inline_data": {"mime_type": ref_mime, "data": base64.b64encode(ref).decode()}},
+                                {"text": prompt}]}],
+        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"], "imageConfig": {"aspectRatio": ratio}},
+    }
+    async with http_client(180) as http:
+        r = await http.post(f"{_base(cfg)}/models/{model}:generateContent", json=body,
+                            headers={"x-goog-api-key": key or "", "Content-Type": "application/json"})
+        _raise_for(r, cfg.name)
+        for cand in r.json().get("candidates") or []:
+            for part in (cand.get("content") or {}).get("parts") or []:
+                inline = part.get("inlineData") or part.get("inline_data")
+                if inline and inline.get("data"):
+                    return base64.b64decode(inline["data"])
+    raise ImageGenError(f"{cfg.name}: the model returned no image (it may have refused the prompt)")
+
+
+async def _openai_ref(cfg, model, prompt, ref: bytes, ref_mime: str, width, height) -> bytes:
+    key = _secrets(cfg).get("api_key")
+    size = "%dx%d" % _closest(width, height, [(1024, 1024), (1536, 1024), (1024, 1536)])
+    ext = "png" if "png" in ref_mime else "jpg"
+    data = {"model": model, "prompt": prompt, "size": size, "n": "1", "input_fidelity": "high"}
+    async with http_client(240) as http:
+        r = await http.post(f"{_base(cfg)}/images/edits", data=data, files={"image[]": (f"ref.{ext}", ref, ref_mime)},
+                            headers={"Authorization": f"Bearer {key}"})
+        _raise_for(r, cfg.name)
+        item = (r.json().get("data") or [{}])[0]
+        if item.get("b64_json"):
+            return base64.b64decode(item["b64_json"])
+        if item.get("url"):
+            return await _download(http, item["url"])
+    raise ImageGenError(f"{cfg.name}: no image in the response")
+
+
+async def generate_from_reference(session: AsyncSession, scene: str, ref: bytes, ref_mime: str, width: int, height: int,
+                                  *, task: str = "image") -> GeneratedImage:
+    """A NEW photo of the person in `ref` (a team photo) in the given scene: the reference is only used for the face
+    and is never shown itself. Needs an image service that accepts a reference photo (Google Gemini image models, or
+    OpenAI GPT Image). Raises ImageGenError when none is set up or all fail."""
+    from app.services.llm import health, keys
+    from app.services.llm.router import over_budget
+
+    chain = [(c, m) for c, m in await image_chain(session) if _ref_capable(c, m)]
+    if not chain:
+        raise ImageGenError("No image service that can work from a reference photo is set up (Google Gemini image "
+                            "or OpenAI GPT Image).")
+    chain, _ = await health.order_chain(session, chain)
+    prompt = REF_PROMPT.format(scene=(scene or "at work at a modern office")[:600])
+    errors: list[str] = []
+    for cfg, model in chain:
+        if await over_budget(session, cfg):
+            errors.append(f"{cfg.name}: monthly budget reached")
+            continue
+        fn = _gemini_ref if _style(cfg) == "gemini_image" else _openai_ref
+        t0 = time.perf_counter()
+        try:
+            raw = await keys.with_keys(cfg, lambda: fn(cfg, model, prompt, ref, ref_mime, width, height))
+            data = await asyncio.to_thread(cover_fit, raw, width, height)
+        except Exception as e:  # noqa: BLE001
+            _log_usage(session, cfg, model, task, ok=False, error=str(e)[:1000], latency=int((time.perf_counter() - t0) * 1000))
+            v = await health.record_failure(cfg, model, e)
+            errors.append(f"{cfg.name}: {(v.reason + '. ') if v.reason else ''}{str(e)[:200]}")
+            continue
+        _log_usage(session, cfg, model, task, ok=True, error=None, latency=int((time.perf_counter() - t0) * 1000))
+        await session.flush()
+        await health.record_success(cfg, model)
+        return GeneratedImage(data, cfg.provider, cfg.id, model, prompt, "")
+    await session.flush()
+    raise ImageGenError("Couldn't create a photo from the team photo. " + " | ".join(errors))
+
+
 STYLES = {
     "openai_image": _openai_image,
     "gemini_image": _gemini_image,
