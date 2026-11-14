@@ -604,8 +604,17 @@ def build_system_prompt(brand: BrandProfile, platform: str, post_type: str, cfg:
     from app.services import media_policy
 
     pol = media_policy.from_settings(brand.settings)
-    brief_rule = ("no text inside AI images; no people, faces or hands: show the product, technology, devices, "
-                  "objects, places or abstract shapes") if pol.no_people else "no text inside AI images"
+    if pol.people == "none":
+        brief_rule = ("no text inside AI images; no people, faces or hands: show the product, technology, devices, "
+                      "objects, places or abstract shapes")
+        query_rule = "; things, screens or places, never people"
+    elif pol.people == "team":  # people only as our own team (made from their team photos)
+        brief_rule = ("no text inside AI images; people only as one of our own team members (say 'our team member "
+                      "...'), otherwise the product, technology or places")
+        query_rule = ("; where a person fits, describe one of our team members at work (e.g. 'our team member "
+                      "presenting dashboard'), otherwise things, screens or places")
+    else:
+        brief_rule, query_rule = "no text inside AI images", ""
     shape = ['"text": "<post body without hashtags>"', '"hashtags": ["NoHashSign", ...]',
              '"first_comment": "<optional first comment or null>"',
              f'"image_brief": "<one paragraph describing the visual; {brief_rule}>"',
@@ -621,7 +630,7 @@ def build_system_prompt(brand: BrandProfile, platform: str, post_type: str, cfg:
     if post_type in SCRIPT_TYPES:
         shape.append('"video_script": [{"caption": "<on-screen text>", "voiceover": "<spoken line: natural, conversational, '
                      'like a person talking to a friend; short sentences, contractions, no lists or symbols>", '
-                     '"query": "<2-4 words for the footage of this scene' + ('; things, screens or places, never people' if pol.no_people else '')
+                     '"query": "<2-4 words for the footage of this scene' + query_rule
                      + '>"}]  (4 to 8 scenes, under 45 seconds total)')
     parts.append("Reply with ONLY a JSON object: {" + ", ".join(shape) + "}")
     return "\n\n".join(parts)
@@ -932,6 +941,11 @@ async def build_media(session: AsyncSession, post: Post, brand: BrandProfile) ->
         ids = [str(a.id) for a in (assets or []) if getattr(a, "id", None)]
         if ids:
             post.media_ids = ids
+            for a in assets or []:  # e.g. team scenes made without people (no reference-photo image service)
+                note = (getattr(a, "meta", None) or {}).get("team_note")
+                if note:
+                    add_warning(post, note)
+                    break
             return
         err = "no media was produced"
     except ImportError:

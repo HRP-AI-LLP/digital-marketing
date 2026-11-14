@@ -1096,6 +1096,8 @@ async def _team_visual(session, org_id, text: str, w: int, h: int) -> MediaAsset
         img = await image_gen.generate_from_reference(session, plain(text)[:600], raw, ref.mime or "image/jpeg", w, h)
     except Exception as e:  # noqa: BLE001 - no reference-capable service: fall back to visuals without people
         log.info("team photo scene not made: %s", e)
+        session.info["team_note"] = (f"Scenes with your team were made without people: {str(e)[:300]} "
+                                     "Add credits to Google Gemini image (or add OpenAI GPT Image) in Integrations.")
         return None
     return await store_bytes(session, org_id, img.data, "png", source=f"ai:{img.provider}", kind="image",
                              prompt=img.prompt, alt_text=plain(text)[:300] or None, area="ai", width=w, height=h,
@@ -1309,6 +1311,10 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
              "subtitles": any(sc["words"] for sc in ov_scenes)}
         if voice_note:
             m["voice_note"] = voice_note
+        if session.info.pop("team_note", None) and "team" not in sources:
+            m["team_note"] = ("Scenes with your team were made without people: no image service that works from a "
+                              "reference photo is available (Google Gemini image is out of credits, or add OpenAI GPT "
+                              "Image in Integrations).")
         return await store_file(session, post.organization_id, out, "mp4", source="template:video", kind="video",
                                 mime="video/mp4", alt_text=_alt(post, meta, " ".join(plain(c) for c in captions)[:500]),
                                 width=info["width"], height=info["height"], duration=info["duration"], meta=m)

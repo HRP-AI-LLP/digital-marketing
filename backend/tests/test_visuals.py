@@ -337,3 +337,19 @@ async def test_team_photos_are_only_a_reference_for_new_photos(client, monkeypat
     assert a is not None and a.id != ref_id and a.source.startswith("ai:")
     assert a.meta["ai_person"] is True and a.meta["team_ref"] == str(ref_id)
     assert seen["ref_len"] == len(buf.getvalue()) and "welcoming" in seen["scene"]
+
+
+async def test_team_mode_lets_the_writer_ask_for_team_members():
+    """In "Only our team" mode scene descriptions may ask for a team member (that's what triggers a team photo),
+    and the people check recognises it; in "No people" mode they may not."""
+    from app.services.content import GenSettings, build_system_prompt
+
+    b = BrandProfile(settings={"media": {"people": "team"}}, voice=None, audience=None, do_list=[], dont_list=[],
+                     hashtags=[], ctas=[], banned_words=[], language="en", emoji_policy="light")
+    cfg = GenSettings(mode="manual")
+    team = build_system_prompt(b, "youtube", "video", cfg, "", [], [])
+    assert "our team member" in team and "never people" not in team
+    b.settings = {"media": {"people": "none"}}
+    none = build_system_prompt(b, "youtube", "video", cfg, "", [], [])
+    assert "never people" in none and "our team member" not in none
+    assert media_policy.mentions_people("our team member presenting dashboard")

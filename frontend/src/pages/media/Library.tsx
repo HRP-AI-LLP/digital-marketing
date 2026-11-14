@@ -107,6 +107,7 @@ export function AssetDetail({ asset, onClose, onChanged }: { asset: Asset; onClo
           {asset.prompt && <p className="rounded-lg bg-ink/5 p-2.5 text-xs text-muted"><span className="font-medium text-ink">Prompt: </span>{asset.prompt}</p>}
           {m.voice_note && <Alert tone="warn">{m.voice_note}</Alert>}
           {m.background_note && <Alert tone="warn">{m.background_note}</Alert>}
+          {m.team_note && <Alert tone="warn">{m.team_note}</Alert>}
           <Field label="Alt text" hint="Describes the image for screen readers. Platforms that support it get this text.">
             <Textarea rows={3} value={alt} onChange={(e) => setAlt(e.target.value)} disabled={!can("media.manage")} />
           </Field>

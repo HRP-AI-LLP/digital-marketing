@@ -31,7 +31,7 @@ DEFAULT_NEWS_SHARE = 20
 
 PEOPLE_WORDS = (
     r"people|person|persons|human|humans|man|men|woman|women|girl|girls|boy|boys|guy|guys|lady|ladies|child|children|"
-    r"kid|kids|baby|face|faces|portrait|selfie|smil\w*|team ?mates?|colleagues?|coworkers?|co-workers?|employees?|staff|"
+    r"kid|kids|baby|face|faces|portrait|selfie|smil\w*|team ?mates?|team members?|staff members?|new hires?|colleagues?|coworkers?|co-workers?|employees?|staff|"
     r"workers?|businessm[ae]n|businesswom[ae]n|entrepreneurs?|executives?|manager|managers|ceo|founders?|students?|"
     r"teachers?|doctors?|nurses?|engineers?|developers?|programmers?|designers?|customers?|clients?|audience|crowd|"
     r"family|couple|friends?|hands?|fingers?|handshake|meeting|interview|presenter|speaker|model|models|actor|actress|"
