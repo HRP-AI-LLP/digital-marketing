@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, ExternalLink, Link2Off } from "lucide-react";
 import { useAuth } from "../../auth/AuthContext";
 import { Card } from "../../components/ui";
+import { ReconnectButton } from "../../components/ReconnectButton";
 import { PlatformMark, ago, type Status } from "./shared";
 
 const SETUP: { platform: string; label: string; how: string }[] = [
@@ -48,6 +49,9 @@ export default function Channels({ status }: { status: Status }) {
                     ) : a.ok === false && a.message ? (
                       <div className="mt-1.5 rounded-md bg-amber-50 px-2.5 py-2 text-xs text-amber-900">{a.message}</div>
                     ) : null}
+                    {(a.reconnect || !!a.missing_permission) && can("integration.manage") && (
+                      <div className="mt-1.5"><ReconnectButton accountId={a.id} name={a.name} returnTo="/inbox" compact /></div>
+                    )}
                   </div>
                 </li>
               );

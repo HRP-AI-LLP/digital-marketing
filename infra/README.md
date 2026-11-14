@@ -12,16 +12,29 @@ How it fits together (same pattern as HRMS):
 - **Cloudflare Worker** `dm-frontend-uat` / `dm-frontend-prod` serves the app. It forwards `/api`, `/r`, `/l`, `/f` to
   the API and adds a shared secret, so the API refuses anything that didn't come through the Worker.
 - **Google Cloud Run** `dm-api-uat` / `dm-api-prod` (Singapore) runs the API and the job runner. It costs nothing
-  while idle. **Cloud Scheduler** calls it every 20 minutes for the routine work (inbox sync, metrics, research).
-  **Cloud Tasks** wakes it on the minute for scheduled posts, and immediately when you queue something in the app.
-- **Neon**, organization **HRP AI** (org-mute-haze-38808562), projects `dm-uat` (odd-recipe-92981685) and `dm-prod`
-  (bitter-silence-25555054). Both run PostgreSQL 16 in Singapore with database `digital_marketing` and owner role
-  `dm_owner`. Compute is 0.25 CU and sleeps after 5 idle minutes. On the free plan each project has 100 compute-hours
-  and 0.5 GB a month; waking only for work keeps it well inside that. Today's laptop database is about 150 MB.
+  while idle. **Cloud Scheduler** calls it for the routine work (inbox sync, metrics, research): UAT hourly from 07:07
+  to 23:07 IST, production at 09:07, 13:07 and 18:07 until it has organizations (GitHub variables `UAT_TICK_CRON` /
+  `PROD_TICK_CRON` change this). **Cloud Tasks** wakes it on the minute for scheduled posts (also at night), and
+  immediately when you queue something in the app.
+- **Neon**, organization **HRP AI** (org-mute-haze-38808562), Launch plan, projects `dm-uat` (odd-recipe-92981685)
+  and `dm-prod` (bitter-silence-25555054). Both run PostgreSQL 16 in Singapore with database `digital_marketing` and
+  owner role `dm_owner`.
 - **Cloudflare R2** `dm-uat-media` / `dm-prod-media` holds images, videos and exports.
 
-Expected cost: about $0–3 a month in total. Cloud Run, Scheduler, Tasks and R2 (10 GB) mostly stay inside their free
-tiers, and Neon stays on its free plan. The optional budget alert in step 4 emails you at $7.50, $13.50 and $15.
+### Keeping the bill under $3 a month
+Neon bills compute for every hour a database is awake ($0.106 per CU-hour), so the studio is built to let it sleep:
+- Each database is fixed at **0.25 CU** (minimum and maximum) and sleeps after 2–5 idle minutes. Upgrading to Launch
+  raises the maximum to 8 CU: set it back in Neon → project → Branches → main → compute → Edit.
+- Restore window (history) is 1 hour; there are no backup runs in the cloud.
+- The routine tick runs hourly by day and not at night; scheduled posts book their own exact wake-up.
+- The app stops all background refreshing after 3 idle minutes or when its tab is hidden, and refreshes once when you
+  come back.
+- Large columns (embeddings, raw metric payloads) are never loaded with rows.
+
+Rough monthly cost at today's use: Neon about $1–2 (UAT ticks about $0.6–1.2, production ticks about $0.1–0.2, your
+own working time about $0.8 per hour a day, storage about $0.1), Google Cloud about $0–0.5 (Secret Manager versions
+beyond the free 6, and images beyond 0.5 GB; old images are deleted automatically), R2 and Cloudflare free. Set budget
+alerts: Google Cloud → Billing → Budgets (for example $1), and in Neon → Billing.
 
 ---
 
@@ -79,7 +92,7 @@ keys. Everything else is generated, including the first-sign-in password for the
 
 ### 7. First deploy
 GitHub → Actions → **deploy** → Run workflow → `uat` (or push any commit to `main`). About 10 minutes. It builds the
-API image, updates the database, deploys Cloud Run, sets up the 20-minute scheduler, deploys the Worker on
+API image, updates the database, deploys Cloud Run, sets up the scheduler, deploys the Worker on
 uat-dm.hrpai.in, and checks the public address.
 
 ### 8. Check UAT

@@ -787,3 +787,42 @@ async def test_google_locations_and_youtube_short(client, hrp, mock):
     assert meta["snippet"]["title"] == "Automate payroll in 30 seconds #Shorts"
     assert meta["status"]["privacyStatus"] == "unlisted" and init.headers["X-Upload-Content-Length"] == "11"
     assert mock.find("PUT", r"upload/session/1$")[0].content == b"short-video"
+
+
+async def test_reconnect_keeps_what_the_connection_does(client, hrp):
+    """Reconnect on an expired account: sign-in platforms go straight to the sign-in page with the options that keep
+    Instagram / LinkedIn pages; password and token platforms ask for the form again; manual accounts can't."""
+    org = org_of(hrp)
+    tag = uuid.uuid4().hex[:8]
+    ig = await make_account(org, "instagram", f"ig-{tag}", status="expired")
+    fb = await make_account(org, "facebook_page", f"fb-{tag}", status="connected")
+    li = await make_account(org, "linkedin_org", f"li-{tag}", status="error")
+    bs = await make_account(org, "bluesky", f"did:plc:{tag}", status="expired")
+    man = await make_account(org, "manual", f"manual:{tag}", status="manual")
+    try:
+        r = await client.post(f"/social/accounts/{ig.id}/reconnect", headers=auth(hrp), json={"return_to": "/inbox"})
+        assert r.status_code == 200, r.text
+        url = r.json()["authorize_url"]
+        assert url.startswith("https://www.facebook.com/")
+        state = parse_qs(urlsplit(url).query)["state"][0]
+        async with platform_session() as s:
+            data = (await s.get(OAuthState, state)).data
+        assert data["options"]["include_instagram"] is True and data["return_to"] == "/inbox"
+        assert "instagram_content_publish" in parse_qs(urlsplit(url).query)["scope"][0]
+
+        r = await client.post(f"/social/accounts/{li.id}/reconnect", headers=auth(hrp))
+        assert r.status_code == 200, r.text
+        state = parse_qs(urlsplit(r.json()["authorize_url"]).query)["state"][0]
+        async with platform_session() as s:
+            assert (await s.get(OAuthState, state)).data["options"]["company_pages"] is True
+
+        r = await client.post(f"/social/accounts/{bs.id}/reconnect", headers=auth(hrp))
+        assert r.status_code == 200 and r.json() == {"form": "bluesky"}
+
+        r = await client.post(f"/social/accounts/{man.id}/reconnect", headers=auth(hrp))
+        assert r.status_code == 400
+    finally:
+        async with platform_session() as s:
+            for a in (ig, fb, li, bs, man):
+                (await s.get(SocialAccount, a.id)).status = "removed"
+            await s.commit()

@@ -97,7 +97,7 @@ export default function Approvals() {
   const qc = useQueryClient();
   const [params] = useSearchParams();
   const focus = params.get("post");
-  const q = useQuery({ queryKey: ["approvals"], queryFn: () => api<Item[]>("/content/approvals"), refetchInterval: 30_000 });
+  const q = useQuery({ queryKey: ["approvals"], queryFn: () => api<Item[]>("/content/approvals"), refetchInterval: 120_000 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkReject, setBulkReject] = useState(false);
   const bulk = useMutation({

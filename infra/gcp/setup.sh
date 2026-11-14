@@ -19,10 +19,13 @@ gcloud services enable run.googleapis.com artifactregistry.googleapis.com secret
 
 gcloud artifacts repositories create dm --repository-format=docker --location="$REGION" \
   --description="Digital Marketing Studio images" 2>/dev/null || true
-gcloud artifacts repositories set-cleanup-policies dm --location="$REGION" --policy=- <<'JSON' >/dev/null || true
-[{"name":"keep-recent","action":{"type":"Keep"},"mostRecentVersions":{"keepCount":6}},
- {"name":"delete-old","action":{"type":"Delete"},"condition":{"olderThan":"1209600s"}}]
+# Old images cost storage: keep the 3 newest (enough to roll back), delete the rest after 2 days.
+POLICY=$(mktemp)
+cat > "$POLICY" <<'JSON'
+[{"name":"keep-recent","action":{"type":"Keep"},"mostRecentVersions":{"keepCount":3}},
+ {"name":"delete-old","action":{"type":"Delete"},"condition":{"olderThan":"172800s"}}]
 JSON
+gcloud artifacts repositories set-cleanup-policies dm --location="$REGION" --policy="$POLICY" --no-dry-run >/dev/null || true
 
 for ENV in uat prod; do
   gcloud iam service-accounts create "dm-api-$ENV" --display-name="Digital Marketing API ($ENV)" 2>/dev/null || true

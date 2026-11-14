@@ -168,6 +168,11 @@ async def test_wake_books_exact_time_tasks(client, cloud, monkeypatch):
     try:
         async with platform_session() as s:
             await s.execute(update(Job).where(Job.status == "queued").values(status="cancelled"))
+            # posts left scheduled by other tests would be found by the 24-hour look-ahead: move them out of the way
+            from app.models import Post
+            await s.execute(update(Post).where(Post.status.in_(["scheduled", "approved"]),
+                                               Post.scheduled_at > datetime.now(UTC) - timedelta(days=1))
+                            .values(scheduled_at=Post.scheduled_at + timedelta(days=3)))
             j = await jobs.enqueue(s, "test.quick", None, {}, run_after=datetime.now(UTC) + timedelta(minutes=7))
             await s.commit()
         at = await wake.plan()
@@ -178,14 +183,29 @@ async def test_wake_books_exact_time_tasks(client, cloud, monkeypatch):
         assert datetime.fromisoformat(calls[0]["scheduleTime"].replace("Z", "+00:00")) >= at - timedelta(seconds=1)
         await wake.plan()
         assert len(calls) == 1  # same moment: booked once
-        # nothing due before the next regular tick: no task
+        # due later today (also at night, when no regular tick runs): booked for its exact time
         async with platform_session() as s:
-            await s.execute(update(Job).where(Job.id == j.id).values(run_after=datetime.now(UTC) + timedelta(hours=3)))
+            await s.execute(update(Job).where(Job.id == j.id).values(run_after=datetime.now(UTC) + timedelta(hours=9)))
             await s.commit()
         monkeypatch.setattr(wake, "_booked", {})
-        assert await wake.plan() is None and len(calls) == 1
+        at = await wake.plan()
+        assert at is not None and timedelta(hours=8) < at - datetime.now(UTC) < timedelta(hours=10) and len(calls) == 2
+        # nothing in the next 24 hours: no task
+        async with platform_session() as s:
+            await s.execute(update(Job).where(Job.id == j.id).values(run_after=datetime.now(UTC) + timedelta(hours=30)))
+            await s.commit()
+        monkeypatch.setattr(wake, "_booked", {})
+        assert await wake.plan() is None and len(calls) == 2
+        # a tick that could run nothing although something is already due doesn't re-wake itself a minute later
+        # (that would keep the database awake all day); the next regular tick picks it up
+        async with platform_session() as s:
+            await s.execute(update(Job).where(Job.id == j.id).values(run_after=datetime.now(UTC) - timedelta(minutes=1)))
+            await s.commit()
+        assert await wake.plan(timedelta(seconds=60)) is None and len(calls) == 2
+        assert await wake.plan() is not None and len(calls) == 3  # after work that did run: carry on right away
         # a request that queues work books a wake-up right away (through the API middleware)
-        assert await wake.book() is True and len(calls) == 2
+        monkeypatch.setattr(wake, "_booked", {})
+        assert await wake.book(datetime.now(UTC) + timedelta(minutes=3)) is True and len(calls) == 4
     finally:
         cloud.tasks_queue = old_q
         async with platform_session() as s:

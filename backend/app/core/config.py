@@ -101,7 +101,11 @@ class Settings(BaseSettings):
     origin_verify_secret: str = ""  # shared with the Worker; requests without it are refused in the cloud
     cron_secret: str = ""  # header X-Cron-Secret on POST /api/v1/internal/tick
     tick_seconds: int = 50  # how long one tick keeps claiming new jobs
-    tick_every_minutes: int = 20  # the regular Cloud Scheduler tick (TICK_SCHEDULE); wake-ups fill the gaps
+    # The regular Cloud Scheduler tick (deploy.yml: hourly in the day, none at night) runs the routine work. Scheduled
+    # posts and work queued in the app don't wait for it: they book their own exact-time wake-up (services/wake.py).
+    # Every tick wakes the database, and Neon bills every hour it is awake, so this is kept rare on purpose.
+    tick_every_minutes: int = 60
+    tick_max_gap_minutes: int = 0  # longest silence between ticks (the night); 0 = tick_every_minutes
     tasks_queue: str = ""  # Cloud Tasks queue for exact-time wake-ups (cloud); empty = regular ticks only
     tick_url: str = ""  # optional: this service's URL for wake-ups (default: worked out from Cloud Run)
     gcp_project: str = ""

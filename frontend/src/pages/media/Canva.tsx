@@ -90,7 +90,7 @@ export function CanvaPicker({ returnTo, actionLabel = "Import to library", onImp
         {st.status === "expired" && <Alert tone="warn">{st.status_message || "The Canva connection expired. Connect again."}</Alert>}
         <p className="text-sm text-muted">Sign in to Canva once to browse your designs here and bring them into the media library.</p>
         {connect.error && <Alert>{(connect.error as Error).message}</Alert>}
-        <Button onClick={() => connect.mutate()} disabled={connect.isPending}><LogIn size={16} />{connect.isPending ? "Opening Canva…" : "Connect Canva"}</Button>
+        <Button onClick={() => connect.mutate()} disabled={connect.isPending}><LogIn size={16} />{connect.isPending ? "Opening Canva…" : st.status === "expired" ? "Reconnect Canva" : "Connect Canva"}</Button>
       </div>
     );
   }

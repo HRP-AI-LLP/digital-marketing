@@ -97,7 +97,7 @@ export default function Inbox() {
     queryKey: ["inbox-items", qs.toString()],
     queryFn: () => api<{ items: InboxItem[]; total: number }>(`/inbox/items?${qs}`),
     placeholderData: keepPreviousData,
-    refetchInterval: 60_000,
+    refetchInterval: 120_000,
   });
   const items = list.data?.items ?? [];
   const total = list.data?.total ?? 0;

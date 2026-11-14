@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, CheckCircle2, ExternalLink, MapPin, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react";
+import { AlertTriangle, BookOpen, CheckCircle2, ExternalLink, MapPin, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import {
   Alert, Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Spinner, StatusBadge, Toggle, formatDate,
 } from "../components/ui";
 import { Markdown } from "./social/Markdown";
+import { needsReconnect, ReconnectButton } from "../components/ReconnectButton";
 
 export type SocialAccount = {
   id: string; platform: string; platform_label: string; name: string; handle: string | null; avatar_url: string | null;
@@ -32,6 +33,7 @@ const TIKTOK_PRIVACY: Record<string, string> = {
   PUBLIC_TO_EVERYONE: "Everyone", MUTUAL_FOLLOW_FRIENDS: "Friends", FOLLOWER_OF_CREATOR: "Followers", SELF_ONLY: "Only me",
 };
 const SOON_MS = 7 * 24 * 3600 * 1000;
+const FORM_PLATFORMS: Record<string, string> = { bluesky: "bluesky", mastodon: "mastodon", telegram: "telegram", discord: "discord" };
 
 function useAccounts() {
   return useQuery({ queryKey: KEY, queryFn: () => api<SocialAccount[]>("/social/accounts?all=true") });
@@ -232,10 +234,12 @@ function RemoveModal({ acc, onClose }: { acc: SocialAccount; onClose: () => void
   );
 }
 
-function AccountRow({ acc, canManage }: { acc: SocialAccount; canManage: boolean }) {
+function AccountRow({ acc, canManage, autoForm }: { acc: SocialAccount; canManage: boolean; autoForm?: boolean }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [removing, setRemoving] = useState(false);
+  // Bluesky / Mastodon / Telegram / Discord reconnect by entering their password, token or webhook again
+  const [form, setForm] = useState<string | null>(autoForm ? (FORM_PLATFORMS[acc.platform] ?? null) : null);
   const check = useMutation({
     mutationFn: () => api<SocialAccount>(`/social/accounts/${acc.id}/refresh`, { method: "POST" }),
     onSettled: () => qc.invalidateQueries({ queryKey: KEY }),
@@ -243,8 +247,9 @@ function AccountRow({ acc, canManage }: { acc: SocialAccount; canManage: boolean
   const expires = acc.token_expires_at ? new Date(acc.token_expires_at).getTime() : null;
   const soon = expires !== null && expires - Date.now() < SOON_MS;
   const hasSettings = acc.platform !== "x" && acc.platform !== "manual" && acc.platform !== "whatsapp";
+  const reconnect = acc.status !== "manual" && needsReconnect(acc.status, acc.token_expires_at, SOON_MS);
   return (
-    <li className="flex flex-wrap items-start gap-3 py-4">
+    <li id={`account-${acc.id}`} className="flex flex-wrap items-start gap-3 py-4">
       <Avatar acc={acc} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
@@ -274,7 +279,9 @@ function AccountRow({ acc, canManage }: { acc: SocialAccount; canManage: boolean
         {check.error && <p className="mt-1 text-sm text-danger">{(check.error as Error).message}</p>}
       </div>
       {canManage && (
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-start gap-1">
+          {reconnect && <ReconnectButton accountId={acc.id} name={acc.name} onForm={setForm}
+            variant={acc.status === "connected" ? "secondary" : "primary"} />}
           {acc.status !== "manual" && (
             <Button variant="secondary" onClick={() => check.mutate()} disabled={check.isPending} title="Refresh access and check the account works">
               <RefreshCw size={14} className={check.isPending ? "animate-spin" : ""} /> {check.isPending ? "Checking…" : "Check now"}
@@ -286,6 +293,10 @@ function AccountRow({ acc, canManage }: { acc: SocialAccount; canManage: boolean
       )}
       {editing && <SettingsModal acc={acc} onClose={() => setEditing(false)} />}
       {removing && <RemoveModal acc={acc} onClose={() => setRemoving(false)} />}
+      {form === "bluesky" && <BlueskyModal onClose={() => setForm(null)} />}
+      {form === "mastodon" && <MastodonModal onClose={() => setForm(null)} />}
+      {form === "telegram" && <TelegramModal onClose={() => setForm(null)} />}
+      {form === "discord" && <DiscordModal onClose={() => setForm(null)} />}
     </li>
   );
 }
@@ -608,28 +619,45 @@ const ADDABLE: Record<string, { option: string; label: string }> = {
   linkedin_org: { option: "company_pages", label: "Add a LinkedIn company page" },
 };
 
-function ConnectedCard({ c, connected, onAddAnother, onAdd }: {
+function ConnectedCard({ c, connected, onAddAnother, onAdd, onReconnect }: {
   c: Connector; connected: SocialAccount[]; onAddAnother?: () => void; onAdd?: (option: string) => void;
+  onReconnect?: (a: SocialAccount, form: string) => void;
 }) {
   const have = new Set(connected.map((a) => a.platform));
   const addable = c.platforms.filter((p) => !have.has(p) && ADDABLE[p] && c.options.some((o) => o.name === ADDABLE[p].option));
+  const broken = connected.filter((a) => a.status === "expired" || a.status === "error");
+  const ok = broken.length === 0;
   return (
-    <Card className="flex flex-col border-emerald-200 bg-emerald-50/40">
+    <Card className={`flex flex-col ${ok ? "border-emerald-200 bg-emerald-50/40" : "border-danger/30 bg-danger-tint/40"}`}>
       <div className="flex items-start justify-between gap-2">
         <h3 className="font-semibold">{c.label}</h3>
-        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">
-          <CheckCircle2 size={13} /> Connected
-        </span>
+        {ok ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">
+            <CheckCircle2 size={13} /> Connected
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-danger">
+            <AlertTriangle size={13} /> Needs reconnecting
+          </span>
+        )}
       </div>
-      <p className="mt-2 text-sm text-emerald-900">Successfully connected and verified.</p>
+      <p className={`mt-2 text-sm ${ok ? "text-emerald-900" : "text-danger"}`}>
+        {ok ? "Successfully connected and verified." : `${broken.length === 1 ? "One account has" : `${broken.length} accounts have`} lost access. Posts to ${broken.length === 1 ? "it" : "them"} can't go out until you reconnect.`}
+      </p>
       <ul className="mt-3 space-y-1.5 text-sm">
-        {connected.map((a) => (
-          <li key={a.id} className="flex items-center gap-2">
-            <CheckCircle2 size={14} className="shrink-0 text-emerald-600" />
-            <span className="truncate font-medium">{a.platform === "google" ? (a.handle ?? a.name) : a.name}</span>
-            <span className="shrink-0 text-muted">· {a.platform === "google" ? "Google sign-in" : a.platform_label}</span>
-          </li>
-        ))}
+        {connected.map((a) => {
+          const bad = a.status === "expired" || a.status === "error";
+          return (
+            <li key={a.id} className="flex flex-wrap items-center gap-2">
+              {bad ? <AlertTriangle size={14} className="shrink-0 text-danger" /> : <CheckCircle2 size={14} className="shrink-0 text-emerald-600" />}
+              <span className="truncate font-medium">{a.platform === "google" ? (a.handle ?? a.name) : a.name}</span>
+              <span className="shrink-0 text-muted">· {a.platform === "google" ? "Google sign-in" : a.platform_label}</span>
+              {bad && onReconnect && (
+                <span className="ml-auto"><ReconnectButton accountId={a.id} name={a.name} compact onForm={(f) => onReconnect(a, f)} /></span>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {onAdd && addable.length > 0 && (
         <div className="mt-4 flex flex-wrap gap-2">
@@ -662,14 +690,22 @@ function ConnectCard({ c, canManage, mediaReady, mediaGuide, connected }: {
 }) {
   const [showConnect, setShowConnect] = useState(false);
   const [preset, setPreset] = useState<Record<string, boolean>>({});
+  const [form, setForm] = useState<string | null>(null);
   if (c.method !== "manual" && connected.length > 0 && !showConnect) {
-    return <ConnectedCard c={c} connected={connected}
+    return <>
+      {form === "bluesky" && <BlueskyModal onClose={() => setForm(null)} />}
+      {form === "mastodon" && <MastodonModal onClose={() => setForm(null)} />}
+      {form === "telegram" && <TelegramModal onClose={() => setForm(null)} />}
+      {form === "discord" && <DiscordModal onClose={() => setForm(null)} />}
+      <ConnectedCard c={c} connected={connected}
+      onReconnect={canManage ? (_a, f) => setForm(f) : undefined}
       onAddAnother={canManage ? () => { setPreset({}); setShowConnect(true); } : undefined}
       onAdd={canManage ? (option) => {
         // Reconnecting replaces the granted permissions, so keep what's already connected (e.g. Instagram).
         const keep: Record<string, boolean> = connected.some((a) => a.platform === "instagram") ? { include_instagram: true } : {};
         setPreset({ ...keep, [option]: true }); setShowConnect(true);
-      } : undefined} />;
+      } : undefined} />
+    </>;
   }
   return <ConnectForm key={JSON.stringify(preset)} c={c} canManage={canManage} mediaReady={mediaReady} mediaGuide={mediaGuide}
     preset={preset} onBack={showConnect ? () => setShowConnect(false) : undefined} />;
@@ -755,6 +791,14 @@ export default function SocialAccounts() {
   const [banner, setBanner] = useState<{ tone: "info" | "danger" | "warn"; text: string } | null>(null);
   const qc = useQueryClient();
 
+  // ?reconnect=<account id> (from the Inbox or the dashboard): open that account's reconnect form
+  const [reconnectId] = useState(() => params.get("reconnect"));
+  useEffect(() => {
+    if (!reconnectId || !accounts.data) return;
+    document.getElementById(`account-${reconnectId}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    setParams((p) => { p.delete("reconnect"); return p; }, { replace: true });
+  }, [reconnectId, accounts.data, setParams]);
+
   useEffect(() => {
     const connected = params.get("connected");
     const error = params.get("error");
@@ -816,7 +860,7 @@ export default function SocialAccounts() {
               <div className="flex items-center justify-between pt-3 text-sm font-semibold text-muted">
                 <span>{label}</span><span className="text-xs font-normal">{list.length}</span>
               </div>
-              <ul className="divide-y divide-line">{list.map((a) => <AccountRow key={a.id} acc={a} canManage={canManage} />)}</ul>
+              <ul className="divide-y divide-line">{list.map((a) => <AccountRow key={a.id} acc={a} canManage={canManage} autoForm={a.id === reconnectId} />)}</ul>
             </Card>
           ))}
         </div>
@@ -834,7 +878,7 @@ export default function SocialAccounts() {
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {info.data.connectors.map((c) => (
                 <ConnectCard key={c.id} c={c} canManage={canManage} mediaReady={info.data.media_host_configured} mediaGuide={info.data.media_guide}
-                  connected={all.filter((a) => a.status === "connected" && (c.platforms.includes(a.platform) || (c.id === "google" && a.platform === "google")))} />
+                  connected={all.filter((a) => ["connected", "expired", "error"].includes(a.status) && (c.platforms.includes(a.platform) || (c.id === "google" && a.platform === "google")))} />
               ))}
             </div>
             <Card className="mt-6">

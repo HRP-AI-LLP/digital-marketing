@@ -63,11 +63,12 @@ def cloud() -> bool:
 
 def stale_after() -> int:
     """Seconds without a heartbeat before the worker counts as stopped. Cloud: the job runner only wakes up for work
-    (regular tick every TICK_EVERY_MINUTES), so silence in between is normal."""
+    (regular tick every TICK_EVERY_MINUTES, none at night), so silence in between is normal."""
     if cloud():
         from app.core.config import get_settings
 
-        return get_settings().tick_every_minutes * 60 + 300
+        s = get_settings()
+        return max(s.tick_every_minutes, s.tick_max_gap_minutes) * 60 + 300
     return 120
 
 

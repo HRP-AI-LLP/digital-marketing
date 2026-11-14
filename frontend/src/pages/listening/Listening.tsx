@@ -27,7 +27,7 @@ export default function Listening() {
     sentiment: ["positive", "neutral", "negative"].includes(params.get("sentiment") ?? "") ? params.get("sentiment")! : "",
     needs_response: params.get("needs_response") === "true",
   }));
-  const status = useQuery({ queryKey: ["listening-status"], queryFn: () => api<ListenStatus>("/listening/status"), refetchInterval: 60_000 });
+  const status = useQuery({ queryKey: ["listening-status"], queryFn: () => api<ListenStatus>("/listening/status"), refetchInterval: 300_000 });
   const queries = useQuery({ queryKey: ["listening-queries"], queryFn: () => api<Query[]>("/listening/queries") });
   const [jobId, setJobId] = useState<string | null>(null);
   const run = useMutation({

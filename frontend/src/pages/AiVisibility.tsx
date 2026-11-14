@@ -59,7 +59,7 @@ export default function AiVisibility() {
 
   const ov = useQuery({
     queryKey: ["aivis", "overview"], queryFn: () => api<Overview>("/aivis/overview"),
-    refetchInterval: (q) => (q.state.data?.active_run ? 3000 : 60_000),
+    refetchInterval: (q) => (q.state.data?.active_run ? 3000 : 300_000),
   });
   const settings = useQuery({ queryKey: ["aivis", "settings"], queryFn: () => api<Settings>("/aivis/settings"), staleTime: 60_000 });
   const run = useMutation({

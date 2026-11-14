@@ -327,7 +327,9 @@ async def test_uniqueness_regenerates_with_jaccard_fallback(client, fake):
     post = await get_post(o["id"], p.id)
     assert fake.count("write") == 2  # first draft duplicated the old post
     assert post.similarity < svc.JACCARD_THRESHOLD and post.status == "scheduled"
-    assert post.qa["similarity_method"] == "jaccard" and post.embedding is None
+    assert post.qa["similarity_method"] == "jaccard"
+    async with platform_session() as s:  # the embedding column is deferred (never loaded with the row)
+        assert await s.scalar(select(Post.embedding.is_(None)).where(Post.id == p.id)) is True
     second_prompt = [c for c in fake.calls if c[0] == "write"][1][2]
     assert "Do not repeat this earlier post" in second_prompt
 

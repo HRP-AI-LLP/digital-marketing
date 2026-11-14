@@ -1,7 +1,8 @@
 # HRP Digital Marketing Studio — UAT: every push to main.  Production: a tag dm-vX.Y.Z (+ approval in 'production').
 #   Frontend: Cloudflare Worker dm-frontend-{uat,prod} on uat-dm.hrpai.in / dm.hrpai.in (static app + /api proxy)
-#   API + job runner: Cloud Run dm-api-{uat,prod}; Cloud Scheduler calls /api/v1/internal/tick every 20 minutes and
-#   the API books exact-time Cloud Tasks (queue dm-tick-{env}) for scheduled posts and work queued in the app
+#   API + job runner: Cloud Run dm-api-{uat,prod}; Cloud Scheduler calls /api/v1/internal/tick hourly from 07:00 to 23:00
+#   IST (prod: 3 times a day until it has organizations), and the API books exact-time Cloud Tasks (queue dm-tick-{env})
+#   for scheduled posts and work queued in the app. Every tick wakes the database, which Neon bills by the hour awake.
 #   Database: Neon dm-uat / dm-prod (organization HRP AI, Singapore, direct host).  Media: Cloudflare R2 dm-uat-media / dm-prod-media.
 # One-time setup: infra/README.md.
 name: deploy
@@ -39,9 +40,15 @@ jobs:
 
       - name: Settings for this environment
         run: |
+          # TICK: when Cloud Scheduler runs the routine work (inbox, metrics, research), in IST. GAP: the longest silence
+          # between two ticks, in minutes (the night). Override with the GitHub variables UAT_TICK_CRON / PROD_TICK_CRON
+          # (and *_TICK_GAP). Scheduled posts never wait for a tick: they wake the API at their exact time.
           if [ "$ENV_NAME" = prod ]; then HOST=dm.hrpai.in; MIN=${{ vars.PROD_MIN_INSTANCES || 0 }}; MAX=4; APP_ENV=production
-          else HOST=uat-dm.hrpai.in; MIN=0; MAX=3; APP_ENV=uat; fi
+            TICK="${{ vars.PROD_TICK_CRON || '7 9,13,18 * * *' }}"; GAP=${{ vars.PROD_TICK_GAP || 900 }}; EVERY=240
+          else HOST=uat-dm.hrpai.in; MIN=0; MAX=3; APP_ENV=uat
+            TICK="${{ vars.UAT_TICK_CRON || '7 7-23 * * *' }}"; GAP=${{ vars.UAT_TICK_GAP || 480 }}; EVERY=60; fi
           { echo "HOST=$HOST"; echo "APP_URL=https://$HOST"; echo "MIN=$MIN"; echo "MAX=$MAX"; echo "APP_ENV=$APP_ENV"
+            echo "TICK=$TICK"; echo "GAP=$GAP"; echo "EVERY=$EVERY"
             echo "SVC=dm-api-$ENV_NAME"; echo "S=dm-$ENV_NAME"; echo "BUCKET=dm-$ENV_NAME-media"; } >> "$GITHUB_ENV"
 
       - name: Read deploy-time secrets from Secret Manager
@@ -79,7 +86,7 @@ jobs:
             --allow-unauthenticated --ingress all --port 8080 \
             --cpu 2 --memory 4Gi --concurrency 20 --min-instances "$MIN" --max-instances "$MAX" \
             --cpu-boost --timeout 3600 --execution-environment gen2 \
-            --set-env-vars "^##^DEPLOY_MODE=cloud##ENVIRONMENT=$APP_ENV##PUBLIC_BASE_URL=$APP_URL##APP_URL=$APP_URL##CORS_ORIGINS=$APP_URL##OAUTH_HTTPS_PROVIDERS=*##STORAGE_DIR=/tmp/storage##S3_ENDPOINT=$R2_ENDPOINT##S3_BUCKET=$BUCKET##S3_REGION=auto##PLATFORM_ADMIN_EMAIL=$PLATFORM_ADMIN_EMAIL##DB_NULL_POOL=true##BOOTSTRAP_ORG=false##TASKS_QUEUE=dm-tick-$ENV_NAME##TICK_EVERY_MINUTES=20##GCP_PROJECT=$PROJECT##GCP_REGION=$REGION##TZ=Asia/Kolkata" \
+            --set-env-vars "^##^DEPLOY_MODE=cloud##ENVIRONMENT=$APP_ENV##PUBLIC_BASE_URL=$APP_URL##APP_URL=$APP_URL##CORS_ORIGINS=$APP_URL##OAUTH_HTTPS_PROVIDERS=*##STORAGE_DIR=/tmp/storage##S3_ENDPOINT=$R2_ENDPOINT##S3_BUCKET=$BUCKET##S3_REGION=auto##PLATFORM_ADMIN_EMAIL=$PLATFORM_ADMIN_EMAIL##DB_NULL_POOL=true##BOOTSTRAP_ORG=false##TASKS_QUEUE=dm-tick-$ENV_NAME##TICK_EVERY_MINUTES=$EVERY##TICK_MAX_GAP_MINUTES=$GAP##GCP_PROJECT=$PROJECT##GCP_REGION=$REGION##TZ=Asia/Kolkata" \
             --set-secrets "DATABASE_URL=$S-database-url:latest,SECRET_KEY=$S-secret-key:latest,ENCRYPTION_KEY=$S-encryption-key:latest,ORIGIN_VERIFY_SECRET=$S-origin-verify-secret:latest,CRON_SECRET=$S-cron-secret:latest,S3_ACCESS_KEY_ID=$S-r2-access-key-id:latest,S3_SECRET_ACCESS_KEY=$S-r2-secret-access-key:latest,PLATFORM_ADMIN_PASSWORD=$S-admin-password:latest,MIGRATION_DATABASE_URL=$S-migrator-url:latest" \
             $TRAFFIC_FLAGS
           if [ -n "$TRAFFIC_FLAGS" ]; then
@@ -102,10 +109,10 @@ jobs:
           gcloud run services update-traffic "$SVC" --region "$REGION" --to-latest
           echo "API_URL=$(gcloud run services describe "$SVC" --region "$REGION" --format 'value(status.url)')" >> "$GITHUB_ENV"
 
-      - name: Job runner (Cloud Scheduler every 20 minutes; exact-time wake-ups go through Cloud Tasks)
+      - name: Job runner (Cloud Scheduler on the TICK schedule; exact-time wake-ups go through Cloud Tasks)
         run: |
           JOB="dm-tick-$ENV_NAME"
-          SCHED="*/20 * * * *"
+          SCHED="$TICK"
           ARGS=(--location "$REGION" --schedule "$SCHED" --time-zone "Asia/Kolkata" --uri "$API_URL/api/v1/internal/tick"
                 --http-method POST --attempt-deadline 30m --max-retry-attempts 0)
           HDRS="X-Cron-Secret=$CRON_SECRET,X-Origin-Verify=$OV"

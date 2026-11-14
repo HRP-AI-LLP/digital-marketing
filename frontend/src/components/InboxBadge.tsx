@@ -10,7 +10,7 @@ export function useInboxSummary() {
     queryKey: ["inbox-summary"],
     queryFn: () => api<InboxSummary>("/inbox/summary"),
     enabled: can("inbox.view"),
-    refetchInterval: 60_000,
+    refetchInterval: 300_000,
   });
 }
 

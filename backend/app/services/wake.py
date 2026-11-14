@@ -1,7 +1,7 @@
 """Cloud wake-ups: run the job runner exactly when something is due, without a tick every minute.
 
-Cloud Scheduler calls POST /api/v1/internal/tick every TICK_EVERY_MINUTES (20 minutes) for the periodic work. In between,
-this module books one-off Cloud Tasks that call the same endpoint:
+Cloud Scheduler calls POST /api/v1/internal/tick for the periodic work: hourly during the day, not at night (see
+deploy.yml). In between, this module books one-off Cloud Tasks that call the same endpoint:
   - right away, when someone queues work in the app (generate a post, render a video, publish now);
   - at the exact time of the next scheduled post or the next queued job (a retry, a catch-up slot), when that comes
     before the next regular tick.
@@ -130,9 +130,13 @@ async def next_due(horizon: timedelta) -> datetime | None:
     return min(times) if times else None
 
 
+LOOK_AHEAD = timedelta(hours=24)
+
+
 def horizon() -> timedelta:
-    """How far ahead to look: until the next regular tick (plus a little)."""
-    return timedelta(minutes=get_settings().tick_every_minutes + 1)
+    """How far ahead to look: a day, so a post at 3 am gets its own wake-up even though nights have no regular tick.
+    (Each tick and each wake-up books the next one, so later posts are covered as the day goes on.)"""
+    return max(LOOK_AHEAD, timedelta(minutes=max(get_settings().tick_every_minutes, get_settings().tick_max_gap_minutes) + 1))
 
 
 async def plan(not_before: timedelta | None = None) -> datetime | None:
@@ -150,6 +154,11 @@ async def plan(not_before: timedelta | None = None) -> datetime | None:
     now = datetime.now(UTC)
     if at > now:
         at += timedelta(seconds=2)  # scheduled posts: be a moment after, never before, their time
+    elif not_before is not None:
+        # The tick just ran and found nothing it could run, yet something is already due (held back, e.g. while the
+        # internet check says offline). Waking again a minute later would keep the database awake all day: leave it
+        # to the next regular tick.
+        return None
     if not_before is not None:
         at = max(at, now + not_before)
     return at if await book(at) else None

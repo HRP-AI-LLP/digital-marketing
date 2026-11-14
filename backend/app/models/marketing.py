@@ -166,7 +166,7 @@ class KnowledgeChunk(IdMixin, TenantMixin, Base):
     document_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True)
     ordinal: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
-    embedding = mapped_column(Vector(), nullable=True)
+    embedding = mapped_column(Vector(), nullable=True, deferred=True)  # not loaded with the row (big; only used inside SQL)
     embedding_model: Mapped[str | None] = mapped_column(String(160))
 
 
@@ -312,7 +312,7 @@ class Post(IdMixin, TenantMixin, TimestampMixin, Base):
     approved_by: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rejection_reason: Mapped[str | None] = mapped_column(Text)
-    embedding = mapped_column(Vector(), nullable=True)
+    embedding = mapped_column(Vector(), nullable=True, deferred=True)  # not loaded with the row (big; only used inside SQL)
     embedding_model: Mapped[str | None] = mapped_column(String(160))
     evergreen: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # may be reshared later
 
@@ -360,7 +360,7 @@ class PostMetric(IdMixin, TenantMixin, Base):
     clicks: Mapped[int] = mapped_column(Integer, default=0)
     saves: Mapped[int] = mapped_column(Integer, default=0)
     video_views: Mapped[int] = mapped_column(Integer, default=0)
-    raw: Mapped[dict] = mapped_column(JSON, default=dict)
+    raw: Mapped[dict] = mapped_column(JSON, default=dict, deferred=True)  # provider payload; never read by the app
 
 
 # ============================================================ notifications (Phase 4)

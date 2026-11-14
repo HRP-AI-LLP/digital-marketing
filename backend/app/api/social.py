@@ -529,6 +529,51 @@ async def refresh(aid: uuid.UUID, ctx: Context = Depends(require("integration.ma
     return _out(acc)
 
 
+# Platforms reconnected by entering a password / token / webhook again (no sign-in page).
+FORM_RECONNECT = {"bluesky", "mastodon", "telegram", "discord"}
+
+
+class ReconnectIn(BaseModel):
+    return_to: str | None = Field(None, max_length=200)  # where the sign-in comes back to (default: Social accounts)
+
+
+async def reconnect_options(ctx: Context, acc: SocialAccount) -> dict:
+    """Sign-in options that keep what this connection already does: Instagram alongside the Facebook pages, LinkedIn
+    company pages, and the inbox reply permission when the account uses it (or the inbox says it's missing)."""
+    from app.models import InboxItem
+    from app.services.inbox.sync import get_settings as inbox_settings
+
+    module = common.PLATFORM_MODULE.get(acc.platform)
+    same = [p for p, m in common.PLATFORM_MODULE.items() if m == module]
+    others = (await ctx.session.scalars(select(SocialAccount.platform).where(
+        SocialAccount.platform.in_(same), SocialAccount.status != "removed"))).all()
+    have = set(others) | {acc.platform}
+    state = ((await inbox_settings(ctx.session, ctx.org_id)).state or {}).get("accounts") or {}
+    st = state.get(str(acc.id)) or {}
+    replied = await ctx.session.scalar(select(InboxItem.id).where(
+        InboxItem.social_account_id == acc.id, InboxItem.is_own.is_(True)).limit(1))
+    return {"include_instagram": "instagram" in have, "company_pages": "linkedin_org" in have, "include_profile": True,
+            "enable_replies": bool(replied or st.get("missing_permission") or st.get("reply_missing_permission"))}
+
+
+@router.post("/accounts/{aid}/reconnect")
+async def reconnect(aid: uuid.UUID, body: ReconnectIn | None = None, ctx: Context = Depends(require("integration.manage"))):
+    """Start reconnecting one account. Sign-in platforms return {"authorize_url"}; platforms that use a password,
+    token or webhook return {"form": <platform>} so the app asks for it again (the account is updated, not duplicated)."""
+    acc = await _get(ctx, aid)
+    if common.is_manual(acc):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This account is published by hand: there's nothing to reconnect.")
+    module = common.PLATFORM_MODULE.get(acc.platform)
+    if module in FORM_RECONNECT:
+        return {"form": module}
+    if module not in OAUTH_PROVIDERS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{acc.platform} can't be reconnected from here.")
+    out = await start_oauth(ctx, module, await reconnect_options(ctx, acc), (body.return_to if body else None))
+    _audit(ctx, "social.reconnect", acc, f"Started reconnecting {acc.name}")
+    await ctx.session.commit()
+    return out
+
+
 @router.delete("/accounts/{aid}", status_code=204)
 async def remove_account(aid: uuid.UUID, ctx: Context = Depends(require("integration.manage"))):
     acc = await _get(ctx, aid)

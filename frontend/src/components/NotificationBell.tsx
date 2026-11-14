@@ -31,7 +31,7 @@ export default function NotificationBell({ dark = false }: { dark?: boolean }) {
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
   }, [open]);
-  const q = useQuery({ queryKey: ["notifications"], queryFn: () => api<{ unread: number; items: Item[] }>("/notifications?limit=20"), refetchInterval: 30000 });
+  const q = useQuery({ queryKey: ["notifications"], queryFn: () => api<{ unread: number; items: Item[] }>("/notifications?limit=20"), refetchInterval: 120_000 });
   const read = useMutation({
     mutationFn: (ids?: string[]) => api("/notifications/read", { method: "POST", json: { ids: ids ?? null } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),

@@ -92,5 +92,5 @@ class IdeaBrief(IdMixin, TenantMixin, TimestampMixin, Base):
     opportunity_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     used: Mapped[list] = mapped_column(JSON, default=list)  # [{kind: post|article|topic, id, at}]
     data: Mapped[dict] = mapped_column(JSON, default=dict)
-    embedding = mapped_column(Vector(), nullable=True)
+    embedding = mapped_column(Vector(), nullable=True, deferred=True)  # not loaded with the row (big; only used inside SQL)
     embedding_model: Mapped[str | None] = mapped_column(String(160))

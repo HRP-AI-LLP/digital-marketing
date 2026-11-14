@@ -57,7 +57,7 @@ export default function Tasks() {
     if (since) p.set("since", since);
     return p.toString();
   }, [status, since]);
-  const q = useQuery({ queryKey: ["jobs", qs], queryFn: () => api<Job[]>(`/jobs?${qs}`), refetchInterval: 15000 });
+  const q = useQuery({ queryKey: ["jobs", qs], queryFn: () => api<Job[]>(`/jobs?${qs}`), refetchInterval: 60_000 });
 
   const retry = useMutation({
     mutationFn: (id: string) => api<Job>(`/jobs/${id}/retry`, { method: "POST" }),

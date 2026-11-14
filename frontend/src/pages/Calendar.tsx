@@ -75,7 +75,7 @@ export default function Calendar() {
   if (account) params.set("account_id", account);
   if (platform) params.set("platform", platform);
   if (status) params.set("status", status);
-  const items = useQuery({ queryKey: ["calendar", params.toString()], queryFn: () => api<CalItem[]>(`/content/calendar?${params}`), refetchInterval: 60_000 });
+  const items = useQuery({ queryKey: ["calendar", params.toString()], queryFn: () => api<CalItem[]>(`/content/calendar?${params}`), refetchInterval: 300_000 });
 
   // Festivals and special days the organization observes (from Research & ideas settings).
   const occ = useQuery({

@@ -7,6 +7,7 @@ import SystemMap from "./dashboard/SystemMap";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Alert } from "../components/ui";
+import { ReconnectButton } from "../components/ReconnectButton";
 
 type Dash = {
   organization: { id: string; name: string; timezone: string } | null;
@@ -77,7 +78,7 @@ function ScoresRow({ d, canAnalytics, canPresence }: { d: Dash; canAnalytics: bo
 
 export default function Dashboard() {
   const { session, can } = useAuth();
-  const q = useQuery({ queryKey: ["dashboard"], queryFn: () => api<Dash>("/dashboard"), refetchInterval: 60000 });
+  const q = useQuery({ queryKey: ["dashboard"], queryFn: () => api<Dash>("/dashboard"), refetchInterval: 300_000 });
   const qc = useQueryClient();
   const dismiss = useMutation({
     mutationFn: () => api("/dashboard/alerts/dismiss", { method: "POST" }),
@@ -114,7 +115,13 @@ export default function Dashboard() {
               <AlertTriangle size={18} className="mt-0.5 shrink-0" />
               <div>
                 {d.counts.failed > 0 && <div>{d.counts.failed} post(s) failed to publish in the last two weeks. <Link className="underline" to="/posts?status=failed">Review them</Link>.</div>}
-                {d.accounts.filter((a) => a.status === "expired").map((a) => <div key={a.id}>{a.name} needs reconnecting. <Link className="underline" to="/settings/accounts">Reconnect</Link>.</div>)}
+                {d.accounts.filter((a) => a.status === "expired").map((a) => (
+                  <div key={a.id} className="flex flex-wrap items-center gap-2 py-0.5">
+                    <span>{a.name} needs reconnecting.</span>
+                    {can("integration.manage") ? <ReconnectButton accountId={a.id} name={a.name} returnTo="/" compact />
+                      : <Link className="underline" to="/settings/accounts">Open Social accounts</Link>}
+                  </div>
+                ))}
                 {d.failing_jobs > 0 && <div>{d.failing_jobs} background task(s) failed recently. <Link className="underline" to={`/tasks?status=failed${d.failing_since ? `&since=${encodeURIComponent(d.failing_since)}` : ""}`}>See which</Link>.</div>}
               </div>
               {(d.counts.failed > 0 || d.failing_jobs > 0) && (

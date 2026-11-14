@@ -26,7 +26,7 @@ export function useSystemStatus() {
     queryKey: ["system-status"],
     queryFn: () => api<SystemStatus>("/system/status"),
     enabled: can("content.view"),
-    refetchInterval: 30_000,
+    refetchInterval: 120_000,
   });
 }
 

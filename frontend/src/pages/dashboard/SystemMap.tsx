@@ -87,7 +87,7 @@ function layout(d: SystemMapData): { nodes: Node[]; edges: { a: string; b: strin
 }
 
 export function useSystemMap() {
-  return useQuery({ queryKey: ["system-map"], queryFn: () => api<SystemMapData>("/system/map"), refetchInterval: 15000 });
+  return useQuery({ queryKey: ["system-map"], queryFn: () => api<SystemMapData>("/system/map"), refetchInterval: 60_000 });
 }
 
 export default function SystemMap({ height = 640 }: { height?: number }) {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowDown, ArrowUp, ExternalLink, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ExternalLink, PlugZap, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { UsageReport } from "./AiUsage";
@@ -62,7 +62,7 @@ function useCatalog() {
   return useQuery({ queryKey: ["int-catalog"], queryFn: () => api<Catalog>("/integrations/catalog"), staleTime: Infinity });
 }
 function useStatuses() {
-  return useQuery({ queryKey: ["int-status"], queryFn: () => api<{ statuses: Status[] }>("/integrations/model-status"), refetchInterval: 60000 });
+  return useQuery({ queryKey: ["int-status"], queryFn: () => api<{ statuses: Status[] }>("/integrations/model-status"), refetchInterval: 300_000 });
 }
 
 // ------------------------------------------------------------------ model picker
@@ -303,6 +303,9 @@ function ProviderRow({ cfg, spec, canManage, statuses }: { cfg: ProviderCfg; spe
   const mine = statuses.filter((s) => s.provider_id === cfg.id && s.state !== "ok");
   const missing: string[] = st.missing_models ?? [];
   const isAI = AI_KINDS.includes(cfg.kind);
+  // The saved key / password stopped working (rejected when tested, or the provider said it's invalid): offer to enter it again
+  const needsKey = cfg.enabled && !spec?.local && (result?.ok === false && /key|auth|401|403|unauthori[sz]ed|forbidden|invalid|expired|password|token|signature/i.test(result.message)
+    || mine.some((x) => x.state === "auth"));
   return (
     <li className="py-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -353,6 +356,11 @@ function ProviderRow({ cfg, spec, canManage, statuses }: { cfg: ProviderCfg; spe
         {canManage && (
           <div className="flex items-center gap-1">
             <Toggle checked={cfg.enabled} onChange={(v) => toggle.mutate(v)} label="" />
+            {needsKey && spec && (
+              <Button onClick={() => setEditing(true)} title="Enter the key, password or address again">
+                <PlugZap size={14} /> Reconnect
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => test.mutate()} disabled={test.isPending}>{test.isPending ? "Testing…" : "Test"}</Button>
             <Button variant="ghost" onClick={() => setEditing(true)}>Edit</Button>
             <Button variant="ghost" aria-label={`Remove ${cfg.name}`} onClick={() => remove.mutate()}><Trash2 size={15} /></Button>

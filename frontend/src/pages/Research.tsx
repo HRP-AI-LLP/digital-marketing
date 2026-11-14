@@ -21,7 +21,7 @@ function useOverview() {
   return useQuery({
     queryKey: ["research", "overview"],
     queryFn: () => api<Overview>("/research/overview"),
-    refetchInterval: (q) => (q.state.data?.active_run ? 3000 : 60_000),
+    refetchInterval: (q) => (q.state.data?.active_run ? 3000 : 300_000),
   });
 }
 

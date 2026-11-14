@@ -180,7 +180,7 @@ function Deliveries({ hook, onClose, canManage }: { hook: Hook; onClose: () => v
   const q = useQuery({
     queryKey: ["deliveries", hook.id],
     queryFn: () => api<{ items: Delivery[] }>(`/connections/webhooks/${hook.id}/deliveries?limit=50`),
-    refetchInterval: 10000,
+    refetchInterval: 30_000,
   });
   return (
     <Modal title={`Recent deliveries: ${hook.name}`} onClose={onClose} wide>
@@ -271,7 +271,7 @@ function WebhooksTab() {
   const canManage = can("connections.manage");
   const [adding, setAdding] = useState(false);
   const events = useQuery({ queryKey: ["webhook-events"], queryFn: () => api<{ items: EventInfo[] }>("/connections/events"), staleTime: Infinity });
-  const hooks = useQuery({ queryKey: ["webhooks"], queryFn: () => api<{ items: Hook[] }>("/connections/webhooks"), refetchInterval: 30000 });
+  const hooks = useQuery({ queryKey: ["webhooks"], queryFn: () => api<{ items: Hook[] }>("/connections/webhooks"), refetchInterval: 120_000 });
   const ev = events.data?.items ?? [];
   return (
     <div className="space-y-4">

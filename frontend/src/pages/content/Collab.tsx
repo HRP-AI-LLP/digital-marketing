@@ -171,7 +171,7 @@ export function TeamComments({ postId }: { postId: string }) {
   const members = useMembers();
   const people = members.data ?? [];
   const key = ["post-comments", postId];
-  const q = useQuery({ queryKey: key, queryFn: () => api<Comments>(`/content/posts/${postId}/comments`), refetchInterval: 60_000 });
+  const q = useQuery({ queryKey: key, queryFn: () => api<Comments>(`/content/posts/${postId}/comments`), refetchInterval: 120_000 });
   const [text, setText] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [showResolved, setShowResolved] = useState(false);

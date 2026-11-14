@@ -151,7 +151,7 @@ export function UsageReport() {
   const [metric, setMetric] = useState<"tokens" | "cost_usd" | "calls">("tokens");
   const qs = query(period, from, to);
   const q = useQuery({ queryKey: ["int-usage", qs], queryFn: () => api<UsageData>(`/integrations/usage?${qs}`) });
-  const status = useQuery({ queryKey: ["int-status"], queryFn: () => api<{ statuses: Status[] }>("/integrations/model-status"), refetchInterval: 60000 });
+  const status = useQuery({ queryKey: ["int-status"], queryFn: () => api<{ statuses: Status[] }>("/integrations/model-status"), refetchInterval: 300_000 });
   const refreshPrices = useMutation({
     mutationFn: () => api<{ message: string }>("/integrations/prices/refresh", { method: "POST" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["int-usage"] }),

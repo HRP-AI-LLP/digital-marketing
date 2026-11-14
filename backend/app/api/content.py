@@ -1307,7 +1307,11 @@ async def calendar(
         conds.append(Post.platform.in_(_csv(platform)))
     if status_:
         conds.append(Post.status.in_(_csv(status_)))
-    rows = list((await ctx.session.scalars(select(Post).where(and_(*conds)).order_by(when))).all())
+    # only the columns the calendar shows (whole posts are large: text, QA, media lists)
+    rows = list((await ctx.session.execute(select(
+        Post.id, Post.published_at, Post.scheduled_at, Post.status, Post.platform, Post.post_type, Post.social_account_id,
+        Post.title, Post.topic, Post.pillar_id, func.left(Post.text, 80).label("text"),
+    ).where(and_(*conds)).order_by(when))).all())
     accounts, pillars = await _lookups(ctx, rows)
     out = []
     for p in rows:

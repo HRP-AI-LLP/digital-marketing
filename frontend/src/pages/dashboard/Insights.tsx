@@ -10,6 +10,8 @@ import {
   Sparkline, TimeChart, TipRow, fmtDay, fmtDayLong, fmtFull, fmtNum, fmtPct, type Series,
 } from "../../components/viz";
 import { PlatformBadge } from "../analytics/vizkit";
+import { useAuth } from "../../auth/AuthContext";
+import { ReconnectButton } from "../../components/ReconnectButton";
 
 type Kpi = { key: string; label: string; value: number; previous: number; delta: number | null; spark: number[]; format: "num" | "pct"; invert: boolean };
 type Day = { date: string; posts: number; impressions: number; reach: number; engagements: number; likes: number; comments: number; shares: number; saves: number; video_views: number; clicks: number; engagement_rate: number; by_platform: Record<string, number> };
@@ -89,7 +91,7 @@ export default function DashboardInsights() {
   if (f.pillar) qs.set("pillar_id", f.pillar);
   const q = useQuery({
     queryKey: ["dashboard-insights", qs.toString()], queryFn: () => api<Insights>(`/dashboard/insights?${qs}`),
-    placeholderData: keepPreviousData, refetchInterval: 120000,
+    placeholderData: keepPreviousData, refetchInterval: 600_000,
   });
   const d = q.data;
   return (
@@ -179,6 +181,7 @@ function FilterBar({ f, set, active, reset, d, loading }: {
 
 // ------------------------------------------------------------------ body
 function Body({ d, f, set }: { d: Insights; f: ReturnType<typeof useFilters>["f"]; set: ReturnType<typeof useFilters>["set"] }) {
+  const canReconnect = useAuth().can("integration.manage");
   const nav = useNavigate();
   const colours = useMemo(() => channelColours([...d.filters.platforms, ...d.by_platform.map((r) => r.key)]), [d]);
   const labelOf = (p: string) => d.filters.platform_labels[p] ?? d.by_platform.find((r) => r.key === p)?.label ?? p;
@@ -403,7 +406,12 @@ function Body({ d, f, set }: { d: Insights; f: ReturnType<typeof useFilters>["f"
                         <span className="min-w-0 leading-tight"><span className="block truncate font-medium hover:underline">{c.name}</span><span className="block text-xs text-muted">{c.platform_label}</span></span>
                       </button>
                     </td>
-                    <td className="px-2 py-2.5"><StatePill status={c.status} /></td>
+                    <td className="px-2 py-2.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <StatePill status={c.status} />
+                        {(c.status === "expired" || c.status === "error") && canReconnect && <ReconnectButton accountId={c.id} name={c.name} returnTo="/" compact variant="secondary" />}
+                      </div>
+                    </td>
                     <td className="px-2 py-2.5 text-right tabular-nums">
                       {c.followers == null ? <span className="text-muted">—</span> : fmtNum(c.followers)}
                       {c.followers_change != null && c.followers_change !== 0 && <span className={`ml-1 text-xs ${c.followers_change > 0 ? "text-emerald-700" : "text-danger"}`}>{c.followers_change > 0 ? "+" : ""}{fmtNum(c.followers_change)}</span>}
