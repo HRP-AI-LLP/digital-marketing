@@ -19,6 +19,7 @@ import Reports from "./pages/Reports";
 import Calendar from "./pages/Calendar";
 import Approvals from "./pages/Approvals";
 import Posts from "./pages/Posts";
+import Academy from "./pages/Academy";
 import MediaStudio from "./pages/MediaStudio";
 import LinkInBio from "./pages/LinkInBio";
 import GrowFollowers from "./pages/GrowFollowers";
@@ -78,6 +79,7 @@ export default function App() {
         <Route path="calendar" element={<Guard perm="content.view"><Calendar /></Guard>} />
         <Route path="approvals" element={<Guard perm="content.approve"><Approvals /></Guard>} />
         <Route path="posts/*" element={<Guard perm="content.view"><Posts /></Guard>} />
+        <Route path="academy/*" element={<Guard perm="content.view"><Academy /></Guard>} />
         <Route path="media" element={<Guard perm="media.manage"><MediaStudio /></Guard>} />
         <Route path="link-in-bio" element={<Guard perm="linkinbio.manage"><LinkInBio /></Guard>} />
         <Route path="grow" element={<Guard perm="links.view"><GrowFollowers /></Guard>} />

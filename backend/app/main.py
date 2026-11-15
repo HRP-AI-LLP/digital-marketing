@@ -35,6 +35,7 @@ from app.api import experiments as experiments_api  # noqa: E402
 from app.api import security as security_api  # noqa: E402
 from app.api import backups as backups_api  # noqa: E402
 from app.api import preferences as preferences_api  # noqa: E402
+from app.api import academy as academy_api  # noqa: E402
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.modules import load_all
@@ -132,7 +133,7 @@ for r in (auth.router, users.router, roles.router, organization.router, platform
           connections_api.router,
           collab_api.inbox_router, collab_api.content_router,
           bulk_import_api.router, experiments_api.router, experiments_api.analytics_router,
-          security_api.router, backups_api.router, preferences_api.router,
+          security_api.router, backups_api.router, preferences_api.router, academy_api.router,
           ):
     app.include_router(r, prefix=API_PREFIX)
 app.include_router(linkinbio.public)  # /l/<slug>: public link-in-bio pages (no sign-in)

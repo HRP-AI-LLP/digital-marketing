@@ -224,13 +224,18 @@ async def _publish_youtube(session, post: Post, account: SocialAccount, media: l
         raise PublishError("YouTube Shorts need a video.")
     v = videos[0]
     data = common.read_bytes(v)
+    pm = post.meta or {}
+    long_form = pm.get("course_format") == "lesson"  # Academy full lessons are regular (long) videos, not Shorts
     title = (post.title or post.topic or (post.text or "").split("\n")[0] or "Short").strip()
-    if "#shorts" not in title.lower():
+    if not long_form and "#shorts" not in title.lower():
         title = title[: 100 - len(" #Shorts")].rstrip() + " #Shorts"
-    title = title[:100]
-    desc = common.compose_text(post, link=True)[:5000]
+    title = title.replace("<", "").replace(">", "")[:100]
+    desc = common.compose_text(post, link=True).replace("<", "").replace(">", "")[:5000]
     tags = [str(h).lstrip("#") for h in (post.hashtags or [])][:15]
-    meta = {"snippet": {"title": title, "description": desc, "tags": tags, "categoryId": "22"},
+    snippet = {"title": title, "description": desc, "tags": tags, "categoryId": "27" if pm.get("course_id") else "22"}
+    if pm.get("lang") in ("en", "hi"):
+        snippet["defaultLanguage"] = snippet["defaultAudioLanguage"] = pm["lang"]
+    meta = {"snippet": snippet,
             "status": {"privacyStatus": (account.settings or {}).get("privacy") or "public",
                        "selfDeclaredMadeForKids": False}}
     async with net.client(net.UPLOAD_TIMEOUT) as c:
@@ -244,7 +249,9 @@ async def _publish_youtube(session, post: Post, account: SocialAccount, media: l
         d = ok_json(await c.put(location, content=data, headers={**_bearer(tok), "Content-Type": v.mime or "video/mp4"}),
                     "YouTube upload")
     vid = d.get("id")
-    return vid, (f"https://www.youtube.com/shorts/{vid}" if vid else None)
+    if not vid:
+        return None, None
+    return vid, (f"https://www.youtube.com/watch?v={vid}" if long_form else f"https://www.youtube.com/shorts/{vid}")
 
 
 # ------------------------------------------------------------------ dispatch

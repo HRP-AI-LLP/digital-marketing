@@ -640,6 +640,10 @@ async def write_draft(session: AsyncSession, post: Post, brand: BrandProfile, cf
                       extra_avoid: list[str] | None = None, fix_issues: list[str] | None = None,
                       previous: dict | None = None) -> dict:
     meta = post.meta or {}
+    if meta.get("course_id"):  # Academy lessons have their own teacher prompt
+        from app.services import academy
+
+        return await academy.write_draft(session, post, fix_issues=fix_issues, previous=previous)
     ctx = await company_context(session)
     knowledge = await retrieve(session, post.topic or "", k=6)
     avoid = list(meta.get("avoid") or []) + await recent_rejections(session) + list(extra_avoid or [])
@@ -830,6 +834,10 @@ async def quality_pass(session: AsyncSession, post: Post, brand: BrandProfile, c
 
 async def judge(session: AsyncSession, post: Post, brand: BrandProfile, draft: dict) -> tuple[float | None, list[str]]:
     """Optional LLM-as-judge. Returns (score 0–10 or None, issues)."""
+    if (post.meta or {}).get("course_id"):
+        from app.services import academy
+
+        return await academy.judge(session, post, draft)
     ctx = await company_context(session, max_chars=1500)
     prompt = (
         f"Review this {platform_of(post.platform).label} post for a company.\n"
@@ -887,6 +895,8 @@ class Similarity:
 
 
 async def check_similarity(session: AsyncSession, post: Post, draft: dict) -> Similarity:
+    if (post.meta or {}).get("course_id"):  # lessons are unique by design (and each has two language versions)
+        return Similarity(0.0, "course")
     text = "\n".join(filter(None, [draft.get("title"), draft.get("text")]))
     vecs, model = None, None
     try:
@@ -1097,7 +1107,7 @@ async def generate_post(session: AsyncSession, post: Post, *, now: datetime | No
     if sim.vector is not None and sim.model:
         post.embedding = sim.vector
         post.embedding_model = sim.model
-    set_meta(post, **{k: draft.get(k) for k in ("image_brief", "alt_text", "slides", "video_script", "visual") if draft.get(k) is not None},
+    set_meta(post, **{k: draft.get(k) for k in ("image_brief", "alt_text", "slides", "video_script", "visual", "lesson_script") if draft.get(k) is not None},
              similar_post_id=str(sim.similar_post_id) if sim.too_similar and sim.similar_post_id else None,
              regenerate_note=None, previous_text=None)
 

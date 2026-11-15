@@ -1025,7 +1025,8 @@ def _script(post: Post, meta: dict) -> list[dict]:
     for s in meta.get("video_script") or []:
         if isinstance(s, dict) and (s.get("caption") or s.get("voiceover")):
             scenes.append({"caption": str(s.get("caption") or "")[:220], "voiceover": str(s.get("voiceover") or "")[:600],
-                           "query": s.get("query") or s.get("visual") or s.get("broll") or ""})
+                           "query": s.get("query") or s.get("visual") or s.get("broll") or "",
+                           **({"code": s["code"]} if isinstance(s.get("code"), dict) and s["code"].get("text") else {})})
     if not scenes:
         for s in (meta.get("slides") or [])[:6]:
             if isinstance(s, dict) and s.get("heading"):
@@ -1217,11 +1218,23 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
         ai_clip_budget = 3 if meta.get("ai_video") and await _ai_images_allowed(session) else 0
         three_budget = 2
         used_icons: list[str] = []
-        demo_videos, demo_shots = await _demo_footage(session, post, "phone" if h > w else "laptop")
+        course = bool(meta.get("course_id"))  # Academy Shorts: teaching visuals, no product demos or team
+        demo_videos, demo_shots = ([], []) if course else await _demo_footage(session, post, "phone" if h > w else "laptop")
         for i, (s, d) in enumerate(zip(script, durations)):
             query = s["query"] or keywords(f"{s['caption']} {s['voiceover']} {meta.get('image_brief') or ''}")
             vis, vkind, src = None, "image", "gradient"
-            if i > 0 and i % 2 == 1 and (demo_videos or demo_shots) and mode != "gradient":
+            if s.get("code"):
+                try:
+                    from app.services.media_templates import lesson as lesson_tpl
+                    from app.services.media_templates.kit import Kit as _Kit
+
+                    vis = tmp / f"code_{i:02d}.png"
+                    vis.write_bytes(await render.render_png(lesson_tpl.code_card_html(_Kit(w, h, style, theme="dark"), s["code"]), w, h))
+                    src = "code"
+                except Exception as e:  # noqa: BLE001
+                    log.info("code card failed: %s", e)
+                    vis = None
+            if vis is None and i > 0 and i % 2 == 1 and (demo_videos or demo_shots) and mode != "gradient":
                 # a post about one of your products shows it working (Brand → Visuals → Product demos)
                 try:
                     if demo_videos and (i // 2) % 2 == 0 or not demo_shots:
@@ -1261,7 +1274,7 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
                     vis = None
             if vis is None and mode not in ("gradient", "3d"):
                 vis, vkind, src = await _scene_visual(session, post.organization_id, query, w, h, mode, tmp, i, d,
-                                                      allow_team=sources.count("team") < 2)  # at most 2 per video
+                                                      allow_team=not course and sources.count("team") < 2)  # at most 2 per video
             if vis is None:
                 from app.services.media_templates.kit import icon_for
 
@@ -1271,10 +1284,11 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
                 used_icons.append(ic)
                 vis = await _mesh_png(style, w, h, f"{post.id}-{i}", tmp / f"mesh_{i:02d}.png", variant=i, icon_name=ic)
             sources.append(src)
-            footage = src not in ("gradient",) and not src.startswith("3d:")
-            styles.append("caption" if footage else "panel" if src.startswith("3d:") else "kinetic")
+            footage = src not in ("gradient", "code") and not src.startswith("3d:")
+            styles.append("caption" if footage or src == "code" else "panel" if src.startswith("3d:") else "kinetic")
             scenes.append(video.Scene(duration=d, visual=vis, visual_kind=vkind, overlay=None,
-                                      zoom=("in", "right", "out", "left")[i % 4], transition=TRANSITIONS[i % len(TRANSITIONS)]))
+                                      zoom="still" if src == "code" else ("in", "right", "out", "left")[i % 4],
+                                      transition=TRANSITIONS[i % len(TRANSITIONS)]))
         # 4. overlay track: kinetic captions + subtitles synced to the voice + progress bar + logo
         title = plain(meta.get("headline") or post.title or "")
         ov_scenes = []
@@ -1330,6 +1344,100 @@ async def _make_video(session, post: Post, meta: dict, style: BrandStyle, size: 
         render.rm_tree(tmp)
 
 
+LESSON_SIZE = (1280, 720)
+LESSON_FPS = 24
+LESSON_MAX_S = 14.5 * 60  # YouTube accounts that are not verified can upload up to 15 minutes
+
+
+async def _make_lesson_video(session, post: Post, meta: dict, style: BrandStyle) -> MediaAsset:
+    """Academy full lesson (16:9, 5-10 min): teaching slides (bullets / steps / diagram nodes revealed one by one,
+    highlighted code, quiz with the answer), the teacher's voice in one natural take cut per slide, a 3D scene behind
+    the title and closing slides, soft music under the voice, the end card."""
+    from app.services import tts, video
+    from app.services.media_templates import lesson as lesson_tpl
+    from app.services.media_templates import motion as motion_tpl
+    from app.services.media_templates.kit import Kit
+
+    script = [s for s in meta.get("lesson_script") or [] if isinstance(s, dict)]
+    if not script:
+        raise MediaUnavailable("This lesson has no slides yet. Write it again to create them.")
+    w, h = LESSON_SIZE
+    tmp = render.tmp_dir("lesson-")
+    try:
+        lang = meta.get("lang") or "en"
+        clips: list = [None] * len(script)
+        voice_note = None
+        try:
+            clips = await tts.synthesize_lines(session, [str(s.get("voiceover") or s.get("heading") or "") for s in script],
+                                               tmp, voice=meta.get("voice") or None)
+        except Exception as e:  # noqa: BLE001
+            voice_note = f"Voice-over unavailable: {str(e)[:200]}"
+            log.info(voice_note)
+        ctx = {"course": meta.get("course_title") or "", "lang": lang, "module": meta.get("module") or "",
+               "lesson_label": (f"Lesson {meta.get('lesson')}" + (f"/{meta.get('lessons_total')}" if meta.get("lessons_total") else "")),
+               "total": len(script), "next_title": meta.get("next_title"),
+               "follow": "अगले lesson के लिए subscribe करें" if lang == "hi" else "Subscribe for the next lesson"}
+        use_3d = bool(meta.get("three_d", True)) and await webgl_ok()
+        kit = Kit(w, h, style, theme="dark")
+        kit_over = Kit(w, h, style, theme="dark", transparent=True)
+        scenes: list[video.Scene] = []
+        voice_clips: list[tuple[Path, float]] = []
+        t = 0.0
+        for i, (s, c) in enumerate(zip(script, clips)):
+            words = len(str(s.get("voiceover") or "").split())
+            d = (c.duration + 0.7) if c else max(4.0, words / 2.4)
+            kind = s.get("kind")
+            bg3d = None
+            if use_3d and kind in ("title", "outro"):
+                try:
+                    name = _three_scene_for(f"{meta.get('course_title') or ''} {post.topic or ''}")
+                    bg3d = await render_3d_clip(name, {"bare": True}, w, h, style, tmp / f"3d_{i:02d}.mp4", seconds=min(d, 12),
+                                                loop=True, fps=LESSON_FPS, quality=.5)
+                except Exception as e:  # noqa: BLE001
+                    log.info("lesson 3D scene failed: %s", e)
+                    bg3d = None
+            c2 = {**ctx, "index": i, "over_3d": bg3d is not None}
+            n = lesson_tpl.steps_of(s)
+            if c:
+                voice_clips.append((c.path, t + 0.35))
+            for step in range(1, n + 1):
+                sd = d / n
+                html = lesson_tpl.slide_html(kit_over if bg3d else kit, s, step, c2)
+                png = tmp / f"s_{i:02d}_{step}.png"
+                png.write_bytes(await render.render_png(html, w, h, transparent=bg3d is not None))
+                last = step == n
+                scenes.append(video.Scene(duration=sd, visual=bg3d if bg3d else png, visual_kind="video" if bg3d else "image",
+                                          overlay=png if bg3d else None, zoom="still",
+                                          transition=("smoothleft" if i % 3 == 0 else "fade") if last else "fade"))
+            t += d
+        body_len = t
+        outro_d = 3.0
+        ek = Kit(w, h, style, theme="dark", motion="intro", duration=outro_d)
+        end_html = motion_tpl.end_card(ek, {"heading": style.name, "body": style.website or "",
+                                             "cta": "Subscribe" if lang == "en" else "Subscribe करें"})
+        end_mp4 = await render.render_video(end_html, w, h, outro_d + video.XFADE, tmp / "end.mp4", fps=LESSON_FPS)
+        scenes.append(video.Scene(duration=outro_d, visual=end_mp4, visual_kind="video", zoom="none", transition="fade"))
+        files = music_files()
+        music = files[int(hashlib.sha1(str(post.id).encode()).hexdigest(), 16) % len(files)] if files and meta.get("music") != "none" else None
+        out = tmp / "lesson.mp4"
+        info = await video.build_video(scenes, out, w, h, work=tmp, voice_clips=voice_clips, music=music, fps=LESSON_FPS,
+                                       music_volume=0.12, overlay_until=body_len, max_seconds=LESSON_MAX_S, crf=21,
+                                       piece_crf=20)
+        poster = await render.poster_frame(out, tmp / "poster.jpg", at=1.5)
+        poster_rel = await _side_file(post.organization_id, poster.read_bytes(), "jpg")
+        m = {"poster_path": poster_rel, "scenes": len(script), "template": "lesson", "fps": LESSON_FPS, "platform": post.platform,
+             "voice": next((c.voice for c in clips if c), None), "voice_provider": next((c.provider for c in clips if c), None),
+             "music": music.name if music else None, "lesson": meta.get("lesson"), "lang": lang,
+             "captions": [str(s.get("heading") or "") for s in script]}
+        if voice_note:
+            m["voice_note"] = voice_note
+        return await store_file(session, post.organization_id, out, "mp4", source="template:lesson", kind="video",
+                                mime="video/mp4", alt_text=_alt(post, meta, f"Lesson: {post.topic or ''}"),
+                                width=info["width"], height=info["height"], duration=info["duration"], meta=m)
+    finally:
+        render.rm_tree(tmp)
+
+
 # ============================================================================ contract entry point
 async def generate_for_post(session: AsyncSession, post: Post, brand: BrandProfile | None) -> list[MediaAsset]:
     """Build the media for `post.post_type` in the platform's format. Returns flushed MediaAsset rows."""
@@ -1351,6 +1459,8 @@ async def generate_for_post(session: AsyncSession, post: Post, brand: BrandProfi
         if kind == "animation":
             default = plat.image_size if "image" in plat.post_types else plat.video_size
             return [await _make_motion(session, post, meta, style, _size(meta, default), gif=False)]
+        if kind == "video" and meta.get("course_format") == "lesson":
+            return [await _make_lesson_video(session, post, meta, style)]
         if kind == "video":
             return [await _make_video(session, post, meta, style, _size(meta, plat.video_size))]
     except MediaUnavailable:

@@ -6,7 +6,7 @@ build_video(scenes, out, width, height, voice_clips, music):
   2. segments are joined with short crossfades (xfade);
   3. voice-over clips are placed at their scene start (adelay); optional music loops underneath and is ducked
      under the voice (sidechaincompress), with fades;
-  4. H.264 (yuv420p, high profile) + AAC, `-movflags +faststart`, capped at 60 s.
+  4. H.264 (yuv420p, high profile) + AAC, `-movflags +faststart`, capped at 60 s (max_seconds: longer for lessons).
 
 Optional: `replicate_generate(...)` creates an AI clip with a configured Replicate video model (paid).
 """
@@ -53,7 +53,7 @@ class Scene:
     visual: Path | None = None  # still image or video clip; None = solid brand colour
     visual_kind: str = "image"  # image | video
     overlay: Path | None = None  # full-frame transparent PNG (captions, logo)
-    zoom: str = "in"  # Ken Burns direction: in | out | left | right
+    zoom: str = "in"  # Ken Burns direction: in | out | left | right | still (no move, e.g. slides)
     color: str = "#062f59"
     transition: str = "fade"  # xfade into the NEXT scene: fade | smoothleft | slideup | zoomin | hblur | wipeleft | ...
 
@@ -62,7 +62,8 @@ def _even(n: int) -> int:
     return n - n % 2
 
 
-async def make_segment(scene: Scene, out: Path, width: int, height: int, *, fps: int = 30, tail: float = 0.0) -> Path:
+async def make_segment(scene: Scene, out: Path, width: int, height: int, *, fps: int = 30, tail: float = 0.0,
+                       crf: int = 15) -> Path:
     """Render one silent scene segment of `scene.duration + tail` seconds."""
     w, h = _even(width), _even(height)
     dur = max(0.5, scene.duration + tail)
@@ -72,6 +73,10 @@ async def make_segment(scene: Scene, out: Path, width: int, height: int, *, fps:
         args += ["-stream_loop", "-1", "-i", str(scene.visual)]
         base = (f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h},"
                 f"fps={fps},setsar=1,trim=duration={dur:.3f},setpts=PTS-STARTPTS[bg]")
+    elif scene.visual is not None and scene.zoom == "still":  # slides: the picture as it is, no camera move
+        args += ["-loop", "1", "-framerate", str(fps), "-i", str(scene.visual)]
+        base = (f"[0:v]scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
+                f"setsar=1,trim=duration={dur:.3f},setpts=PTS-STARTPTS[bg]")
     elif scene.visual is not None:
         args += ["-i", str(scene.visual)]
         # eased Ken Burns (smoothstep), so moves start and settle gently
@@ -94,7 +99,7 @@ async def make_segment(scene: Scene, out: Path, width: int, height: int, *, fps:
     else:
         graph = f"{base};[bg]format=yuv420p[v]"
     args += ["-filter_complex", graph, "-map", "[v]", "-t", f"{dur:.3f}", "-r", str(fps), "-an",
-             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "15", "-pix_fmt", "yuv420p", str(out)]
+             "-c:v", "libx264", "-preset", "ultrafast", "-crf", str(crf), "-pix_fmt", "yuv420p", str(out)]
     await run_ffmpeg(args, timeout_s=300)
     return out
 
@@ -102,10 +107,12 @@ async def make_segment(scene: Scene, out: Path, width: int, height: int, *, fps:
 XFADES = {"fade", "smoothleft", "smoothright", "slideup", "slideleft", "zoomin", "hblur", "wipeleft", "wipeup", "circleopen", "fadeblack", "dissolve"}
 
 
-_PIECE = ["-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "15", "-pix_fmt", "yuv420p"]
+def _piece(crf: int = 15) -> list[str]:
+    return ["-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", str(crf), "-pix_fmt", "yuv420p"]
 
 
-async def _join_scenes(segs: list[Path], scenes: list[Scene], xf: float, w: int, h: int, fps: int, work: Path) -> Path:
+async def _join_scenes(segs: list[Path], scenes: list[Scene], xf: float, w: int, h: int, fps: int, work: Path,
+                       crf: int = 15) -> Path:
     """The scenes with their transitions as one silent video, built piece by piece so ffmpeg never holds more than
     two short clips at once. (One graph chaining every xfade decodes all scenes together and queues the later scenes'
     frames in memory: several GB for a 40 s 1080x1920 video, which got the job killed.)
@@ -114,13 +121,14 @@ async def _join_scenes(segs: list[Path], scenes: list[Scene], xf: float, w: int,
     — the same result as the chained xfade."""
     if len(segs) == 1:
         return segs[0]
+    piece = _piece(crf)
     pieces: list[Path] = []
     for i, seg in enumerate(segs):
         start, end = (xf if i > 0 else 0.0), scenes[i].duration
         if end - start > 0.04:
             body = work / f"body_{i:02d}.mp4"
             await run_ffmpeg(["-i", str(seg), "-vf", f"trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,fps={fps}",
-                              *_PIECE, str(body)], timeout_s=300)
+                              *piece, str(body)], timeout_s=300)
             pieces.append(body)
         if i < len(segs) - 1:
             tr = scenes[i].transition if scenes[i].transition in XFADES else "fade"
@@ -129,20 +137,25 @@ async def _join_scenes(segs: list[Path], scenes: list[Scene], xf: float, w: int,
                               f"[0:v]trim=start={end:.3f}:duration={xf:.3f},setpts=PTS-STARTPTS,fps={fps}[a];"
                               f"[1:v]trim=duration={xf:.3f},setpts=PTS-STARTPTS,fps={fps}[b];"
                               f"[a][b]xfade=transition={tr}:duration={xf:.3f}:offset=0,format=yuv420p[v]",
-                              "-map", "[v]", "-t", f"{xf:.3f}", *_PIECE, str(t)], timeout_s=300)
+                              "-map", "[v]", "-t", f"{xf:.3f}", *piece, str(t)], timeout_s=300)
             pieces.append(t)
+        if i > 0:  # /tmp is memory on Cloud Run: drop each segment once both of its pieces exist
+            segs[i - 1].unlink(missing_ok=True)
     lst = work / "pieces.txt"
     lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in pieces))
     joined = work / "joined.mp4"
     # same encoder settings for every piece, so they join without re-encoding
-    await run_ffmpeg(["-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(joined)], timeout_s=300)
+    await run_ffmpeg(["-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(joined)], timeout_s=600)
+    for p in [*pieces, segs[-1]]:
+        p.unlink(missing_ok=True)
     return joined
 
 
 async def build_video(scenes: list[Scene], out: Path, width: int, height: int, *, work: Path,
                       voice_clips: list[tuple[Path, float]] | None = None, music: Path | None = None,
                       fps: int = 30, xfade: float = XFADE, music_volume: float = 0.32, overlay_video: Path | None = None,
-                      overlay_until: float | None = None, progress_color: str | None = None) -> dict:
+                      overlay_until: float | None = None, progress_color: str | None = None,
+                      max_seconds: float = MAX_SECONDS, crf: int = 19, piece_crf: int = 15) -> dict:
     """Compose scenes + audio into a finished MP4. Returns {duration, width, height}.
 
     overlay_video: a full-frame track with alpha (captions, subtitles, progress bar) laid over the scenes from t=0
@@ -153,9 +166,9 @@ async def build_video(scenes: list[Scene], out: Path, width: int, height: int, *
     # cap the total length
     total, kept = 0.0, []
     for s in scenes:
-        if total >= MAX_SECONDS:
+        if total >= max_seconds:
             break
-        s.duration = min(s.duration, MAX_SECONDS - total)
+        s.duration = min(s.duration, max_seconds - total)
         if s.duration < 0.5:
             break
         kept.append(s)
@@ -165,11 +178,11 @@ async def build_video(scenes: list[Scene], out: Path, width: int, height: int, *
     segs: list[Path] = []
     for i, s in enumerate(scenes):
         seg = work / f"seg_{i:02d}.mp4"
-        await make_segment(s, seg, w, h, fps=fps, tail=xf if i < len(scenes) - 1 else 0.0)
+        await make_segment(s, seg, w, h, fps=fps, tail=xf if i < len(scenes) - 1 else 0.0, crf=piece_crf)
         segs.append(seg)
     total = sum(s.duration for s in scenes)
 
-    base = await _join_scenes(segs, scenes, xf, w, h, fps, work)
+    base = await _join_scenes(segs, scenes, xf, w, h, fps, work, crf=piece_crf)
     args: list[str] = ["-i", str(base)]
     parts: list[str] = ["[0:v]null[vbase]"]
     n = 1
@@ -225,11 +238,11 @@ async def build_video(scenes: list[Scene], out: Path, width: int, height: int, *
         args += ["-f", "lavfi", "-t", f"{total:.3f}", "-i", "anullsrc=r=44100:cl=stereo"]
         parts.append(f"[{mi}:a]anull[aout]")
     args += ["-filter_complex", ";".join(parts), "-map", "[vout]", "-map", "[aout]",
-             "-c:v", "libx264", "-preset", FINAL_PRESET, "-crf", "19", "-maxrate", "12M", "-bufsize", "24M",
+             "-c:v", "libx264", "-preset", FINAL_PRESET, "-crf", str(crf), "-maxrate", "12M", "-bufsize", "24M",
              "-profile:v", "high", "-level:v", "4.2", "-pix_fmt", "yuv420p",
              "-r", str(fps), "-g", str(fps * 2), "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2",
-             "-t", f"{min(total, MAX_SECONDS):.3f}", "-movflags", "+faststart", str(out)]
-    await run_ffmpeg(args, timeout_s=600)
+             "-t", f"{min(total, max_seconds):.3f}", "-movflags", "+faststart", str(out)]
+    await run_ffmpeg(args, timeout_s=1800 if total > 120 else 600)
     info = await probe(out)
     return {"duration": info.get("duration") or total, "width": info.get("width") or w, "height": info.get("height") or h,
             "has_audio": info.get("has_audio")}

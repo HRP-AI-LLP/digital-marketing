@@ -6,7 +6,7 @@ import { Network,
   CalendarDays, CheckCheck, ChevronsUpDown, FileText, Gauge, History, Image, KeyRound,
   LineChart, LogOut, Menu, Plug, Coins, Radar, Settings, ShieldCheck, Bell, Users as UsersIcon, X, Globe2, ListChecks, Cpu,
   Palette, Clock, Share2, FileDown, Inbox as InboxIcon, Lightbulb, Megaphone, Bot, Ear, ScanSearch, KeySquare, Link2, MousePointerClick, Webhook,
-  DatabaseBackup, Lock, UserPlus } from "lucide-react";
+  DatabaseBackup, Lock, UserPlus, GraduationCap } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import NotificationBell from "./NotificationBell";
 import InboxBadge from "./InboxBadge";
@@ -26,6 +26,7 @@ export const NAV: Group[] = [
       { to: "/approvals", label: "Approvals", icon: CheckCheck, perm: "content.approve" },
       { to: "/posts", label: "All posts", icon: ListChecks, perm: "content.view" },
       { to: "/media", label: "Media studio", icon: Image, perm: "media.manage" },
+      { to: "/academy", label: "Academy", icon: GraduationCap, perm: "content.view" },
       { to: "/link-in-bio", label: "Link in bio", icon: Link2, perm: "linkinbio.manage" },
       { to: "/seo", label: "SEO articles", icon: FileText, perm: "seo.view" },
     ],
