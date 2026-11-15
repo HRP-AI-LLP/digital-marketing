@@ -101,6 +101,10 @@ async def test_oauth_app(cfg: ProviderConfig) -> str:
     if missing:
         raise ValueError(f"Add the {' and '.join(missing)}.")
     uris = [common.redirect_uri(p) for p in APP_TO_PROVIDERS.get(cfg.provider, [])]
+    if cfg.provider == "x_app":  # X shows no reason when its sign-in fails: check the keys for real
+        from app.services.social import x
+
+        return await x.check_app(sec, uris[0])
     if not uris:
         return "Credentials saved."
     return ("Credentials saved. Register this redirect URI in the developer app: " if len(uris) == 1 else

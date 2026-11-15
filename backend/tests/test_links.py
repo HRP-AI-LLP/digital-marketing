@@ -337,3 +337,38 @@ async def test_links_report_builds(client, org):
         titles = [b.get("title") for b in doc.blocks]
         assert "Clicks per day" in titles and "Top posts" in titles and "Links" in titles
         assert "Link clicks" in rep.render_html(doc, o, "data:image/png;base64,", "now")
+
+
+async def test_pinterest_gets_the_page_itself_not_a_short_link(client, org, mock):
+    """Pinterest refuses redirecting links ("This site doesn't allow you to save Pins"): pins link to the page with
+    the UTM tags; if Pinterest still refuses the link, the pin goes out without it and the post says so."""
+    from tests.test_publishing import make_media
+
+    await set_tracking(client, org, True)
+    oid = org["id"]
+    acc = await make_account(oid, "pinterest", f"pin:{uuid.uuid4().hex[:6]}", {"access_token": "pin-tok"}, {"board_id": "b1"})
+    img = await make_media(oid)
+    post = await make_post(oid, acc, "image", [img], text="Try it https://hrpai.in", link_url="https://hrpai.in")
+    bodies = []
+
+    def pins(req):
+        import httpx
+
+        b = json.loads(req.content)
+        bodies.append(b)
+        if "link" in b and len(bodies) >= 2:  # second publish: Pinterest blocks the site
+            return httpx.Response(400, json={"code": 1, "message": "Sorry! This site doesn't allow you to save Pins."})
+        return httpx.Response(201, json={"id": str(len(bodies))})
+
+    mock.on("POST", r"api\.pinterest\.com/v5/pins$", pins)
+    await do_publish(oid, post, acc)
+    link = bodies[0]["link"]
+    assert link.startswith("https://hrpai.in?") and "/r/" not in link and qs(link)["utm_source"] == "pinterest"
+    assert "/r/" not in bodies[0]["description"] and "utm_source=pinterest" in bodies[0]["description"]
+
+    ext_id, _ = await do_publish(oid, post, acc)
+    assert ext_id == "3" and "link" not in bodies[2]
+    async with SessionLocal() as s:
+        set_tenant(s, oid)
+        p = await s.get(Post, post.id)
+        assert any("posted without a link" in w for w in p.meta.get("warnings", []))

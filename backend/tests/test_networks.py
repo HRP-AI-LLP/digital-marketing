@@ -25,6 +25,7 @@ from tests.test_publishing import (  # noqa: F401 - fixtures
 )
 
 ADMIN_PW = "Str0ngPassw0rd!"
+X_CLIENT_ID = "eC1pZDoxOmNp"  # an OAuth 2.0 Client ID ("x-id:1:ci", base64)
 TUNNEL = {"cf-connecting-ip": "203.0.113.9", "cf-ray": "abc-BOM"}
 BROWSER = {"user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"}
 ROOT = "http://test"  # the client's base_url is http://test/api/v1
@@ -52,7 +53,7 @@ async def org(client, admin):
     t = await login(client, "admin@hrpai.in", ADMIN_PW)
     existing = {p["provider"] for p in (await client.get("/integrations/providers", headers=auth(t))).json()}
     for provider, secrets in {
-        "x_app": {"client_id": "x-id", "client_secret": "x-secret"},
+        "x_app": {"client_id": X_CLIENT_ID, "client_secret": "x-secret"},
         "tiktok_app": {"client_id": "tt-key", "client_secret": "tt-secret"},
         "canva_app": {"client_id": "cv-id", "client_secret": "cv-secret"},
     }.items():

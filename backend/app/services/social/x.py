@@ -6,10 +6,12 @@ pay-per-use plans refuse requests once credits run out. Those answers (402, some
 limits, never as "reconnect the account".
 """
 
+import base64
+import binascii
 import re
 import unicodedata
 from datetime import timedelta
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -101,10 +103,68 @@ def _bearer(tok: str) -> dict:
     return {"Authorization": f"Bearer {tok}"}
 
 
+# ------------------------------------------------------------------ app keys
+# X shows two key pairs on an app's "Keys and tokens" page. The sign-in needs the OAuth 2.0 Client ID and Client
+# Secret. The API Key and Secret (OAuth 1.0a "consumer keys") look similar, and pasting them gives X's
+# "Something went wrong. You weren't able to give access to the App" page, with nothing sent back to the studio.
+def client_id_problem(client_id: str) -> str | None:
+    """Why this can't be an OAuth 2.0 Client ID (None when it looks right). OAuth 2.0 Client IDs are base64 text
+    that decodes to '<id>:1:ci'."""
+    cid = (client_id or "").strip()
+    if not cid:
+        return "The OAuth 2.0 Client ID is empty."
+    if cid != client_id:
+        return "The Client ID has spaces around it. Paste it again without them."
+    if re.fullmatch(r"\d+-[A-Za-z0-9]+", cid):
+        return "This is an Access Token, not the OAuth 2.0 Client ID."
+    try:
+        decoded = base64.b64decode(cid + "=" * (-len(cid) % 4), altchars=b"-_", validate=True).decode("ascii")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        decoded = ""
+    if re.fullmatch(r"[\w-]+:\d+:ci", decoded):
+        return None
+    if re.fullmatch(r"[A-Za-z0-9]{20,30}", cid):
+        return ("This looks like the API Key (OAuth 1.0a consumer key), not the OAuth 2.0 Client ID. In the X developer "
+                "portal open the app → Keys and tokens → OAuth 2.0 Client ID and Client Secret.")
+    return ("This doesn't look like an OAuth 2.0 Client ID. In the X developer portal open the app → Keys and tokens → "
+            "OAuth 2.0 Client ID and Client Secret.")
+
+
+SETUP_STEPS = ("In developer.x.com → your Project → your App → User authentication settings: turn on OAuth 2.0, App "
+               "permissions 'Read and write', Type of App 'Web App, Automated App or Bot', Callback URI exactly {cb}, "
+               "and a Website URL. The app must sit inside a Project.")
+
+
+async def check_app(creds: dict, redirect_uri: str) -> str:
+    """Live check of the X app keys (the Test button): the Client ID's shape, then X's token endpoint with the
+    Client ID and Secret (a made-up refresh token: X answers 'invalid token' when the keys are right and
+    'unauthorized client' when they aren't). Raises ValueError with what to fix."""
+    problem = client_id_problem(creds.get("client_id") or "")
+    if problem:
+        raise ValueError(f"{problem} {SETUP_STEPS.format(cb=redirect_uri)}")
+    if not (creds.get("client_secret") or "").strip():
+        raise ValueError("The OAuth 2.0 Client Secret is empty. X only shows it once: regenerate it under Keys and tokens.")
+    async with net.client(timeout=20.0) as c:
+        r = await c.post(TOKEN, auth=_basic(creds), data={"grant_type": "refresh_token", "refresh_token": "studio-key-check",
+                                                          "client_id": creds["client_id"]})
+    low = (r.text or "").lower()
+    if r.status_code == 401 or "unauthorized_client" in low or "authorization header" in low:
+        raise ValueError("X didn't accept this Client ID and Client Secret together. Copy both again from Keys and tokens "
+                         "→ OAuth 2.0 (regenerate the secret if unsure). If the app's Type is 'Native App', change it to "
+                         f"'Web App, Automated App or Bot'. {SETUP_STEPS.format(cb=redirect_uri)}")
+    if r.status_code in (400, 200) and ("invalid" in low or "token" in low):
+        return (f"X accepted the Client ID and Client Secret. If signing in still shows 'Something went wrong': "
+                f"{SETUP_STEPS.format(cb=redirect_uri)}")
+    raise ValueError(f"X answered the key check with HTTP {r.status_code}: {_detail(r)}. {SETUP_STEPS.format(cb=redirect_uri)}")
+
+
 def authorize_url(creds: dict, redirect_uri: str, state: str, options: dict, code_challenge: str | None) -> str:
+    problem = client_id_problem(creds.get("client_id") or "")
+    if problem:  # X would only show "Something went wrong" without saying why
+        raise PublishError(f"X app keys: {problem} Fix it in Settings → Integrations → X (Twitter) app, then connect again.")
     q = {"response_type": "code", "client_id": creds["client_id"], "redirect_uri": redirect_uri,
          "scope": " ".join(SCOPES), "state": state, "code_challenge": code_challenge, "code_challenge_method": "S256"}
-    return f"{AUTHORIZE}?{urlencode(q)}"
+    return f"{AUTHORIZE}?{urlencode(q, quote_via=quote)}"  # %20 between scopes, as in X's documentation
 
 
 def _tokens(t: dict, old: dict | None = None) -> dict:

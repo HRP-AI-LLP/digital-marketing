@@ -13,6 +13,7 @@ import { needsReconnect, ReconnectButton } from "../components/ReconnectButton";
 export type SocialAccount = {
   id: string; platform: string; platform_label: string; name: string; handle: string | null; avatar_url: string | null;
   profile_url: string | null; status: string; status_message: string | null; token_expires_at: string | null;
+  auto_renews?: boolean;
   settings: Record<string, any>; last_checked_at: string | null; created_at: string;
   /** Set when the platform is switched off for the studio (TikTok in India): the account still works. */
   platform_note?: string | null;
@@ -245,9 +246,9 @@ function AccountRow({ acc, canManage, autoForm }: { acc: SocialAccount; canManag
     onSettled: () => qc.invalidateQueries({ queryKey: KEY }),
   });
   const expires = acc.token_expires_at ? new Date(acc.token_expires_at).getTime() : null;
-  const soon = expires !== null && expires - Date.now() < SOON_MS;
+  const soon = expires !== null && !acc.auto_renews && expires - Date.now() < SOON_MS;
   const hasSettings = acc.platform !== "x" && acc.platform !== "manual" && acc.platform !== "whatsapp";
-  const reconnect = acc.status !== "manual" && needsReconnect(acc.status, acc.token_expires_at, SOON_MS);
+  const reconnect = acc.status !== "manual" && needsReconnect(acc.status, acc.token_expires_at, SOON_MS, acc.auto_renews);
   return (
     <li id={`account-${acc.id}`} className="flex flex-wrap items-start gap-3 py-4">
       <Avatar acc={acc} />
@@ -273,7 +274,9 @@ function AccountRow({ acc, canManage, autoForm }: { acc: SocialAccount; canManag
           <p className={`mt-1 text-sm ${acc.status === "expired" || acc.status === "error" ? "text-danger" : "text-muted"}`}>{acc.status_message}</p>
         )}
         <p className="mt-1 text-xs text-muted">
-          {expires !== null && <span className={soon ? "font-medium text-danger" : ""}>Access until {formatDate(acc.token_expires_at)}{soon ? " (reconnect soon)" : ""} · </span>}
+          {expires !== null && (acc.auto_renews
+            ? <span>Access renews automatically · </span>
+            : <span className={soon ? "font-medium text-danger" : ""}>Access until {formatDate(acc.token_expires_at)}{soon ? " (reconnect soon)" : ""} · </span>)}
           {acc.status === "manual" ? "Publish by hand" : acc.last_checked_at ? `Checked ${formatDate(acc.last_checked_at)}` : `Connected ${formatDate(acc.created_at)}`}
         </p>
         {check.error && <p className="mt-1 text-sm text-danger">{(check.error as Error).message}</p>}

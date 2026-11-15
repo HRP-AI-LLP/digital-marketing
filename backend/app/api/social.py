@@ -127,6 +127,8 @@ def _out(a: SocialAccount) -> dict:
         "settings": {k: v for k, v in s.items() if not k.startswith("_")},
         "last_checked_at": s.get("_last_checked_at"), "created_at": a.created_at,
         "can_delete_posts": publishing.can_delete(a),
+        # short-lived access (X, Google: 1-2 hours) that the studio renews by itself: not a reason to reconnect
+        "auto_renews": bool(common.account_tokens(a).get("refresh_token")) if a.tokens_enc else False,
     }
 
 
@@ -259,7 +261,11 @@ async def start_oauth(ctx: Context, provider: str, options: dict, return_to: str
         await ps.execute(delete(OAuthState).where(OAuthState.created_at < datetime.now(UTC) - timedelta(hours=2)))
         ps.add(OAuthState(state=state, organization_id=ctx.org_id, user_id=ctx.user.id, platform=provider, data=data))
         await ps.commit()
-    return {"authorize_url": mod.authorize_url(creds, redirect, state, options, challenge), "redirect_uri": redirect}
+    try:
+        url = mod.authorize_url(creds, redirect, state, options, challenge)
+    except PublishError as e:  # e.g. X app keys that can't be right: say so instead of X's "Something went wrong"
+        raise _err(e) from None
+    return {"authorize_url": url, "redirect_uri": redirect}
 
 
 def _back(path: str | None = None, **params) -> RedirectResponse:

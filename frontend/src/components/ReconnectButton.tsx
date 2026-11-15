@@ -37,8 +37,9 @@ export function ReconnectButton({ accountId, name, returnTo, onForm, variant = "
 }
 
 /** Account states that need a new sign-in (or soon will). */
-export function needsReconnect(status: string, tokenExpiresAt?: string | null, soonMs = 7 * 24 * 3600 * 1000): boolean {
+export function needsReconnect(status: string, tokenExpiresAt?: string | null, soonMs = 7 * 24 * 3600 * 1000,
+  autoRenews = false): boolean {
   if (status === "expired" || status === "error") return true;
-  if (status !== "connected" || !tokenExpiresAt) return false;
+  if (status !== "connected" || !tokenExpiresAt || autoRenews) return false;
   return new Date(tokenExpiresAt).getTime() - Date.now() < soonMs;
 }

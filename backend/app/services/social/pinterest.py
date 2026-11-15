@@ -207,6 +207,17 @@ async def publish(session, post: Post, account: SocialAccount, media: list[Media
         else:
             body["media_source"] = {"source_type": "image_base64", **_b64(images[0])}
         r = await c.post(f"{base}/pins", headers=_bearer(tok), json=body)
+        if not r.is_success and body.get("link") and "allow you to save pins" in common.error_message(r).lower():
+            # Pinterest blocks the linked site (or treats the link as a redirect). Pin it without the link rather
+            # than not at all, and say so on the post.
+            blocked = body.pop("link")
+            r = await c.post(f"{base}/pins", headers=_bearer(tok), json=body)
+            if r.is_success:
+                from app.services.content import add_warning
+
+                add_warning(post, f"Pinterest refused the link {blocked} (\"This site doesn't allow you to save Pins\"), "
+                                  "so the pin was posted without a link. Pinterest may have flagged that site; you can "
+                                  "add the link to the pin on Pinterest by hand.")
         if not r.is_success and "trial access" in common.error_message(r).lower():
             e = PublishError(TRIAL_BLOCKED)
             e.manual_fallback = True  # hand the pin to a person instead of failing every day

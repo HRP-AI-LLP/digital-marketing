@@ -79,6 +79,10 @@ CHANNELS = {"bio": ("link-in-bio", "social"), "email": ("email", "email"), "webs
             "print": ("print", "offline"), "other": ("hrp-studio", "referral")}
 # Captions on these platforms don't make links clickable, so there is nothing to track.
 NO_LINK_PLATFORMS = {"instagram", "tiktok"}
+# Platforms that refuse redirecting links (they look like link shorteners): Pinterest answers "Sorry! This site
+# doesn't allow you to save Pins". They get the destination itself with the UTM tags (visits still show up in
+# analytics by source), and the tracked link is kept only as a record (its click counter can't see these clicks).
+DIRECT_LINK_PLATFORMS = {"pinterest"}
 
 
 # ------------------------------------------------------------------ settings & addresses
@@ -280,7 +284,10 @@ async def wrap_for_publish(session: AsyncSession, post: Post, account: SocialAcc
         if not urls:
             return restore
         links = await links_for_post(post.organization_id, post, account, urls)
-        mapping = {u: short_url(lk.code, base) for u, lk in links.items()}
+        if platform in DIRECT_LINK_PLATFORMS:
+            mapping = {u: redirect_url(lk) for u, lk in links.items()}
+        else:
+            mapping = {u: short_url(lk.code, base) for u, lk in links.items()}
         post.text = replace_urls(original["text"], mapping)
         post.first_comment = replace_urls(original["first_comment"], mapping)
         if post.link_url and post.link_url.strip() in mapping:
